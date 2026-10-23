@@ -40,7 +40,7 @@ SORTS = {
     "fracture saving": lambda e: (e.best_fracture is None, -((e.total or 0) - (e.best_fracture.total if e.best_fracture else 0))),
     "builds": lambda e: (-len(e.builds), e.total is None, -(e.total or 0)),
 }
-CRAFT_COLUMNS = [("item", 30), ("craft", 9), ("fractured", 11), ("market", 8), ("margin", 9), ("builds", 6), ("mods", None)]
+CRAFT_COLUMNS = [("item", 30), ("craft", 9), ("fractured", 11), ("market", 8), ("margin", 9), ("builds", 6), ("mods", 64)]
 KEYS = [
     ("j / k", "move down / up"),
     ("g / G", "first / last row"),
@@ -77,6 +77,7 @@ class PonderApp(App):
     TITLE = "ponder"
     CSS = """
     * { scrollbar-size: 1 1; }
+    DataTable { scrollbar-size-horizontal: 0; }  /* columns are sized to fit; long mod lists are cut */
     #sources { height: 1; border: none; padding: 0 1; background: $boost; }
     #main { height: 1fr; }
     #tables { width: 3fr; }
@@ -236,7 +237,7 @@ class PonderApp(App):
             render.market_text(e),
             render.margin_text(e.margin, self.pal),
             Text(str(len(e.builds)), style=self.pal.good if len(e.builds) > 1 else "dim"),
-            render.mods_inline(e, self.pal, width=26, sep="  "),
+            _cut(render.mods_inline(e, self.pal, width=24, sep="  "), 64),
         ]
 
     # -- detail pane ---------------------------------------------------------
@@ -420,6 +421,11 @@ class HelpScreen(ModalScreen):
 
     def on_key(self, event) -> None:
         self.dismiss()
+
+
+def _cut(text: Text, width: int) -> Text:
+    text.truncate(width, overflow="ellipsis")
+    return text
 
 
 def _load_config() -> dict:
