@@ -13,7 +13,17 @@ from functools import cache
 from pathlib import Path
 
 SOURCE = "https://raw.githubusercontent.com/repoe-fork/repoe-fork.github.io/master"
-FILES = ["mods", "base_items", "item_classes", "tags", "essences", "fossils", "crafting_bench_options"]
+FILES = [
+    "mods",
+    "base_items",
+    "item_classes",
+    "tags",
+    "essences",
+    "fossils",
+    "crafting_bench_options",
+    "cluster_jewels",
+    "cluster_jewel_notables",
+]
 
 
 def data_dir() -> Path:

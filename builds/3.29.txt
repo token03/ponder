@@ -1,0 +1,7 @@
+# 3.29 (Curse of the Allflame) builds. One pobb.in/pastebin link per line.
+# `ponder mine builds/3.29.txt`
+https://pobb.in/Jj2d38SXQtTC   # Winter Orb Occultist
+https://pobb.in/7vZ0sp0OUsV-   # RF Marauder leveling guide
+https://pobb.in/erYxUpw1qefG   # Poison Necromancer (Saphery minion starters)
+https://pobb.in/8BVHxIIdtPg8   # CWS Chieftain league start (emiracles)
+https://pobb.in/SuQwllRKZ5Tv   # league start plans progression tree

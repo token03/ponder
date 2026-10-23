@@ -13,6 +13,8 @@ from itertools import combinations
 
 from .mods import ItemMatch
 
+NOTABLE_PREFIX = "1 Added Passive Skill is "
+
 
 @dataclass
 class Candidate:
@@ -41,10 +43,10 @@ def mine(
     for build_id, match in matches:
         if match.item_class is None or match.item.rarity != "RARE":
             continue
-        families = sorted({m.family for m in match.mods if not m.source.endswith("crafted")})
+        item_class, families = target_key(match)
         for size in range(min_size, min(max_size, len(families)) + 1):
             for combo in combinations(families, size):
-                key = (match.item_class, combo)
+                key = (item_class, combo)
                 counts[key] += 1
                 builds[key].add(build_id)
 
@@ -55,6 +57,25 @@ def mine(
     # Prefer combos many builds share, then bigger combos (more specific targets).
     out.sort(key=lambda c: (-c.builds, -len(c.families), -c.count, c.item_class, c.families))
     return out
+
+
+def target_key(match: ItemMatch) -> tuple[str, list[str]]:
+    """What a rare is "made of" for mining purposes.
+
+    Cluster jewels are keyed by size and enchant, and only their notables
+    count, since the other mods barely matter to buyers.
+    """
+    enchant = match.item.header.get("Cluster Jewel Skill")
+    if enchant and match.item.base.endswith("Cluster Jewel"):
+        size = match.item.base.split()[0].lower()
+        notables = sorted(m.lines[0].text.removeprefix(NOTABLE_PREFIX) for m in match.mods if is_notable_line(m))
+        return f"{size} cluster: {enchant}", notables
+    return match.item_class, sorted({m.family for m in match.mods if not m.source.endswith("crafted")})
+
+
+def is_notable_line(mod) -> bool:
+    text = mod.lines[0].text
+    return text.startswith(NOTABLE_PREFIX) and "Jewel Socket" not in text
 
 
 def _absorbed(key, keys, builds) -> bool:
