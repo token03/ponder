@@ -51,8 +51,13 @@ are clickable; piped output prints the raw URLs and never wraps.
 The TUI runs the same pipeline. Keys: `t` price the selected cluster on
 trade, `T` price all of them, `o` open its trade search, `y` copy the link,
 `f` filter (all / clusters / gear), `s` sort (margin / total / builds /
-cheapest), `n` new builds, `q` quit. It needs `textual`, which `uv sync`
-installs; elsewhere use `pip install 'ponder[tui]'`.
+cheapest), `n` new builds, `q` quit. It starts in the `ansi-dark` theme, which
+uses your terminal's own colours; pick another with `ctrl+p` and it is
+remembered (in `~/.config/ponder/tui.json`). It needs `textual`, which
+`uv sync` installs; elsewhere use `pip install 'ponder[tui]'`.
+
+Solving runs in one process per CPU (`--workers N` to change). Most rares
+take well under a second; four-target T1 gear can take a couple.
 
 ### Single tools
 

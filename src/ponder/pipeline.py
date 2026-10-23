@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
 import time
 import urllib.error
 from collections.abc import Callable, Iterator
@@ -330,7 +331,7 @@ def solve_all(estimates: list[Estimate], table: dict[str, float], workers: int |
             say(f"solving {i}/{len(todo)}: {e.title}")
             solve_one(e, table)
         return
-    with _one_blas_thread(), ProcessPoolExecutor(min(workers, len(todo)), mp_context=multiprocessing.get_context("spawn")) as pool:
+    with _worker_env(), ProcessPoolExecutor(min(workers, len(todo)), mp_context=multiprocessing.get_context("spawn")) as pool:
         futures = {pool.submit(craft.solve, e.problem, table): e for e in todo}
         for i, done in enumerate(as_completed(futures), 1):
             e = futures[done]
@@ -342,23 +343,38 @@ def solve_all(estimates: list[Estimate], table: dict[str, float], workers: int |
 
 
 @contextmanager
-def _one_blas_thread() -> Iterator[None]:
-    """Workers each get one BLAS thread: N processes x N BLAS threads ran 7x slower than one process.
+def _worker_env() -> Iterator[None]:
+    """What spawned solver processes need while the pool starts and runs.
 
-    Spawned workers import numpy fresh, so they read these variables; forked
-    ones would inherit the parent's thread pool instead.
+    One BLAS thread each: N processes x N BLAS threads ran 7x slower than one
+    process. Spawned workers import numpy fresh, so they read these variables;
+    forked ones would inherit the parent's thread pool instead.
+
+    A real stderr: multiprocessing hands stderr's file descriptor to its helper
+    process, and a TUI (textual) swaps stderr for an object without a valid one.
     """
     names = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
     saved = {n: os.environ.get(n) for n in names}
     os.environ.update({n: "1" for n in names})
+    saved_stderr = sys.stderr
+    if not _has_fd(sys.stderr) and _has_fd(sys.__stderr__):
+        sys.stderr = sys.__stderr__
     try:
         yield
     finally:
+        sys.stderr = saved_stderr
         for n, v in saved.items():
             if v is None:
                 os.environ.pop(n, None)
             else:
                 os.environ[n] = v
+
+
+def _has_fd(stream) -> bool:
+    try:
+        return stream is not None and stream.fileno() >= 0
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 def _attach(est: Estimate, plan: craft.Plan) -> None:

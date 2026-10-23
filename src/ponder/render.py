@@ -2,9 +2,13 @@
 
 Links are terminal hyperlinks when `links` is true; otherwise the raw URL is
 printed, so piped output (and anything reading it, like an LLM) keeps them.
+Colours come from a `Palette`: plain ANSI names by default, so the terminal's
+own colour scheme applies; the TUI passes one built from its current theme.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from rich.console import Group, RenderableType
 from rich.table import Table
@@ -14,23 +18,37 @@ from .mods import ItemMatch
 from .pipeline import Estimate, Report, Shared
 
 
+@dataclass(frozen=True)
+class Palette:
+    accent: str = "magenta"  # cluster jewels
+    link: str = "cyan"
+    good: str = "green"
+    bad: str = "red"
+    warn: str = "yellow"  # mods the plan doesn't make
+    action: str = "yellow"  # what to do in a recipe
+    share: str = "cyan"
+
+
+ANSI = Palette()
+
+
 def chaos(x: float | None, digits: int = 0) -> str:
     return "-" if x is None else f"{x:,.{digits}f}c"
 
 
-def link(label: str, url: str | None, links: bool = True) -> Text:
+def link(label: str, url: str | None, links: bool = True, pal: Palette = ANSI) -> Text:
     if not url:
         return Text("")
-    return Text(label, style=f"link {url} underline cyan") if links else Text(url)
+    return Text(label, style=f"link {url} underline {pal.link}") if links else Text(url)
 
 
-def margin_text(x: float | None) -> Text:
+def margin_text(x: float | None, pal: Palette = ANSI) -> Text:
     if x is None:
         return Text("-", style="dim")
-    return Text(chaos(x), style="bold green" if x > 0 else "bold red")
+    return Text(chaos(x), style=f"bold {pal.good if x > 0 else pal.bad}")
 
 
-def estimates_table(estimates: list[Estimate], links: bool = True, title: str | None = None) -> Table:
+def estimates_table(estimates: list[Estimate], links: bool = True, title: str | None = None, pal: Palette = ANSI) -> Table:
     t = Table(title=title, title_justify="left", header_style="bold", expand=False, pad_edge=False)
     t.add_column("#", justify="right", style="dim")
     t.add_column("item")
@@ -43,7 +61,7 @@ def estimates_table(estimates: list[Estimate], links: bool = True, title: str | 
     if links:
         t.add_column("trade")
     for i, e in enumerate(estimates, 1):
-        style = "magenta" if e.kind == "cluster" else ""
+        style = pal.accent if e.kind == "cluster" else ""
         total = Text(chaos(e.total)) if e.error is None else Text(e.error, style="dim italic")
         t.add_row(
             str(i),
@@ -53,13 +71,13 @@ def estimates_table(estimates: list[Estimate], links: bool = True, title: str | 
             chaos(e.craft_cost),
             total,
             chaos(e.market[0]) if e.market else Text(e.market_error or "-", style="dim"),
-            margin_text(e.margin),
-            *([link("search", e.trade_url)] if links else []),
+            margin_text(e.margin, pal),
+            *([link("search", e.trade_url, pal=pal)] if links else []),
         )
     return t
 
 
-def shared_table(shared: list[Shared], links: bool = True) -> Table:
+def shared_table(shared: list[Shared], links: bool = True, pal: Palette = ANSI) -> Table:
     t = Table(title="Mod combinations shared across builds", title_justify="left", header_style="bold")
     t.add_column("builds", justify="right")
     t.add_column("items", justify="right")
@@ -76,14 +94,14 @@ def shared_table(shared: list[Shared], links: bool = True) -> Table:
             Text(c.item_class),
             Text(" + ".join(c.families)),
             (chaos(e.total) if e.error is None else Text(e.error, style="dim")) if e else "",
-            *([link("search", e.trade_url) if e else ""] if links else []),
+            *([link("search", e.trade_url, pal=pal) if e else ""] if links else []),
         )
     return t
 
 
-def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, rows: int = 12) -> RenderableType:
+def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, rows: int = 12, pal: Palette = ANSI) -> RenderableType:
     parts: list[RenderableType] = []
-    head = Text(e.title, style="bold magenta" if e.kind == "cluster" else "bold")
+    head = Text(e.title, style=f"bold {pal.accent}" if e.kind == "cluster" else "bold")
     if e.slot:
         head.append(f"  [{e.slot}]", style="dim")
     head.append(f"  ilvl {e.item_level}+", style="dim")
@@ -99,13 +117,13 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
     for label, c in e.bench:
         info.add_row("bench last", Text(f"{label}  ({chaos(c, 1)})"))
     for s in e.skipped:
-        info.add_row("not crafted", Text(s, style="yellow"))
+        info.add_row("not crafted", Text(s, style=pal.warn))
     if e.builds:
         info.add_row("used by", f"{len(e.builds)} build(s)")
     parts.append(info)
 
     if e.error:
-        parts.append(Text(f"no plan: {e.error}", style="red"))
+        parts.append(Text(f"no plan: {e.error}", style=pal.bad))
         return Group(*parts)
 
     costs = Table.grid(padding=(0, 1))
@@ -120,7 +138,7 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
     costs.add_row(Text("total", style="bold"), Text(chaos(e.total, 1), style="bold"), "")
     if e.market:
         costs.add_row("market", chaos(e.market[0], 1), f"median of cheapest asks, {e.market[1]} listed")
-        costs.add_row(Text("margin", style="bold"), margin_text(e.margin), "")
+        costs.add_row(Text("margin", style="bold"), margin_text(e.margin, pal), "")
     elif e.market_error:
         costs.add_row("market", "-", e.market_error)
     parts.append(costs)
@@ -129,15 +147,15 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
     parts.append(Text.assemble(("expected currency: ", "dim"), used))
 
     recipe = Table(title="recipe (most common situations first)", title_justify="left", title_style="bold", box=None, pad_edge=False)
-    recipe.add_column("share", justify="right", style="cyan")
+    recipe.add_column("share", justify="right", style=pal.share)
     recipe.add_column("situation")
-    recipe.add_column("do", style="bold yellow")
+    recipe.add_column("do", style=f"bold {pal.action}")
     for state, action, share in e.recipe(rows):
         recipe.add_row(f"{share:.1%}", Text(state), Text(action))
     parts.append(recipe)
 
     if e.trade_url:
-        parts.append(Text.assemble(("trade: ", "dim"), link("open search on pathofexile.com", e.trade_url, links)))
+        parts.append(Text.assemble(("trade: ", "dim"), link("open search on pathofexile.com", e.trade_url, links, pal)))
     return Group(*parts)
 
 

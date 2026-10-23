@@ -8,9 +8,12 @@ library; this file is only layout and key bindings.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 import webbrowser
+from pathlib import Path
 
 from rich.text import Text
 from textual import work
@@ -21,6 +24,9 @@ from textual.widgets import DataTable, Footer, Header, Input, Static, TabbedCont
 
 from . import pipeline, prices, render
 
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ponder" / "tui.json"
+DEFAULT_THEME = "ansi-dark"  # the terminal's own colours
+TAB_OF = {"crafts": "crafts-tab", "shared": "shared-tab"}
 FILTERS = ["all", "cluster", "gear"]
 SORTS = {
     "margin": lambda e: (e.margin is None, -(e.margin or 0), -(e.total or 0)),
@@ -60,6 +66,7 @@ class PonderApp(App):
         self.filter = "all"
         self.sort = "margin"
         self.current: pipeline.Estimate | None = None
+        self.pal = render.ANSI
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -76,9 +83,13 @@ class PonderApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.theme_changed_signal.subscribe(self, self.on_theme_changed)
+        saved = _load_config().get("theme", DEFAULT_THEME)
+        self.theme = saved if saved in self.available_themes else DEFAULT_THEME
+        self.pal = self.palette()
         crafts = self.query_one("#crafts", DataTable)
-        for label, key in [("item", "item"), ("total", "total"), ("market", "market"), ("margin", "margin"), ("builds", "builds"), ("targets", "targets")]:
-            crafts.add_column(label, key=key)
+        for label, key, width in [("item", "item", 34), ("total", "total", None), ("market", "market", None), ("margin", "margin", None), ("builds", "builds", None), ("targets", "targets", None)]:
+            crafts.add_column(label, key=key, width=width)  # long cluster titles would hide the rest
         shared = self.query_one("#shared", DataTable)
         for label in ["builds", "items", "class", "mods", "craft"]:
             shared.add_column(label, key=label)
@@ -126,28 +137,32 @@ class PonderApp(App):
             if e:
                 self.by_key[f"shared:{i}"] = e
 
-    def fill_crafts(self) -> None:
+    def fill_crafts(self, quiet: bool = False) -> None:
         if not self.report:
             return
         crafts = self.query_one("#crafts", DataTable)
+        cursor = crafts.cursor_row if quiet else 0  # a re-colour keeps your place
         crafts.clear()
         self.by_key = {k: v for k, v in self.by_key.items() if not k.startswith("craft:")}
         rows = [e for e in self.report.estimates if self.filter == "all" or e.kind == self.filter]
         for i, e in enumerate(sorted(rows, key=SORTS[self.sort])):
             key = f"craft:{i}"
             self.by_key[key] = e
-            crafts.add_row(*self.craft_cells(e), key=key)
-        self.notify(f"{len(rows)} crafts · filter {self.filter} · sort {self.sort}", timeout=2)
+            crafts.add_row(*self.craft_cells(e, self.pal), key=key)
+        if rows:
+            crafts.move_cursor(row=min(cursor, len(rows) - 1))
+        if not quiet:
+            self.notify(f"{len(rows)} crafts · filter {self.filter} · sort {self.sort}", timeout=2)
 
     @staticmethod
-    def craft_cells(e: pipeline.Estimate) -> list:
+    def craft_cells(e: pipeline.Estimate, pal: render.Palette) -> list:
         market = render.chaos(e.market[0]) if e.market else Text(e.market_error or "-", style="dim")
         total = render.chaos(e.total) if e.error is None else Text("no plan", style="dim")
         return [
-            Text(e.title, style="magenta" if e.kind == "cluster" else ""),
+            Text(e.title, style=pal.accent if e.kind == "cluster" else ""),
             total,
             market,
-            render.margin_text(e.margin),
+            render.margin_text(e.margin, pal),
             str(len(e.builds)),
             Text(", ".join(e.targets)),
         ]
@@ -155,7 +170,18 @@ class PonderApp(App):
     # -- detail pane ---------------------------------------------------------
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        # Both tables post highlights when filled; only the visible one picks the detail.
+        if TAB_OF.get(event.data_table.id) != self.query_one(TabbedContent).active:
+            return
         self.current = self.by_key.get(event.row_key.value) if event.row_key else None
+        self.show_detail()
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        table = self.query_one("#crafts" if event.pane.id == "crafts-tab" else "#shared", DataTable)
+        self.current = None
+        if table.row_count:
+            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            self.current = self.by_key.get(row_key.value)
         self.show_detail()
 
     def show_detail(self) -> None:
@@ -163,7 +189,7 @@ class PonderApp(App):
         if self.current is None:
             detail.update("No estimate for this row (only cluster combos are costed).")
             return
-        detail.update(render.estimate_detail(self.current, self.report.prices_source if self.report else "", links=True))
+        detail.update(render.estimate_detail(self.current, self.report.prices_source if self.report else "", links=True, pal=self.pal))
 
     # -- actions -------------------------------------------------------------
 
@@ -192,7 +218,7 @@ class PonderApp(App):
         crafts = self.query_one("#crafts", DataTable)
         for key, est in self.by_key.items():
             if est is e and key.startswith("craft:"):
-                for col, value in zip(["item", "total", "market", "margin", "builds", "targets"], self.craft_cells(e)):
+                for col, value in zip(["item", "total", "market", "margin", "builds", "targets"], self.craft_cells(e, self.pal)):
                     crafts.update_cell(key, col, value)
         if e.market_error:
             self.notify(e.market_error, severity="warning")
@@ -227,6 +253,49 @@ class PonderApp(App):
 
     def action_new_sources(self) -> None:
         self.query_one("#sources", Input).focus()
+
+    # -- themes ----------------------------------------------------------------
+
+    def on_theme_changed(self, theme) -> None:
+        """Re-colour the rich content (tables, recipe) and remember the choice."""
+        self.pal = self.palette()
+        self.fill_crafts(quiet=True)
+        if self.current:
+            self.show_detail()
+        _save_config({**_load_config(), "theme": theme.name})
+
+    def palette(self) -> render.Palette:
+        """The theme's colours as rich styles; ANSI themes map to terminal colour names."""
+        v = self.get_css_variables()
+
+        def pick(name: str, fallback: str) -> str:
+            value = (v.get(name) or "").split(" ")[0].removeprefix("ansi_")
+            return value if value and value not in ("auto", "default") else fallback
+
+        return render.Palette(
+            accent=pick("secondary", "magenta"),
+            link=pick("primary", "cyan"),
+            good=pick("success", "green"),
+            bad=pick("error", "red"),
+            warn=pick("warning", "yellow"),
+            action=pick("warning", "yellow"),
+            share=pick("primary", "cyan"),
+        )
+
+
+def _load_config() -> dict:
+    try:
+        return json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_config(config: dict) -> None:
+    try:
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG.write_text(json.dumps(config))
+    except OSError:
+        pass
 
 
 def run_tui(sources: list[str], trade: bool = False) -> int:
