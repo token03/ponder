@@ -397,3 +397,54 @@ def item_match(slot: str | None, sets: list[str], m: ItemMatch) -> RenderableTyp
     for line in m.notes:
         t.add_row(Text("#", style="dim"), "", "", "", Text(line.text, style="dim italic"), "")
     return Group(Text(""), head, t)
+
+
+def tier_table(stats) -> Table:
+    """`demand.FamilyStat`s: how often each mod is worn per base group, and its tier lift."""
+    t = Table(title="Mods worn by ladder characters · lift = share at that tier or better / chance a roll lands there",
+              title_justify="left", title_style="bold", header_style="bold", box=None)  # fmt: skip
+    t.add_column("group")
+    t.add_column("mod")
+    t.add_column("side", style="dim")
+    t.add_column("chars", justify="right")
+    t.add_column("T1", justify="right")
+    t.add_column("T1 lift", justify="right")
+    t.add_column("≤T2", justify="right")
+    t.add_column("≤T2 lift", justify="right")
+    last = None
+    for s in stats:
+        group = Text(s.group if s.group != last else "", style="bold")
+        last = s.group
+        t.add_row(
+            group, Text(s.text), s.side[0].upper(), str(s.characters),
+            f"{s.share_at_or_above(1):.0%}", _lift(s.lift(1)), f"{s.share_at_or_above(2):.0%}", _lift(s.lift(2)),
+        )  # fmt: skip
+    return t
+
+
+def _lift(x: float) -> Text:
+    """Above ~3x, players pay for the tier; near 1x, any tier will do."""
+    style = "bold green" if x >= 3 else "green" if x >= 1.8 else "dim"
+    return Text(f"{x:.1f}×", style=style)
+
+
+def archetype_table(found, db) -> Table:
+    t = Table(title="Archetypes: mod combinations ladder characters share", title_justify="left", title_style="bold", header_style="bold", box=None)
+    t.add_column("chars", justify="right")
+    t.add_column("group")
+    t.add_column("mods")
+    t.add_column("top skills", style="dim")
+    from .demand import RES, _template, stat_key
+
+    for a in found:
+        names = []
+        for key in a.families:
+            if key == RES:
+                names.append("resistances")
+                continue
+            mods = [m for ex in a.examples for m in ex.mods if m.source not in ("crafted", "legacy-crafted") and stat_key(m.mod_id) == key]
+            plain = [m for m in mods if "/" not in _template(db, m.mod_id)]  # name it by the plain mod when there is one
+            names.append(_template(db, (plain or mods)[0].mod_id) if mods else key)
+        skills = ", ".join(f"{s}" for s, _ in a.skills.most_common(3))
+        t.add_row(str(a.characters), Text(a.group, style="bold"), Text(" + ".join(names)), Text(skills))
+    return t

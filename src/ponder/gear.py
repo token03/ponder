@@ -94,11 +94,22 @@ def spawn_tags() -> frozenset[str]:
     )
 
 
+_groups: dict[tuple, BaseGroup] = {}
+
+
 def group(db: ModDB, match: ItemMatch) -> BaseGroup:
     """The bases sharing this item's mod pool: same class, same spawn-relevant tags (influences included)."""
     used = spawn_tags()
     influences = match.item.influences
     signature = frozenset(match.tags & used)
+    key = (id(db), match.item_class, signature, frozenset(influences))
+    if key not in _groups:
+        _groups[key] = _group(db, match, signature, influences)
+    return _groups[key]
+
+
+def _group(db: ModDB, match: ItemMatch, signature: frozenset[str], influences) -> BaseGroup:
+    used = spawn_tags()
     ranked = []
     for base_id, base in db.bases.items():
         if base.get("item_class") != match.item_class or base.get("domain") != "item" or base.get("release_state") != "released":

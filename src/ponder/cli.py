@@ -19,7 +19,7 @@ from .item import parse_item
 from .mine import mine
 from .mods import ModDB
 
-COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui"}
+COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui", "ladder"}
 SOURCES_HELP = "pobb.in/pastebin URL, file, PoB code, or .txt list of links"
 
 # Piped output (files, scripts, LLMs) never wraps, so long trade links stay whole.
@@ -70,6 +70,21 @@ def parser() -> argparse.ArgumentParser:
     tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
     tui.add_argument("sources", nargs="*", help=SOURCES_HELP)
     tui.add_argument("--trade", action="store_true")
+
+    lad = sub.add_parser("ladder", help="what ladder characters wear (poe.ninja): tiers that matter, archetypes")
+    lad_sub = lad.add_subparsers(dest="ladder_command", required=True)
+    lad_fetch = lad_sub.add_parser("fetch", help="download the top characters of every popular skill and class")
+    lad_fetch.add_argument("--league", help="league name (default: the current one)")
+    lad_fetch.add_argument("--per-skill", type=int, default=10)
+    lad_fetch.add_argument("--per-class", type=int, default=20)
+    lad_fetch.add_argument("--min-players", type=int, default=40, help="skills with fewer players are skipped")
+    lad_tiers = lad_sub.add_parser("tiers", help="per base group: how often each mod is worn, and how much its tier matters")
+    lad_tiers.add_argument("--group", help='only this base group, e.g. "Gloves (ES)" (substring)')
+    lad_tiers.add_argument("--min-characters", type=int, default=15)
+    lad_arch = lad_sub.add_parser("archetypes", help="mod combinations many characters share (crafting candidates)")
+    lad_arch.add_argument("--group", help="only base groups containing this text")
+    lad_arch.add_argument("--min-characters", type=int, default=10)
+    lad_arch.add_argument("--top", type=int, default=40)
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -181,6 +196,32 @@ def _tui(args) -> int:
         out("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
         return 1
     return run_tui(args.sources, trade=args.trade)
+
+
+def _ladder(args) -> int:
+    from . import demand, ladder
+
+    if args.ladder_command == "fetch":
+        snap = ladder.snapshot(args.league)
+        with console.status("ladder") as status:
+            n = sum(1 for _ in ladder.sample(snap, args.per_skill, args.min_players, args.per_class, progress=status.update))
+        out(f"{n} characters from {snap.league} ({snap.version}) cached in {ladder.CACHE}", markup=False)
+        return 0
+    db = ModDB()
+    with console.status("reading cached characters"):
+        chars = list(ladder.cached())
+        worn = demand.wear(db, chars)
+    if not worn:
+        out("no ladder data yet: run `ponder ladder fetch`", style="red", markup=False)
+        return 1
+    out(f"{len(chars)} characters, {len(worn)} rare items", style="dim", markup=False)
+    if args.ladder_command == "tiers":
+        stats = [s for s in demand.family_stats(db, worn, args.min_characters) if not args.group or args.group.lower() in s.group.lower()]
+        out(render.tier_table(stats))
+    else:
+        found = [a for a in demand.archetypes(worn, args.min_characters) if not args.group or args.group.lower() in a.group.lower()]
+        out(render.archetype_table(found[: args.top], db))
+    return 0
 
 
 def _data(args) -> int:
@@ -316,6 +357,7 @@ def _cluster(args) -> int:
 COMMAND_FUNCS = {
     "run": _run,
     "tui": _tui,
+    "ladder": _ladder,
     "data": _data,
     "prices": _prices,
     "items": _items,

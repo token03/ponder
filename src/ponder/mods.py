@@ -190,21 +190,20 @@ class ModDB:
             return "natural"
         return "essence" if mod.get("is_essence_only") else "special"
 
+    @cached_property
+    def _families(self) -> dict[tuple[str, str, str], list[dict]]:
+        """(domain, family, prefix/suffix) -> its mods: a tier ranking looks at ~10 mods, not all of them."""
+        out: dict[tuple[str, str, str], list[dict]] = {}
+        for m in self._affixes.values():
+            out.setdefault((m["domain"], m["type"], m["generation_type"]), []).append(m)
+        return out
+
     def tier(self, mod_id: str, tags: set[str]) -> int | None:
         mod = self.mods[mod_id]
         key = (mod["type"], mod["generation_type"], frozenset(tags))
         if key not in self._tiers:
-            levels = sorted(
-                {
-                    m["required_level"]
-                    for m in self._affixes.values()
-                    if m["domain"] == mod["domain"]
-                    and m["type"] == mod["type"]
-                    and m["generation_type"] == mod["generation_type"]
-                    and self.spawn_weight(m, tags) > 0
-                },
-                reverse=True,
-            )
+            family = self._families.get((mod["domain"], mod["type"], mod["generation_type"]), [])
+            levels = sorted({m["required_level"] for m in family if self.spawn_weight(m, tags) > 0}, reverse=True)
             self._tiers[key] = levels
         levels = self._tiers[key]
         if self.spawn_weight(mod, tags) <= 0 or mod["required_level"] not in levels:
@@ -246,6 +245,40 @@ class ModDB:
                 remaining.remove(line)
         result.notes = [line for line in remaining if not self._known(line)]
         result.unmatched = [line for line in remaining if self._known(line)]
+        return result
+
+    def match_ids(
+        self,
+        base: str,
+        mods: dict[str, list[dict]],
+        item_level: int | None = None,
+        influences: set[str] = frozenset(),
+        rarity: str = "RARE",
+        name: str = "",
+        header: dict[str, str] | None = None,
+    ) -> ItemMatch:
+        """An item whose explicit mods are known by id (e.g. from poe.ninja), no text matching.
+
+        `mods` maps "explicit", "fractured", "crafted" (and others, ignored) to
+        [{"id": mod id, ...}]. Unknown ids are skipped.
+        """
+        item = Item(rarity, name, base, item_level, influences=set(influences), header=dict(header or {}))
+        base_id = self.find_base(base)
+        if base_id is None:
+            return ItemMatch(item=item, base_id=None, item_class=None)
+        tags = self.item_tags(base_id, item.influences)
+        result = ItemMatch(item=item, base_id=base_id, item_class=self.bases[base_id]["item_class"], tags=tags)
+        ctx = _Context(item, self.bases[base_id]["domain"], result.item_class, tags, set())
+        for kind, markers in (("explicit", {}), ("fractured", {"fractured": ""}), ("crafted", {"crafted": ""})):
+            for entry in mods.get(kind) or []:
+                mod = self._affixes.get(entry.get("id", ""))
+                if mod is None or mod["generation_type"] not in ("prefix", "suffix"):
+                    continue
+                mod_id = entry["id"]
+                line = ModLine(mod.get("text", mod_id).split("\n")[0], dict(markers))
+                source = self._source(mod_id, ctx)
+                tier = self.tier(mod_id, tags) if source == "natural" else None
+                result.mods.append(ModMatch(mod_id, mod["generation_type"], mod["type"], source, tier, [line]))
         return result
 
     def _known(self, line: ModLine) -> bool:
