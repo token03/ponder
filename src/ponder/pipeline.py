@@ -478,16 +478,12 @@ def ladder(
             continue
         niches.append(a)
     picked += niches
-    for a in picked:
-        m = demand.archetype_match(db, a)
-        if m is None:
-            continue
-        est = estimate_gear(db, m, table, league, solve=False)
-        if est.error or est.key in estimates:
+    say(f"building {len(picked)} gear crafts")
+    for a, est in zip(picked, _build_all(picked, table, league, workers)):
+        if est is None or est.error or est.key in estimates:
             continue
         est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
         est.used_base = ""
-        add_fractures(est, league, table, filler=False)  # self-made fractured bases: essence or reroll, then fracture
         estimates[est.key] = est
     n_gear = len(estimates)
     for a in found_cl:
@@ -513,6 +509,43 @@ def ladder(
     if trade_lookup:
         price_on_trade(sorted(out, key=lambda e: -e.demand), table, league, budget=trade_budget, progress=say)
     return LadderReport(len(characters), len(worn), len(clusters), out, len(found), len(found_cl), prices_source, league, table.get("divine", 0.0))
+
+
+def _build_gear(a, table: dict[str, float], league: str) -> Estimate | None:
+    """One ladder archetype as an unsolved Estimate with its fractures (self-made ones costed:
+    essence or reroll, then fracture). The rolls this costs stay cached on the problems."""
+    from . import demand
+
+    db = _worker_db()
+    m = demand.archetype_match(db, a)
+    if m is None:
+        return None
+    est = estimate_gear(db, m, table, league, solve=False)
+    if not est.error:
+        add_fractures(est, league, table, filler=False)
+    return est
+
+
+_db: ModDB | None = None
+
+
+def _worker_db() -> ModDB:
+    global _db
+    if _db is None:
+        _db = ModDB()
+    return _db
+
+
+def _build_all(archetypes: list, table: dict[str, float], league: str, workers: int | None = None) -> list[Estimate | None]:
+    """`_build_gear` for every archetype, in parallel processes (costing self-made fractures rolls every reroll)."""
+    workers = workers or os.cpu_count() or 1
+    if workers > 1 and len(archetypes) >= 8:
+        try:
+            with _worker_env(), ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+                return list(pool.map(_build_gear, archetypes, [table] * len(archetypes), [league] * len(archetypes), chunksize=4))
+        except (BrokenProcessPool, OSError, RuntimeError):
+            pass  # see solve_all: no workers where the main module can't be re-imported
+    return [_build_gear(a, table, league) for a in archetypes]
 
 
 # -- estimates -------------------------------------------------------------------------

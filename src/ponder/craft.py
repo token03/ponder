@@ -390,15 +390,20 @@ class Problem:
 
     @cached_property
     def _rolls(self) -> dict[str, list[tuple[float, State]]]:
-        out, by_key = {}, {}
-        for a in self.actions:
-            key = self.roll_key(a)
-            if key is None:
-                continue
-            if key not in by_key:
-                by_key[key] = self.roll(MAGIC, a.profile) if key[0] == MAGIC else self.roll(RARE, a.profile, a.first_profile, a.forced)
-            out[a.name] = by_key[key]
-        return out
+        return {a.name: out for a in self.actions if (out := self.rolled(a)) is not None}
+
+    def rolled(self, a: Action) -> list[tuple[float, State]] | None:
+        """A reroll's outcome distribution, computed once per `roll_key` (the actions sharing one share it); None for other actions.
+
+        The cache outlives changes to `actions`: a roll depends only on the pool, targets and fractured mods.
+        """
+        key = self.roll_key(a)
+        if key is None:
+            return None
+        cache = self.__dict__.setdefault("_roll_cache", {})
+        if key not in cache:
+            cache[key] = self.roll(MAGIC, a.profile) if key[0] == MAGIC else self.roll(RARE, a.profile, a.first_profile, a.forced)
+        return cache[key]
 
     def outcomes(self, s: State, a: Action) -> list[tuple[float, State]]:
         if s.rarity not in a.from_rarity:
@@ -594,7 +599,7 @@ def self_fracture(problem: Problem, target: int, prices: dict[str, float]) -> Se
         if a.kind != "reroll_rare" or RARE not in a.from_rarity or any(pid not in prices for pid, _ in a.cost):
             continue
         by_k: dict[int, float] = {}
-        for p, s in problem.roll(RARE, a.profile, a.first_profile, a.forced):
+        for p, s in problem.rolled(a):
             if s.status[target] == GOOD and (k := problem.total(s)) >= FRACTURE_MIN_MODS:
                 by_k[k] = by_k.get(k, 0.0) + p
         step = step_cost(a, prices)
