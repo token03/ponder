@@ -1,0 +1,9 @@
+[package]
+name = "ponder-app"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Desktop app (egui)."
+
+[dependencies]
+ponder.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "ponder-net"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "poe.ninja ladder and prices, the trade site, repoe downloads, and their disk caches."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "ponder-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Command line: `ponder ...`, with JSON output for scripts and LLMs."
+
+[dependencies]
+ponder.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[[bin]]
+name = "ponder"
+path = "src/main.rs"

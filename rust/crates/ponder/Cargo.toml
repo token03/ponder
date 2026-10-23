@@ -1,0 +1,15 @@
+[package]
+name = "ponder"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "The pipeline: estimates, fractures, product tree, finishing items, plan cache."
+
+[dependencies]
+ponder-core.workspace = true
+ponder-game.workspace = true
+ponder-net.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+anyhow.workspace = true

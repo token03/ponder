@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+ponder-core = { path = "crates/ponder-core" }
+ponder-game = { path = "crates/ponder-game" }
+ponder-net = { path = "crates/ponder-net" }
+ponder = { path = "crates/ponder" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
+rayon = "1"
+regex = "1"
+ureq = "3"
+anyhow = "1"
+
+# Edit-build loop: our crates unoptimised with light debug info, dependencies optimised
+# (the solver and faer are unusable at opt-level 0).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+debug = "line-tables-only"
