@@ -23,6 +23,7 @@ FILES = [
     "crafting_bench_options",
     "cluster_jewels",
     "cluster_jewel_notables",
+    "stat_translations",
 ]
 
 

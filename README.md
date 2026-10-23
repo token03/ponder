@@ -7,11 +7,10 @@ The plan, in stages:
 1. **Mine** (working): read Path of Building exports, match every rare's mod
    lines to exact mod ids, tiers and sources, and rank mod combinations that
    many builds share.
-2. **Cost** (working for cluster jewels): find the cheapest crafting policy
-   for a target and its expected cost. Next: essences, fossils, chaos and
-   Harvest reforges for ordinary gear.
-3. **Price and margin**: compare expected crafting cost with what the item
-   sells for.
+2. **Cost** (working): the cheapest crafting policy for a target and its
+   expected cost, for cluster jewels and ordinary rares.
+3. **Price and margin** (started): poe.ninja for currency and cluster bases,
+   trade-site lookups for selling prices.
 4. **Explain**: an LLM layer that turns plans and numbers into plain advice.
 
 ## Setup
@@ -72,39 +71,65 @@ larger one is shared by exactly the same builds.
 
 ## Crafting costs
 
-`ponder cluster cost SIZE ENCHANT NOTABLE...` (add `--need N` for "any N of
-these") prints the expected cost, the expected currency used, and the recipe:
-
-```
-medium cluster, Area Damage, ilvl 84: 2 of Vast Power, Assert Dominance
-expected cost ~127.6c (prices: placeholder defaults), not counting the base
-expected currency: 462.4 alt, 140.8 aug, 49.2 regal, 48.2 scour
-recipe (most common situations first):
-   31.3%  magic: 1 other prefix + 1 other suffix                       -> alt
-   18.4%  magic: 1 other suffix                                        -> aug
-    5.1%  magic: Vast Power + 1 other suffix                           -> regal
-    2.6%  rare: Vast Power + 2 other suffix                            -> scour
+```sh
+ponder prices fetch                      # current league prices from poe.ninja
+ponder cluster cost large "cold damage" "Prismatic Heart" "Widespread Destruction" "Blast-Freeze"
+ponder cluster cost large "cold damage" ... --fractured "Prismatic Heart"   # start from a fractured base
+ponder craft https://pobb.in/XXXX --slot Helmet --settle 1                 # any rare in a build
 ```
 
-How it works (`craft.py`): an item is reduced to which target mods it has
-plus how many other mods sit on each side (notables counted apart, since
-they share a cap). From each such state the next currency is chosen by policy
-iteration, solving the expected costs exactly, so the printed recipe is the
-cheapest one over alt / aug / regal / exalt / scour. `craft.simulate`
-replays a recipe on real mods and the tests check the two agree.
-`ponder mine` adds this cost to every cluster jewel combo it finds.
-`ponder cluster enchants SIZE` and `ponder cluster notables SIZE ENCHANT`
-list what can roll and how often.
+Each prints the expected cost, the expected currency used, and the recipe:
+the action to take in each situation you'll actually meet. `cluster cost`
+also prints the poe.ninja base price, a trade-site search link, and with
+`--trade` the market price and margin.
 
-Assumptions not in the game data, kept as constants in the code:
+### How the solver works (`craft.py`)
+
+An item is reduced to a small state: its rarity, whether each target mod is
+missing / on the item / *blocked* (a worse tier or an exclusive mod of the
+same group is there), and how many other mods sit on each side. Every
+currency maps a state to a distribution over states. Policy iteration then
+picks, for every state, the action with the lowest expected cost **to
+finish**, solving those expectations exactly. That is full lookahead, not a
+greedy rule: it will regal into a rare, or exalt, or annul, whenever that is
+cheaper over the whole remaining craft. `craft.simulate` replays a recipe on
+real mods with exact group exclusion; the tests check the two agree.
+
+Actions, built from repoe data and costed in poe.ninja prices:
+
+- transmute, alteration, augmentation, regal, exalted, annulment
+- alchemy, chaos, scour + alchemy, scour + transmute
+- Harvest "reforge with a <tag> modifier" for every tag the pool has
+- essences (Shrieking and Deafening) for the item class, with a scour on rares
+- single fossils with a Primitive Chaotic Resonator (gear only)
+
+Item level filters the mod pool. Fractured mods (`--fractured`, or read from
+a PoB item) stay through every reroll and can't be annulled. Actions with no
+price are left out rather than counted as free.
+
+Not modelled yet: bench crafts and metamods ("prefixes cannot be changed"),
+multi-fossil combos, Eldritch currency, influence orbs, Awakener, Recombinator,
+veiled mods, and Harvest's newer crafts. `ponder craft` lists the mods on an
+item it doesn't try to make (bench crafts, veiled and special mods).
+
+### Assumptions not in the game data
+
+Kept as constants so they're easy to correct:
 
 - magic items roll 1 or 2 mods with equal chance (`craft.MAGIC_TWO_MOD_CHANCE`)
-- jewels hold 2 prefixes and 2 suffixes (`craft.JEWEL_AFFIX_LIMIT`)
-- clusters hold at most 1 / 2 / 3 notables by size (`cluster.NOTABLE_CAP`)
+- rare mod counts: gear 4/5/6 at 9:3:1 (a 1,000-chaos sample), jewels 3/4 at
+  3:1 (`craft.RARE_MOD_COUNTS`)
+- jewels hold 2 prefixes and 2 suffixes; clusters hold 1 / 2 / 3 notables
+- Harvest reforge costs: fire, cold and lightning are sourced; the other tags
+  are guesses priced at the dearest lifeforce (`actions.HARVEST`)
 
-Prices default to rough placeholders. `ponder prices fetch --league NAME`
-pulls real ones from poe.ninja into `prices.json` (poe.ninja must be
-reachable), or edit `prices.json` by hand.
+### Prices and the trade site
+
+`ponder prices fetch` caches currency, essence, fossil, resonator and cluster
+base prices under `.cache/ninja`; without it a built-in snapshot is used.
+The trade API (the one Awakened PoE Trade uses) refuses some networks; set
+`POESESSID` to your pathofexile.com session cookie if `--trade` gets a 403.
+The printed search link always works in a browser.
 
 ## Layout
 
@@ -116,8 +141,11 @@ src/ponder/
   mods.py   match lines to mod ids, tiers and sources
   mine.py   rank shared mod combinations
   craft.py  crafting states, policy iteration, simulation
-  cluster.py  cluster jewel enchants, mod pools, costs
-  prices.py currency prices
+  actions.py currencies, Harvest, essences and fossils as solver actions
+  cluster.py cluster jewel enchants, mod pools, costs
+  gear.py   targets from a PoB rare (tiers, fractures, essence mods)
+  prices.py poe.ninja prices
+  trade.py  trade-site queries
   cli.py    the `ponder` command
 builds/     lists of build links per league
 tests/      unit tests; the mod tests run once data is fetched

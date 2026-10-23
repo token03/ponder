@@ -1,13 +1,18 @@
-"""Expected cost of hitting target mods with "add a mod" currencies.
+"""Cheapest crafting policy for a set of target mods.
 
-Covers the alteration / augmentation / regal / exalt / scour loop. The item is
-lumped into a small state: which target mods it has, plus how many other
-("junk") mods sit on each side, split into notables and the rest because
-notables share a cap. Value iteration over those states gives the cheapest
-policy, which is the recipe: for each state, which currency to use next.
+The item is lumped into a small state: rarity, for each target whether it is
+missing, on the item at a good tier, or on the item at a bad tier (which blocks
+it, since mods of one group exclude each other), plus how many other ("junk")
+mods sit on each side. Notables are counted apart from other junk because
+cluster jewels cap them.
 
-`simulate` replays a policy on real mods (exact group exclusion, no lumping)
-to check the lumped numbers.
+Every currency is an action mapping a state to a distribution over states.
+Policy iteration finds, for every state, the action minimising the expected
+total cost *to finish*, so the plan looks all the way ahead: it will pay for
+an expensive action now when that saves more later. The policy is the recipe.
+
+`simulate` replays a policy on real mods (exact mod groups, no lumping) to
+check the lumped numbers.
 """
 
 from __future__ import annotations
@@ -20,17 +25,14 @@ from functools import cached_property
 import numpy as np
 
 # Assumptions not in the game data; adjust here if testing shows otherwise.
-MAGIC_TWO_MOD_CHANCE = 0.5  # alteration/transmutation roll 1 or 2 mods
-JEWEL_AFFIX_LIMIT = {"magic": 1, "rare": 2}  # per side
+MAGIC_TWO_MOD_CHANCE = 0.5  # transmute/alteration roll 1 or 2 mods
+# Mod count when an item becomes rare (alchemy, chaos, essence, fossil, Harvest).
+# Gear follows a 1,000-chaos sample (4:5:6 = 9:3:1); jewels assume the same 3:1 step.
+RARE_MOD_COUNTS = {"jewel": {3: 0.75, 4: 0.25}, "gear": {4: 9 / 13, 5: 3 / 13, 6: 1 / 13}}
+RARE_AFFIX_LIMIT = {"jewel": 2, "gear": 3}  # per side
 
-ACTIONS = ("alt", "aug", "regal", "exalt", "scour")
-CURRENCY = {
-    "alt": ["Orb of Alteration"],
-    "aug": ["Orb of Augmentation"],
-    "regal": ["Regal Orb"],
-    "exalt": ["Exalted Orb"],
-    "scour": ["Orb of Scouring", "Orb of Transmutation"],
-}
+NORMAL, MAGIC, RARE = 0, 1, 2
+MISSING, GOOD, BLOCKED = 0, 1, 2
 
 
 @dataclass(frozen=True)
@@ -41,164 +43,348 @@ class Mod:
     groups: tuple[str, ...]
     notable: bool
     label: str
+    tags: tuple[str, ...] = ()  # implicit tags, used by fossils and Harvest
+
+
+@dataclass(frozen=True)
+class Target:
+    name: str
+    side: str
+    good: frozenset[str]  # mod ids that satisfy it
+    groups: frozenset[str]  # other mods in these groups block it
+    notable: bool = False
 
 
 @dataclass(frozen=True)
 class State:
-    rare: bool
-    targets: frozenset[str]
-    # junk counts: (prefix notables, prefix others, suffix notables, suffix others)
-    junk: tuple[int, int, int, int] = (0, 0, 0, 0)
+    rarity: int
+    status: tuple[int, ...]  # per target: MISSING, GOOD or BLOCKED
+    junk: tuple[int, int, int, int] = (0, 0, 0, 0)  # prefix notable/other, suffix notable/other
 
-    def count(self, side: str, problem: "Problem") -> int:
-        n = sum(1 for t in self.targets if problem.mods[t].side == side)
-        return n + (self.junk[0] + self.junk[1] if side == "prefix" else self.junk[2] + self.junk[3])
 
-    def notables(self, problem: "Problem") -> int:
-        return sum(1 for t in self.targets if problem.mods[t].notable) + self.junk[0] + self.junk[2]
+@dataclass(frozen=True)
+class Action:
+    """One currency use. `cost` is [(price id, quantity)]."""
+
+    name: str
+    kind: str  # transmute alt aug regal exalt annul reroll_magic reroll_rare
+    cost: tuple[tuple[str, float], ...]
+    from_rarity: tuple[int, ...]
+    profile: str = "base"  # weight profile for rolled mods
+    first_profile: str | None = None  # Harvest: the first mod comes from a tag-filtered pool
+    forced: str | None = None  # essence: this mod is always added
 
 
 @dataclass
 class Problem:
     pool: list[Mod]
-    targets: frozenset[str]  # acceptable mod ids
-    need: int  # how many of `targets` must be on the item
+    targets: list[Target]
+    need: int
+    actions: list[Action]
+    kind: str = "gear"  # "jewel" or "gear"
     notable_cap: int = 99
-    affix_limit: dict = field(default_factory=lambda: dict(JEWEL_AFFIX_LIMIT))
+    fixed: list[Mod] = field(default_factory=list)  # fractured mods, never removed
+    profiles: dict[str, dict[str, float]] = field(default_factory=dict)  # name -> mod id -> weight
+    extra_mods: dict[str, Mod] = field(default_factory=dict)  # forced mods outside the pool
 
     @cached_property
     def mods(self) -> dict[str, Mod]:
-        return {m.id: m for m in self.pool}
+        return {**self.extra_mods, **{m.id: m for m in self.pool}, **{m.id: m for m in self.fixed}}
+
+    @property
+    def limit(self) -> int:
+        return RARE_AFFIX_LIMIT[self.kind]
+
+    @property
+    def rare_counts(self) -> dict[int, float]:
+        return RARE_MOD_COUNTS[self.kind]
+
+    @property
+    def start(self) -> State:
+        return State(NORMAL, self.base.status, self.base.junk)
+
+    def classify(self, mod_id: str) -> tuple[int, int]:
+        """(target index, GOOD or BLOCKED), or (-1, junk slot)."""
+        mod = self.mods[mod_id]
+        for i, t in enumerate(self.targets):
+            if mod_id in t.good:
+                return i, GOOD
+            if set(mod.groups) & t.groups:
+                return i, BLOCKED
+        return -1, (0 if mod.side == "prefix" else 2) + (0 if mod.notable else 1)
 
     @cached_property
-    def _junk(self) -> dict[tuple[str, bool], tuple[float, float]]:
-        """(side, notable) -> (total weight, expected weight removed per draw)."""
+    def base(self) -> State:
+        """The fractured mods alone."""
+        status, junk = [MISSING] * len(self.targets), [0, 0, 0, 0]
+        for m in self.fixed:
+            i, v = self.classify(m.id)
+            if i >= 0:
+                status[i] = v
+            else:
+                junk[v] += 1
+        return State(NORMAL, tuple(status), tuple(junk))
+
+    def weights(self, profile: str) -> dict[str, float]:
+        return {m.id: m.weight for m in self.pool} if profile == "base" else self.profiles[profile]
+
+    @cached_property
+    def _lumped(self) -> dict[str, tuple[dict, dict]]:
+        """profile -> ({(target, GOOD|BLOCKED): weight}, {junk slot: (weight, removed per draw)})."""
         out = {}
-        for side in ("prefix", "suffix"):
-            for notable in (True, False):
-                groups: dict[tuple, float] = {}
-                for m in self.pool:
-                    if m.side == side and m.notable == notable and m.id not in self.targets:
-                        groups[m.groups] = groups.get(m.groups, 0) + m.weight
-                total = sum(groups.values())
-                removed = sum(w * w for w in groups.values()) / total if total else 0.0
-                out[(side, notable)] = (total, removed)
+        for name in {"base", *self.profiles}:
+            tw: dict[tuple[int, int], float] = {}
+            groups: dict[int, dict[tuple, float]] = {0: {}, 1: {}, 2: {}, 3: {}}
+            for mod_id, w in self.weights(name).items():
+                if w <= 0:
+                    continue
+                i, v = self.classify(mod_id)
+                if i >= 0:
+                    tw[(i, v)] = tw.get((i, v), 0.0) + w
+                else:
+                    g = self.mods[mod_id].groups
+                    groups[v][g] = groups[v].get(g, 0.0) + w
+            junk = {}
+            for slot, g in groups.items():
+                total = sum(g.values())
+                # Drawing a junk mod removes its whole group; use the expected group weight.
+                junk[slot] = (total, sum(w * w for w in g.values()) / total if total else 0.0)
+            out[name] = (tw, junk)
         return out
 
-    def done(self, s: State) -> bool:
-        return len(s.targets) >= self.need
+    def count(self, s: State, side: str) -> int:
+        n = sum(1 for i, v in enumerate(s.status) if v != MISSING and self.targets[i].side == side)
+        return n + (s.junk[0] + s.junk[1] if side == "prefix" else s.junk[2] + s.junk[3])
 
-    def add_mod(self, s: State) -> list[tuple[float, State]]:
-        """Outcomes of adding one random mod (augment, regal, exalt)."""
-        limit = self.affix_limit["rare" if s.rare else "magic"]
-        cap_hit = s.notables(self) >= self.notable_cap
-        taken = {g for t in s.targets for g in self.mods[t].groups}
+    def notables(self, s: State) -> int:
+        on = sum(1 for i, v in enumerate(s.status) if v != MISSING and self.targets[i].notable)
+        return on + s.junk[0] + s.junk[2]
+
+    def total(self, s: State) -> int:
+        return self.count(s, "prefix") + self.count(s, "suffix")
+
+    def done(self, s: State) -> bool:
+        return sum(v == GOOD for v in s.status) >= self.need
+
+    # -- mechanics ----------------------------------------------------------
+
+    def add_mod(self, s: State, profile: str = "base") -> list[tuple[float, State]]:
+        """Add one random mod: augment, regal, exalt, or one draw of a reroll."""
+        tw, junk = self._lumped[profile]
+        limit = 1 if s.rarity == MAGIC else self.limit
+        cap_hit = self.notables(s) >= self.notable_cap
         options: list[tuple[float, State]] = []
         for side in ("prefix", "suffix"):
-            if s.count(side, self) >= limit:
+            if self.count(s, side) >= limit:
                 continue
-            for t in self.targets - s.targets:
-                m = self.mods[t]
-                if m.side == side and not (m.notable and cap_hit) and not set(m.groups) & taken:
-                    options.append((m.weight, State(s.rare, s.targets | {t}, s.junk)))
-            for notable in (True, False):
-                if notable and cap_hit:
+            for i, t in enumerate(self.targets):
+                if t.side != side or s.status[i] != MISSING or (t.notable and cap_hit):
                     continue
-                idx = (0 if side == "prefix" else 2) + (0 if notable else 1)
-                total, removed = self._junk[(side, notable)]
-                weight = max(total - removed * s.junk[idx], 0.0)
-                if weight > 0:
-                    junk = list(s.junk)
-                    junk[idx] += 1
-                    options.append((weight, State(s.rare, s.targets, tuple(junk))))
+                for v in (GOOD, BLOCKED):
+                    if tw.get((i, v), 0.0) > 0:
+                        status = list(s.status)
+                        status[i] = v
+                        options.append((tw[(i, v)], State(s.rarity, tuple(status), s.junk)))
+            for slot in (0, 1) if side == "prefix" else (2, 3):
+                if slot in (0, 2) and cap_hit:
+                    continue
+                total, removed = junk[slot]
+                w = max(total - removed * s.junk[slot], 0.0)
+                if w > 0:
+                    j = list(s.junk)
+                    j[slot] += 1
+                    options.append((w, State(s.rarity, s.status, tuple(j))))
         total = sum(w for w, _ in options)
         return [(w / total, st) for w, st in options] if total else []
 
-    def reroll(self) -> list[tuple[float, State]]:
-        """Outcomes of an alteration (or transmutation on a normal item)."""
-        empty = State(False, frozenset())
-        out: dict[State, float] = {}
-        for p1, one in self.add_mod(empty):
-            out[one] = out.get(one, 0) + p1 * (1 - MAGIC_TWO_MOD_CHANCE)
-            for p2, two in self.add_mod(one):
-                out[two] = out.get(two, 0) + p1 * MAGIC_TWO_MOD_CHANCE * p2
-        return list((p, s) for s, p in out.items())
+    def force(self, s: State, mod_id: str) -> State:
+        i, v = self.classify(mod_id)
+        if i >= 0:
+            status = list(s.status)
+            status[i] = status[i] or v
+            return State(s.rarity, tuple(status), s.junk)
+        j = list(s.junk)
+        j[v] += 1
+        return State(s.rarity, s.status, tuple(j))
 
-    def actions(self, s: State) -> dict[str, list[tuple[float, State]]]:
-        acts: dict[str, list[tuple[float, State]]] = {}
-        mods = s.count("prefix", self) + s.count("suffix", self)
-        if not s.rare:
-            acts["alt"] = self.reroll()
-            if mods < 2:
-                acts["aug"] = self.add_mod(s)
-            acts["regal"] = [(p, State(True, n.targets, n.junk)) for p, n in self.add_mod(State(True, s.targets, s.junk))]
-        else:
-            if mods < 2 * self.affix_limit["rare"]:
-                acts["exalt"] = self.add_mod(s)
-            acts["scour"] = self.reroll()
-        return {a: o for a, o in acts.items() if o}
+    def roll(self, rarity: int, profile: str = "base", first_profile: str | None = None, forced: str | None = None) -> list[tuple[float, State]]:
+        """A fresh roll at `rarity`; fractured mods stay."""
+        counts = {1: 1 - MAGIC_TWO_MOD_CHANCE, 2: MAGIC_TWO_MOD_CHANCE} if rarity == MAGIC else self.rare_counts
+        state = State(rarity, self.base.status, self.base.junk)
+        placed = len(self.fixed)
+        if forced:
+            state, placed = self.force(state, forced), placed + 1
+        dist, result = {state: 1.0}, {}
+        alive = 1.0  # chance the roll still has more mods to add
+        for k in range(placed, max(counts) + 1):
+            more = sum(p for n, p in counts.items() if n > k)
+            stop = alive - more
+            for s, p in dist.items():
+                result[s] = result.get(s, 0.0) + p * stop
+            alive = more
+            if alive <= 1e-15:
+                break
+            prof = first_profile if (k == placed and first_profile and not forced) else profile
+            nxt: dict[State, float] = {}
+            for s, p in dist.items():
+                for q, n in self.add_mod(s, prof) or [(1.0, s)]:
+                    nxt[n] = nxt.get(n, 0.0) + p * q
+            dist = nxt
+        return [(p, s) for s, p in result.items() if p > 0]
+
+    def annul(self, s: State) -> list[tuple[float, State]]:
+        """Remove one random mod that isn't fractured."""
+        options: list[tuple[float, State]] = []
+        for i, v in enumerate(s.status):
+            if v != MISSING and self.base.status[i] == MISSING:
+                status = list(s.status)
+                status[i] = MISSING
+                options.append((1.0, State(s.rarity, tuple(status), s.junk)))
+        for slot in range(4):
+            n = s.junk[slot] - self.base.junk[slot]
+            if n > 0:
+                j = list(s.junk)
+                j[slot] -= 1
+                options.append((float(n), State(s.rarity, s.status, tuple(j))))
+        total = sum(w for w, _ in options)
+        return [(w / total, st) for w, st in options] if total else []
+
+    @cached_property
+    def _rolls(self) -> dict[str, list[tuple[float, State]]]:
+        out = {}
+        for a in self.actions:
+            if a.kind in ("transmute", "alt", "reroll_magic"):
+                out[a.name] = self.roll(MAGIC, a.profile)
+            elif a.kind == "reroll_rare":
+                out[a.name] = self.roll(RARE, a.profile, a.first_profile, a.forced)
+        return out
+
+    def outcomes(self, s: State, a: Action) -> list[tuple[float, State]]:
+        if s.rarity not in a.from_rarity:
+            return []
+        if a.name in self._rolls:
+            return self._rolls[a.name]
+        if a.kind == "aug":
+            return self.add_mod(s) if self.total(s) < 2 else []
+        if a.kind == "regal":
+            return self.add_mod(State(RARE, s.status, s.junk))
+        if a.kind == "exalt":
+            return self.add_mod(s) if self.total(s) < 2 * self.limit else []
+        if a.kind == "annul":
+            return self.annul(s)
+        return []
+
+
+# -- solving ------------------------------------------------------------------
 
 
 @dataclass
 class Plan:
-    cost: float  # expected chaos from a fresh (transmuted) item
+    cost: float  # expected chaos from a normal base, excluding the base itself
     policy: dict[State, str]
-    usage: dict[str, float]  # expected number of each action
+    usage: dict[str, float]  # expected uses of each action
     visits: dict[State, float]  # expected times each state is acted on
+    states: int
+    unpriced: list[str] = field(default_factory=list)  # actions left out for lack of a price
 
 
-def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 100) -> Plan:
-    """Cheapest policy by policy iteration, evaluating each policy exactly."""
-    action_cost = {a: sum(prices.get(c, 0.0) for c in CURRENCY[a]) for a in ACTIONS}
+def action_cost(a: Action, prices: dict[str, float]) -> float:
+    return sum(prices.get(pid, 0.0) * qty for pid, qty in a.cost)
+
+
+def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> Plan:
+    """Optimal policy by policy iteration, evaluating each policy exactly.
+
+    Actions with any unpriced input are left out rather than treated as free.
+    """
+    unpriced = [a.name for a in problem.actions if any(pid not in prices for pid, _ in a.cost)]
+    problem.actions = [a for a in problem.actions if a.name not in unpriced]
+    problem.__dict__.pop("_rolls", None)
+    costs = {a.name: action_cost(a, prices) for a in problem.actions}
+    if problem.done(problem.start):
+        return Plan(0.0, {}, {}, {}, 1, unpriced)
     states, edges = _explore(problem)
     open_states = [s for s in states if not problem.done(s)]
     index = {s: i for i, s in enumerate(open_states)}
-    # Start from "reroll everything", which always works eventually.
-    policy = {s: ("alt" if "alt" in edges[s] else "scour") for s in open_states}
+    policy = _proper_policy(problem, open_states, edges)
+    if any(s not in policy for s in open_states):
+        raise ValueError("no sequence of the available currencies can reach this target")
 
     for _ in range(max_rounds):
-        value = _evaluate(open_states, index, edges, policy, action_cost)
+        value = _evaluate(open_states, index, edges, policy, costs)
+        memo: dict[int, float] = {}  # rerolls share one outcome list across states
         changed = False
         for s in open_states:
-            q = {
-                a: action_cost[a] + sum(p * value[index[n]] for p, n in outcomes if n in index)
-                for a, outcomes in edges[s].items()
-            }
-            best = min(q, key=q.get)
-            if q[best] < q[policy[s]] - 1e-9 * max(1.0, q[policy[s]]):
-                policy[s], changed = best, True
+            current = costs[policy[s]] + _expect(edges[s][policy[s]], value, index, memo)
+            for name, outcomes in edges[s].items():
+                q = costs[name] + _expect(outcomes, value, index, memo)
+                if q < current - 1e-9 * max(1.0, current):
+                    policy[s], current, changed = name, q, True
         if not changed:
             break
 
-    start = problem.reroll()  # transmute the fresh base
-    cost = prices.get("Orb of Transmutation", 0.0) + sum(p * value[index[s]] for p, s in start if s in index)
-    visits = _visits(open_states, index, edges, policy, start)
-    usage = {a: 0.0 for a in ACTIONS}
+    visits = _visits(open_states, index, edges, policy, problem.start)
+    usage = {a.name: 0.0 for a in problem.actions}
     for s, n in visits.items():
         usage[policy[s]] += n
-    return Plan(cost=cost, policy=policy, usage=usage, visits=visits)
+    return Plan(float(value[index[problem.start]]), policy, usage, visits, len(states), unpriced)
+
+
+def _expect(outcomes, value, index, memo: dict | None = None) -> float:
+    if memo is not None and id(outcomes) in memo:
+        return memo[id(outcomes)]
+    v = sum(p * value[index[n]] for p, n in outcomes if n in index)
+    if memo is not None:
+        memo[id(outcomes)] = v
+    return v
 
 
 def _explore(problem: Problem):
-    """Every state reachable from a fresh item, and the outcomes of each action."""
-    frontier = [s for _, s in problem.reroll()]
-    states: set[State] = set(frontier)
-    edges: dict[State, dict] = {}
+    """Every state reachable from the normal base, with each action's outcomes."""
+    frontier, seen = [problem.start], {problem.start}
+    edges: dict[State, dict[str, list]] = {}
     while frontier:
         s = frontier.pop()
         if problem.done(s):
             continue
-        edges[s] = problem.actions(s)
-        for outcomes in edges[s].values():
-            for _, n in outcomes:
-                if n not in states:
-                    states.add(n)
-                    frontier.append(n)
-    return sorted(states, key=lambda s: (s.rare, len(s.targets), s.junk)), edges
+        edges[s] = {}
+        for a in problem.actions:
+            out = problem.outcomes(s, a)
+            if out:
+                edges[s][a.name] = out
+                for _, n in out:
+                    if n not in seen:
+                        seen.add(n)
+                        frontier.append(n)
+    return list(seen), edges
+
+
+def _proper_policy(problem, open_states, edges) -> dict[State, str]:
+    """A starting policy that surely finishes: always step toward fewer moves-to-done.
+
+    Policy iteration needs one; "always reroll" isn't enough when no single
+    reroll can hit every target (e.g. three notables need alt, regal, exalt).
+    """
+    dist: dict[State, int] = {}
+    policy: dict[State, str] = {}
+    changed = True
+    while changed:
+        changed = False
+        memo: dict[int, int | None] = {}
+        for s in open_states:
+            for name, outcomes in edges[s].items():
+                key = id(outcomes)
+                if key not in memo:
+                    ds = [0 if problem.done(n) else dist.get(n) for p, n in outcomes if p > 0]
+                    ds = [d for d in ds if d is not None]
+                    memo[key] = min(ds) if ds else None
+                best = memo[key]
+                if best is not None and (s not in dist or best + 1 < dist[s]):
+                    dist[s], policy[s], changed = best + 1, name, True
+    return policy
 
 
 def _transitions(open_states, index, edges, policy) -> np.ndarray:
-    """P[i, j]: chance policy moves open state i to open state j."""
     P = np.zeros((len(open_states), len(open_states)))
     for s in open_states:
         for p, n in edges[s][policy[s]]:
@@ -207,34 +393,35 @@ def _transitions(open_states, index, edges, policy) -> np.ndarray:
     return P
 
 
-def _evaluate(open_states, index, edges, policy, action_cost) -> np.ndarray:
+def _evaluate(open_states, index, edges, policy, costs) -> np.ndarray:
     P = _transitions(open_states, index, edges, policy)
-    c = np.array([action_cost[policy[s]] for s in open_states])
-    try:
-        return np.linalg.solve(np.eye(len(open_states)) - P, c)
-    except np.linalg.LinAlgError:  # policy never finishes from some state
-        return np.full(len(open_states), np.inf)
+    c = np.array([costs[policy[s]] for s in open_states])
+    return np.linalg.solve(np.eye(len(open_states)) - P, c)
 
 
 def _visits(open_states, index, edges, policy, start) -> dict[State, float]:
-    """Expected number of times each state is acted on before success."""
     P = _transitions(open_states, index, edges, policy)
     s0 = np.zeros(len(open_states))
-    for p, s in start:
-        if s in index:
-            s0[index[s]] += p
+    s0[index[start]] = 1.0
     n = np.linalg.solve((np.eye(len(open_states)) - P).T, s0)
     return {s: float(n[index[s]]) for s in open_states}
 
 
 def describe(problem: Problem, s: State) -> str:
-    """E.g. `magic: Prismatic Heart + 1 other suffix`."""
-    parts = sorted(problem.mods[t].label for t in s.targets)
+    """E.g. `rare: Prismatic Heart + Life (blocked) + 1 other suffix`.
+
+    "blocked" means a mod sharing the target's group (a worse tier, or an
+    exclusive notable) is on the item, so the target can't roll until it goes.
+    """
+    parts = []
+    for i, v in enumerate(s.status):
+        if v == GOOD:
+            parts.append(problem.targets[i].name)
+        elif v == BLOCKED:
+            parts.append(f"{problem.targets[i].name} (blocked)")
     labels = ("other prefix notable", "other prefix", "other suffix notable", "other suffix")
-    for n, label in zip(s.junk, labels):
-        if n:
-            parts.append(f"{n} {label}")
-    return f"{'rare' if s.rare else 'magic'}: {' + '.join(parts) or 'nothing useful'}"
+    parts += [f"{n} {label}" for n, label in zip(s.junk, labels) if n]
+    return f"{('normal', 'magic', 'rare')[s.rarity]}: {' + '.join(parts) or 'nothing useful'}"
 
 
 def recipe(problem: Problem, plan: Plan, min_share: float = 0.01) -> list[tuple[str, str, float]]:
@@ -244,64 +431,88 @@ def recipe(problem: Problem, plan: Plan, min_share: float = 0.01) -> list[tuple[
     return sorted(rows, key=lambda r: -r[2])
 
 
-def simulate(problem: Problem, plan: Plan, prices: dict[str, float], runs: int = 2000, seed: int = 0) -> float:
-    """Average chaos spent replaying `plan` on real mods."""
+# -- simulation on real mods ----------------------------------------------------
+
+
+def simulate(problem: Problem, plan: Plan, prices: dict[str, float], runs: int = 2000, seed: int = 0, max_steps: int = 10**5) -> float:
+    """Average chaos spent replaying `plan` with real mods and exact group exclusion."""
     rng = random.Random(seed)
+    by_name = {a.name: a for a in problem.actions}
+    costs = {a.name: action_cost(a, prices) for a in problem.actions}
     cache: dict = {}
-    action_cost = {a: sum(prices.get(c, 0.0) for c in CURRENCY[a]) for a in ACTIONS}
     total = 0.0
     for _ in range(runs):
-        total += prices.get("Orb of Transmutation", 0.0)
-        rare, mods = False, _roll_magic(problem, rng, cache)
-        for _ in range(10**6):
-            state = _lump(problem, rare, mods)
+        rarity, mods = NORMAL, list(problem.fixed)
+        for _ in range(max_steps):
+            state = _lump(problem, rarity, mods)
             if problem.done(state):
                 break
-            action = plan.policy.get(state) or "alt"
-            total += action_cost[action]
-            if action in ("alt", "scour"):
-                rare, mods = False, _roll_magic(problem, rng, cache)
-            else:
-                rare = rare or action == "regal"
-                mod = _draw(problem, rare, mods, rng, cache)
-                if mod:
-                    mods = mods + [mod]
+            a = by_name[plan.policy[state]]
+            total += costs[a.name]
+            rarity, mods = _apply(problem, a, rarity, mods, rng, cache)
     return total / runs
 
 
-def _roll_magic(problem, rng, cache) -> list[Mod]:
-    mods = [_draw(problem, False, [], rng, cache)]
-    if rng.random() < MAGIC_TWO_MOD_CHANCE:
-        second = _draw(problem, False, mods, rng, cache)
-        if second:
-            mods.append(second)
-    return [m for m in mods if m]
+def _apply(problem: Problem, a: Action, rarity: int, mods: list[Mod], rng, cache):
+    if a.kind in ("transmute", "alt", "reroll_magic"):
+        return MAGIC, _sim_roll(problem, MAGIC, a, rng, cache)
+    if a.kind == "reroll_rare":
+        return RARE, _sim_roll(problem, RARE, a, rng, cache)
+    if a.kind in ("aug", "regal", "exalt"):
+        rarity = MAGIC if a.kind == "aug" else RARE
+        m = _draw(problem, rarity, mods, "base", rng, cache)
+        return rarity, mods + [m] if m else mods
+    if a.kind == "annul":
+        removable = [m for m in mods if m not in problem.fixed]
+        if removable:
+            gone = rng.choice(removable)
+            mods = [m for m in mods if m is not gone]
+        return rarity, mods
+    raise ValueError(a.kind)
 
 
-def _draw(problem: Problem, rare: bool, mods: list[Mod], rng, cache: dict) -> Mod | None:
-    key = (rare, frozenset(m.id for m in mods))
+def _sim_roll(problem: Problem, rarity: int, a: Action, rng, cache) -> list[Mod]:
+    counts = {1: 1 - MAGIC_TWO_MOD_CHANCE, 2: MAGIC_TWO_MOD_CHANCE} if rarity == MAGIC else problem.rare_counts
+    n = rng.choices(list(counts), weights=list(counts.values()))[0]
+    mods = list(problem.fixed)
+    if a.forced:
+        mods.append(problem.mods[a.forced])
+    first = None if a.forced else a.first_profile
+    while len(mods) < n:
+        m = _draw(problem, rarity, mods, first or a.profile, rng, cache)
+        first = None
+        if m is None:
+            break
+        mods.append(m)
+    return mods
+
+
+def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cache: dict) -> Mod | None:
+    key = (rarity, profile, frozenset(m.id for m in mods))
     if key not in cache:
-        limit = problem.affix_limit["rare" if rare else "magic"]
+        limit = 1 if rarity == MAGIC else problem.limit
         taken = {g for m in mods for g in m.groups}
         notables = sum(m.notable for m in mods)
+        weights = problem.weights(profile)
         pool = [
             m
             for m in problem.pool
-            if sum(x.side == m.side for x in mods) < limit
+            if weights.get(m.id, 0) > 0
+            and sum(x.side == m.side for x in mods) < limit
             and not set(m.groups) & taken
             and not (m.notable and notables >= problem.notable_cap)
         ]
-        cache[key] = (pool, list(itertools.accumulate(m.weight for m in pool)))
+        cache[key] = (pool, list(itertools.accumulate(weights[m.id] for m in pool)))
     pool, cumulative = cache[key]
-    if not pool:
-        return None
-    return rng.choices(pool, cum_weights=cumulative)[0]
+    return rng.choices(pool, cum_weights=cumulative)[0] if pool else None
 
 
-def _lump(problem: Problem, rare: bool, mods: list[Mod]) -> State:
-    targets = frozenset(m.id for m in mods if m.id in problem.targets)
-    junk = [0, 0, 0, 0]
+def _lump(problem: Problem, rarity: int, mods: list[Mod]) -> State:
+    status, junk = [MISSING] * len(problem.targets), [0, 0, 0, 0]
     for m in mods:
-        if m.id not in problem.targets:
-            junk[(0 if m.side == "prefix" else 2) + (0 if m.notable else 1)] += 1
-    return State(rare, targets, tuple(junk))
+        i, v = problem.classify(m.id)
+        if i >= 0:
+            status[i] = status[i] or v
+        else:
+            junk[v] += 1
+    return State(rarity, tuple(status), tuple(junk))
