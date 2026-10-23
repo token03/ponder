@@ -50,3 +50,34 @@ def test_match_by_mod_ids():
     got = {(x.mod_id, x.kind, x.source) for x in m.mods}
     assert got == {("IncreasedLife6", "prefix", "natural"), ("ChaosResist6", "suffix", "natural"), ("JunMaster2AllDamage3", "prefix", "crafted")}
     assert demand.core_families(m) == ("IncreasedLife", demand.RES)
+
+
+@pytest.mark.skipif(not data.available(), reason="run `ponder data fetch` first")
+def test_price_model_recovers_a_t1_premium():
+    import random
+
+    from ponder import pricing
+    from ponder.mods import ModDB
+
+    db = ModDB()
+    from ponder import gear
+
+    # Life tiers as they roll on Vaal Gauntlets, best first.
+    base = db.find_base("Vaal Gauntlets")
+    tags = db.item_tags(base, set())
+    life_ids = [m.id for m in gear.pool(db, base, tags, 86) if db.mods[m.id]["type"] == "IncreasedLife"]
+    lifes = [db.mods[i] for i in sorted(life_ids, key=lambda i: db.tier(i, tags))]
+    rng = random.Random(1)
+    listings = []
+    for i in range(60):
+        tier = rng.choice([0, 0, 1, 2, 3])
+        mod = lifes[tier]
+        low = mod["stats"][0]["min"]
+        price = 100 * (3.0 if tier == 0 else 1.5 if tier == 1 else 1.0) * rng.uniform(0.9, 1.1)
+        listings.append({
+            "item": {"baseType": "Vaal Gauntlets", "ilvl": 86, "explicitMods": [f"+{low} to maximum Life", "+40% to Fire Resistance"]},
+            "listing": {"price": {"amount": price, "currency": "chaos"}},
+        })  # fmt: skip
+    model = pricing.fit(db, "Gloves (Armour)", ("base_maximum_life", pricing.RES), listings, {"chaos": 1.0})
+    life = model.tiers[0]
+    assert life.t1 == pytest.approx(3.0, rel=0.15) and life.t2 == pytest.approx(1.5, rel=0.15)

@@ -104,6 +104,35 @@ red. It starts in the `ansi-dark` theme (your terminal's own colours); pick
 another with `ctrl+p` and it is remembered in `~/.config/ponder/tui.json`.
 It needs `textual`, which `uv sync` installs; elsewhere `pip install 'ponder[tui]'`.
 
+### Ladder data: what people actually wear
+
+```sh
+ponder ladder fetch                      # top characters of every popular skill and class (poe.ninja), cached
+ponder ladder archetypes --group Bow     # mod combinations many characters share = crafting candidates
+ponder ladder tiers --group "Gloves (ES)"   # how often each mod is worn, and how much its tier matters
+ponder ladder prices --group Bow --top 3    # fit what each tier is worth from trade listings
+```
+
+`fetch` reads poe.ninja's builds data: for every main skill with at least 40
+players the top 10 characters, and the top 20 of every ascendancy (about 3,000
+characters). Their items come with exact mod ids, so nothing is text-matched.
+Everything is cached under `.cache/ladder/<snapshot>`.
+
+- **archetypes**: per base group, the mod combinations shared by the most
+  characters. Mods count by main stat, so a hybrid "%phys / accuracy" merges
+  with plain "%phys" and "%ES / stun recovery" with "%ES" (flat and % ES stay
+  apart); resistances are one token. A combination mostly worn as part of a
+  bigger one (70% of its characters) is folded into it. Each row says which
+  bases it's worn on (for weapons the base matters a lot) and which skills.
+- **tiers**: per base group and mod, the share of ladder items at T1 (and T2
+  or better) and the *lift*: that share over the chance a roll lands there.
+  A big lift means players pay for the tier (T1 life, T1 ES); near 1× means
+  any tier will do.
+- **prices**: for the top archetypes, up to 50 trade listings each with every
+  core mod at T4 or better, then a least-squares fit of log price on which
+  core mods are T1 / T2, the number of resistances and open affixes. The
+  multipliers say what T1 is worth per mod, in this market.
+
 ### Single tools
 
 ```sh
@@ -261,7 +290,10 @@ src/ponder/
   cluster.py cluster jewel enchants, mod pools, costs
   gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods), base groups
   prices.py poe.ninja prices
-  trade.py  trade-site queries
+  trade.py  trade-site queries, listings, rate limits, cache
+  ladder.py poe.ninja ladder characters (protobuf search, NDIC dictionaries, item mod ids)
+  demand.py tier demand and archetypes from ladder items
+  pricing.py tier price multipliers fitted on trade listings
   cli.py    the `ponder` command
 builds/     lists of build links per league
 tests/      unit tests; the mod tests run once data is fetched

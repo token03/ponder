@@ -433,6 +433,7 @@ def archetype_table(found, db) -> Table:
     t.add_column("chars", justify="right")
     t.add_column("group")
     t.add_column("mods")
+    t.add_column("worn on", style="dim")
     t.add_column("top skills", style="dim")
     from .demand import RES, _template, stat_key
 
@@ -446,5 +447,34 @@ def archetype_table(found, db) -> Table:
             plain = [m for m in mods if "/" not in _template(db, m.mod_id)]  # name it by the plain mod when there is one
             names.append(_template(db, (plain or mods)[0].mod_id) if mods else key)
         skills = ", ".join(f"{s}" for s, _ in a.skills.most_common(3))
-        t.add_row(str(a.characters), Text(a.group, style="bold"), Text(" + ".join(names)), Text(skills))
+        total = sum(a.bases.values()) or 1
+        worn_on = ", ".join(f"{b} {n / total:.0%}" for b, n in a.bases.most_common(2))
+        t.add_row(str(a.characters), Text(a.group, style="bold"), Text(" + ".join(names)), Text(worn_on), Text(skills))
     return t
+
+
+def price_model(arch, model, db, url: str, links: bool = True) -> RenderableType:
+    """What each core mod's tier is worth for one archetype (`pricing.PriceModel`)."""
+    from .demand import _template, stat_key
+
+    head = Text.assemble((arch.group, "bold"), f"  {arch.characters} characters  ", link("search", url, links))
+    if model is None:
+        return Group(head, Text("  too few listings to fit", style="dim"))
+    t = Table(box=None, header_style="dim", pad_edge=False)
+    t.add_column("mod")
+    t.add_column("T1 ×", justify="right")
+    t.add_column("T2 ×", justify="right")
+    t.add_column("listings T1/T2", justify="right", style="dim")
+    for tp in model.tiers:
+        mod = next((m for ex in arch.examples for m in ex.mods if stat_key(m.mod_id) == tp.key), None)
+        name = _template(db, mod.mod_id) if mod else tp.key
+        t.add_row(Text(name), _mult(tp.t1), _mult(tp.t2), f"{tp.n_t1}/{tp.n_t2}")
+    extra = Text(f"  {model.listings} listings · base ~{money(model.base_price)} · per resistance ×{model.per_res:.2f}"
+                 f" · per open affix ×{model.per_open_affix:.2f} · fit r² {model.r2:.2f}", style="dim")  # fmt: skip
+    return Group(head, t, extra, Text(""))
+
+
+def _mult(x: float | None) -> Text:
+    if x is None:
+        return Text("-", style="dim")
+    return Text(f"{x:.2f}", style="bold green" if x >= 2 else "green" if x >= 1.3 else "dim")

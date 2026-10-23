@@ -159,6 +159,36 @@ def price(league: str, query: dict, rates: dict[str, float], listings: int = 10,
     return _priced(asks, found.get("total", len(ids)), rates)
 
 
+def listings(league: str, query: dict, count: int = 50, max_age: int = CACHE_TTL) -> list[dict]:
+    """Up to `count` raw listings ({"item": ..., "listing": ...}) for a search, cheapest first; cached.
+
+    One search plus one fetch per 10 listings.
+    """
+    global searches
+    key = hashlib.sha1(json.dumps(["listings", league, query, count], sort_keys=True).encode()).hexdigest()
+    path = CACHE / f"{key}.json"
+    if path.is_file():
+        saved = json.loads(path.read_text())
+        if time.time() - saved["time"] < max_age:
+            return saved["results"]
+    searches += 1
+    found = _call(f"{SITE}/api/trade/search/{urllib.parse.quote(league)}", query, "search")
+    ids = found.get("result", [])[:count]
+    results = []
+    for i in range(0, len(ids), 10):
+        fetched = _call(f"{SITE}/api/trade/fetch/{','.join(ids[i : i + 10])}?query={found['id']}", None, "fetch")
+        results += [r for r in fetched.get("result", []) if r]
+    CACHE.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"time": time.time(), "results": results}))
+    return results
+
+
+def chaos_price(listing: dict, rates: dict[str, float]) -> float | None:
+    p = (listing.get("listing") or {}).get("price") or {}
+    rate = rates.get(_currency_id(p.get("currency", "")))
+    return p["amount"] * rate if p.get("amount") and rate else None
+
+
 def _priced(asks, total: int, rates: dict[str, float]) -> tuple[float, int] | None:
     """Asks are cached in their own currency, so a divine-rate change reprices them."""
     chaos = [amount * rates[_currency_id(cur)] for amount, cur in asks if _currency_id(cur) in rates]

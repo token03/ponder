@@ -85,6 +85,11 @@ def parser() -> argparse.ArgumentParser:
     lad_arch.add_argument("--group", help="only base groups containing this text")
     lad_arch.add_argument("--min-characters", type=int, default=10)
     lad_arch.add_argument("--top", type=int, default=40)
+    lad_price = lad_sub.add_parser("prices", help="fit what each core mod's tier is worth from trade listings (POESESSID in .env)")
+    lad_price.add_argument("--group", help="only base groups containing this text")
+    lad_price.add_argument("--min-characters", type=int, default=10)
+    lad_price.add_argument("--top", type=int, default=5, help="archetypes to price (one search + 5 fetches each)")
+    lad_price.add_argument("--listings", type=int, default=50)
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -218,9 +223,33 @@ def _ladder(args) -> int:
     if args.ladder_command == "tiers":
         stats = [s for s in demand.family_stats(db, worn, args.min_characters) if not args.group or args.group.lower() in s.group.lower()]
         out(render.tier_table(stats))
+    elif args.ladder_command == "prices":
+        return _ladder_prices(args, db, worn)
     else:
         found = [a for a in demand.archetypes(worn, args.min_characters) if not args.group or args.group.lower() in a.group.lower()]
         out(render.archetype_table(found[: args.top], db))
+    return 0
+
+
+def _ladder_prices(args, db, worn) -> int:
+    from . import demand, pricing
+
+    found = [a for a in demand.archetypes(worn, args.min_characters) if not args.group or args.group.lower() in a.group.lower()]
+    table, _ = prices.load()
+    league = pipeline.current_league()
+    for a in [a for a in found if len(a.families) >= 2][: args.top]:
+        query = pricing.archetype_query(db, a.examples[0], a.families)
+        if not query:
+            continue
+        with console.status(f"trade: {a.group}") as status:
+            trade.on_wait = lambda secs: status.update(f"waiting {secs:.0f}s for the trade site's rate limit")
+            try:
+                listings = trade.listings(league, query, args.listings)
+            except Exception as e:  # 403 here, or rate limits; keep going with the next one
+                out(f"{a.group}: trade failed ({e})", style="red", markup=False)
+                continue
+        model = pricing.fit(db, a.group, a.families, listings, table)
+        out(render.price_model(a, model, db, trade.search_url(league, query), _links()))
     return 0
 
 

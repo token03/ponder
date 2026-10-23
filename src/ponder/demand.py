@@ -64,6 +64,7 @@ class Archetype:
     items: int
     skills: Counter = field(default_factory=Counter)
     examples: list[ItemMatch] = field(default_factory=list)
+    bases: Counter = field(default_factory=Counter)  # which bases characters wear it on
 
 
 def wear(db: ModDB, characters, skill_of=None) -> list[Worn]:
@@ -143,6 +144,7 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
     who: dict[tuple, set[str]] = defaultdict(set)
     items: Counter = Counter()
     skills: dict[tuple, Counter] = defaultdict(Counter)
+    bases: dict[tuple, Counter] = defaultdict(Counter)
     examples: dict[tuple, list] = defaultdict(list)
     for w in worn:
         fams = stat_keys(w.match)
@@ -152,6 +154,7 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
                 who[key].add(w.character)
                 items[key] += 1
                 skills[key][w.skill] += 1
+                bases[key][w.match.item.base] += 1
                 if len(examples[key]) < 5:
                     examples[key].append(w.match)
     keys = [k for k, v in who.items() if len(v) >= min_characters]
@@ -163,7 +166,7 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
         n = len(who[k])
         if any(len(o[1]) > len(k[1]) and set(k[1]) <= set(o[1]) and len(who[o]) >= implied * n for o in by_group[k[0]]):
             continue
-        out.append(Archetype(k[0], k[1], len(who[k]), items[k], skills[k], examples[k]))
+        out.append(Archetype(k[0], k[1], len(who[k]), items[k], skills[k], examples[k], bases[k]))
     return sorted(out, key=lambda a: (-a.characters, -len(a.families)))
 
 
