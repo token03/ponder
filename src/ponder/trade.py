@@ -39,7 +39,7 @@ def cluster_query(size: str, enchant_option: str | None, passives: int | None, n
     if passives:
         filters.append({"id": PASSIVES_STAT, "value": {"min": passives, "max": passives}, "disabled": False})
     query: dict = {
-        "status": {"option": "online"},
+        "status": {"option": "available"},
         "type": f"{size.title()} Cluster Jewel",
         "stats": [{"type": "and", "filters": filters}],
         "filters": {"type_filters": {"filters": {"rarity": {"option": "nonunique"}}}},
