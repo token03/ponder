@@ -106,6 +106,19 @@ def cost(
 
     `fractured` notables are already on the base and survive every reroll.
     """
+    p = problem(size, enchant, notables, need, item_level, fractured)
+    return p, solve(p, prices)
+
+
+def problem(
+    size: str,
+    enchant: str,
+    notables: list[str],
+    need: int | None = None,
+    item_level: int = 84,
+    fractured: list[str] = (),
+) -> Problem:
+    """The crafting problem `cost` solves, for solving elsewhere (e.g. in a process pool)."""
     mods = pool(size, find_enchant(size, enchant), item_level)
     wanted = resolve_notables(mods, notables)
     fixed = resolve_notables(mods, list(fractured))
@@ -113,7 +126,7 @@ def cost(
     if need > NOTABLE_CAP[size]:
         raise ValueError(f"a {size} cluster holds at most {NOTABLE_CAP[size]} notables")
     harvest, profiles = actions.harvest(mods)
-    problem = Problem(
+    return Problem(
         pool=mods,
         targets=[Target(m.label, m.side, frozenset({m.id}), frozenset(m.groups), True) for m in wanted],
         need=need,
@@ -123,4 +136,3 @@ def cost(
         fixed=fixed,
         profiles=profiles,
     )
-    return problem, solve(problem, prices)

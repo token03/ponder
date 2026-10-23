@@ -50,6 +50,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--min-builds", type=int, default=2)
     run.add_argument("--top", type=int, default=40, help="rows to show")
     run.add_argument("--detail", type=int, default=3, help="show the full recipe for this many top rows")
+    run.add_argument("--workers", type=int, help="processes solving in parallel (default: all CPUs)")
     run.add_argument("--json", action="store_true", help="print the report as JSON")
 
     tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
@@ -119,7 +120,9 @@ def _print_estimates(rows, title: str) -> None:
 
 def _run(args) -> int:
     if args.json:
-        report = pipeline.run(args.sources, settle=args.settle, max_targets=args.max_targets, min_builds=args.min_builds, trade_lookup=args.trade)
+        report = pipeline.run(
+            args.sources, settle=args.settle, max_targets=args.max_targets, min_builds=args.min_builds, trade_lookup=args.trade, workers=args.workers
+        )
         print(json.dumps(report.to_dict(), indent=1))
         return 0
     with console.status("starting") as status:
@@ -129,6 +132,7 @@ def _run(args) -> int:
             max_targets=args.max_targets,
             min_builds=args.min_builds,
             trade_lookup=args.trade,
+            workers=args.workers,
             progress=lambda msg: status.update(msg[:100]),
         )
     links = _links()
@@ -217,9 +221,9 @@ def _mine(args) -> int:
             est = None
             if " cluster: " in c.item_class:
                 size, tag = c.item_class.split(" cluster: ")
-                status.update(f"solving {c.item_class}")
-                est = pipeline.estimate_cluster(size, tag, list(c.families), table, league)
+                est = pipeline.estimate_cluster(size, tag, list(c.families), table, league, solve=False)
             shared.append(pipeline.Shared(c, est))
+        pipeline.solve_all([x.estimate for x in shared if x.estimate], table, progress=status.update)
     console.print(f"{len(matched)} rare items from {len(sources)} builds; costs use {source_note}", markup=False)
     console.print(render.shared_table(shared, _links()))
     return 0
@@ -229,7 +233,7 @@ def _craft(args) -> int:
     db = ModDB()
     table, source = prices.load()
     build = pob.load(args.source)
-    seen = set()
+    seen, estimates = set(), []
     for pob_item in build.items:
         item = parse_item(pob_item.text)
         if item.rarity != "RARE" or (args.slot and pob_item.slot != args.slot):
@@ -241,11 +245,13 @@ def _craft(args) -> int:
         if key in seen:
             continue
         seen.add(key)
-        with console.status(f"solving {item.base}"):
-            est = pipeline.estimate_gear(db, match, table, settle=args.settle, item_level=args.ilvl, max_targets=args.max_targets)
-        if not est.targets:
-            continue
-        est.slot = pob_item.slot or "unequipped"
+        est = pipeline.estimate_gear(db, match, table, settle=args.settle, item_level=args.ilvl, max_targets=args.max_targets, solve=False)
+        if est.targets:
+            est.slot = pob_item.slot or "unequipped"
+            estimates.append(est)
+    with console.status("solving") as status:
+        pipeline.solve_all(estimates, table, progress=status.update)
+    for est in estimates:
         _rule()
         console.print(render.estimate_detail(est, source, _links(), rows=6))
     return 0

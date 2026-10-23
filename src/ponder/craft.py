@@ -61,6 +61,14 @@ class State:
     status: tuple[int, ...]  # per target: MISSING, GOOD or BLOCKED
     junk: tuple[int, int, int, int] = (0, 0, 0, 0)  # prefix notable/other, suffix notable/other
 
+    def __hash__(self) -> int:  # states are hashed millions of times while solving
+        try:
+            return self._hash
+        except AttributeError:
+            h = hash((self.rarity, self.status, self.junk))
+            object.__setattr__(self, "_hash", h)
+            return h
+
 
 @dataclass(frozen=True)
 class Action:
@@ -324,45 +332,45 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     if problem.done(problem.start):
         return Plan(0.0, {}, {}, {}, 1, unpriced)
     states, edges = _explore(problem)
-    open_states = [s for s in states if not problem.done(s)]
-    index = {s: i for i, s in enumerate(open_states)}
-    policy = _proper_policy(problem, open_states, edges)
-    if any(s not in policy for s in open_states):
+    g = _Graph(problem, edges, costs)
+    policy = g.proper_policy()
+    if (policy < 0).any():
         raise ValueError("no sequence of the available currencies can reach this target")
 
     for _ in range(max_rounds):
-        value = _evaluate(open_states, index, edges, policy, costs)
-        memo: dict[int, float] = {}  # rerolls share one outcome list across states
-        changed = False
-        for s in open_states:
-            current = costs[policy[s]] + _expect(edges[s][policy[s]], value, index, memo)
-            for name, outcomes in edges[s].items():
-                q = costs[name] + _expect(outcomes, value, index, memo)
-                if q < current - 1e-9 * max(1.0, current):
-                    policy[s], current, changed = name, q, True
-        if not changed:
+        value = g.evaluate(policy)
+        better = g.improve(g.q(value), policy)
+        if (better == policy).all():
             break
+        policy = better
 
-    visits = _visits(open_states, index, edges, policy, problem.start)
+    visits = g.visits(policy, g.index[problem.start])
     usage = {a.name: 0.0 for a in problem.actions}
-    for s, n in visits.items():
-        usage[policy[s]] += n
-    return Plan(float(value[index[problem.start]]), policy, usage, visits, len(states), unpriced)
+    for i, n in enumerate(visits):
+        usage[g.action[policy[i]]] += float(n)
+    return Plan(
+        float(value[g.index[problem.start]]),
+        {s: g.action[policy[i]] for i, s in enumerate(g.states)},
+        usage,
+        {s: float(visits[i]) for i, s in enumerate(g.states)},
+        len(states),
+        unpriced,
+    )
 
 
-def _expect(outcomes, value, index, memo: dict | None = None) -> float:
-    if memo is not None and id(outcomes) in memo:
-        return memo[id(outcomes)]
-    v = sum(p * value[index[n]] for p, n in outcomes if n in index)
-    if memo is not None:
-        memo[id(outcomes)] = v
-    return v
+def evaluate(problem: Problem, policy: dict[State, str], prices: dict[str, float]) -> float:
+    """Exact expected cost of following `policy` (state -> action name) from the start."""
+    costs = {a.name: action_cost(a, prices) for a in problem.actions}
+    g = _Graph(problem, _explore(problem)[1], costs)
+    chosen = np.array([g.pair_of(i, policy[s]) for i, s in enumerate(g.states)])
+    return float(g.evaluate(chosen)[g.index[problem.start]])
 
 
 def _explore(problem: Problem):
     """Every state reachable from the normal base, with each action's outcomes."""
     frontier, seen = [problem.start], {problem.start}
     edges: dict[State, dict[str, list]] = {}
+    checked: set[int] = set()  # rerolls share one outcome list across many states
     while frontier:
         s = frontier.pop()
         if problem.done(s):
@@ -372,6 +380,9 @@ def _explore(problem: Problem):
             out = problem.outcomes(s, a)
             if out:
                 edges[s][a.name] = out
+                if id(out) in checked:
+                    continue
+                checked.add(id(out))
                 for _, n in out:
                     if n not in seen:
                         seen.add(n)
@@ -379,52 +390,107 @@ def _explore(problem: Problem):
     return list(seen), edges
 
 
-def _proper_policy(problem, open_states, edges) -> dict[State, str]:
-    """A starting policy that surely finishes: always step toward fewer moves-to-done.
+class _Graph:
+    """The explored states as flat arrays, so policy iteration is a few numpy calls.
 
-    Policy iteration needs one; "always reroll" isn't enough when no single
-    reroll can hit every target (e.g. three notables need alt, regal, exalt).
+    Open (unfinished) states are numbered 0..n-1. Every (state, action) pair is
+    a row; pairs of one state are contiguous, in action order. Each pair's
+    outcomes are entries (pair, next state, probability), with next = -1 for a
+    finished item, whose remaining cost is 0.
     """
-    dist: dict[State, int] = {}
-    policy: dict[State, str] = {}
-    changed = True
-    while changed:
-        changed = False
-        memo: dict[int, int | None] = {}
-        for s in open_states:
+
+    def __init__(self, problem: Problem, edges: dict[State, dict[str, list]], costs: dict[str, float]):
+        self.states = [s for s in edges]  # edges holds exactly the open states
+        self.index = {s: i for i, s in enumerate(self.states)}
+        self.n = len(self.states)
+        pair_state, self.action, pair_cost = [], [], []
+        nexts, probs = [], []
+        converted: dict[int, tuple[np.ndarray, np.ndarray]] = {}  # shared reroll lists convert once
+        state_ptr = [0]
+        for i, s in enumerate(self.states):
             for name, outcomes in edges[s].items():
                 key = id(outcomes)
-                if key not in memo:
-                    ds = [0 if problem.done(n) else dist.get(n) for p, n in outcomes if p > 0]
-                    ds = [d for d in ds if d is not None]
-                    memo[key] = min(ds) if ds else None
-                best = memo[key]
-                if best is not None and (s not in dist or best + 1 < dist[s]):
-                    dist[s], policy[s], changed = best + 1, name, True
-    return policy
+                if key not in converted:
+                    converted[key] = (
+                        np.array([self.index.get(n, -1) for _, n in outcomes], dtype=np.int64),
+                        np.array([p for p, _ in outcomes], dtype=float),
+                    )
+                nxt, prob = converted[key]
+                pair_state.append(i)
+                self.action.append(name)
+                pair_cost.append(costs[name])
+                nexts.append(nxt)
+                probs.append(prob)
+            state_ptr.append(len(pair_state))
+        self.pair_state = np.array(pair_state, dtype=np.int64)
+        self.pair_cost = np.array(pair_cost, dtype=float)
+        self.state_ptr = np.array(state_ptr, dtype=np.int64)
+        self.e_pair = np.repeat(np.arange(len(pair_state)), [len(x) for x in nexts])
+        self.e_next = np.concatenate(nexts)
+        self.e_prob = np.concatenate(probs)
+        self.e_open = self.e_next >= 0
 
+    def pair_of(self, i: int, name: str) -> int:
+        lo, hi = self.state_ptr[i], self.state_ptr[i + 1]
+        return lo + self.action[lo:hi].index(name)
 
-def _transitions(open_states, index, edges, policy) -> np.ndarray:
-    P = np.zeros((len(open_states), len(open_states)))
-    for s in open_states:
-        for p, n in edges[s][policy[s]]:
-            if n in index:
-                P[index[s], index[n]] += p
-    return P
+    def q(self, value: np.ndarray) -> np.ndarray:
+        """Expected cost to finish after taking each pair's action."""
+        ext = np.append(value, 0.0)  # index -1: finished
+        return self.pair_cost + np.bincount(self.e_pair, self.e_prob * ext[self.e_next], minlength=len(self.pair_cost))
 
+    def improve(self, q: np.ndarray, policy: np.ndarray) -> np.ndarray:
+        """Each state's cheapest pair (first in action order on ties), kept unless clearly better."""
+        best = np.minimum.reduceat(q, self.state_ptr[:-1])
+        is_best = np.flatnonzero(q <= best[self.pair_state])
+        _, first = np.unique(self.pair_state[is_best], return_index=True)
+        candidate = is_best[first]
+        current = q[policy]
+        switch = best < current - 1e-9 * np.maximum(1.0, current)
+        return np.where(switch, candidate, policy)
 
-def _evaluate(open_states, index, edges, policy, costs) -> np.ndarray:
-    P = _transitions(open_states, index, edges, policy)
-    c = np.array([costs[policy[s]] for s in open_states])
-    return np.linalg.solve(np.eye(len(open_states)) - P, c)
+    def proper_policy(self) -> np.ndarray:
+        """A starting policy that surely finishes: always step toward fewer moves-to-done.
 
+        Policy iteration needs one; "always reroll" isn't enough when no single
+        reroll can hit every target (e.g. three notables need alt, regal, exalt).
+        Returns -1 for states that can't finish.
+        """
+        dist = np.full(self.n, np.inf)
+        policy = np.full(self.n, -1, dtype=np.int64)
+        n_pairs = len(self.pair_cost)
+        live = self.e_prob > 0
+        while True:
+            d = np.where(self.e_open, dist[self.e_next], 0.0)
+            d[~live] = np.inf
+            pair_best = np.full(n_pairs, np.inf)
+            np.minimum.at(pair_best, self.e_pair, d)
+            step = pair_best + 1
+            best = np.minimum.reduceat(step, self.state_ptr[:-1])
+            improved = best < dist
+            if not improved.any():
+                return policy
+            is_best = np.flatnonzero(step <= best[self.pair_state])
+            _, first = np.unique(self.pair_state[is_best], return_index=True)
+            policy = np.where(improved, is_best[first], policy)
+            dist = np.where(improved, best, dist)
 
-def _visits(open_states, index, edges, policy, start) -> dict[State, float]:
-    P = _transitions(open_states, index, edges, policy)
-    s0 = np.zeros(len(open_states))
-    s0[index[start]] = 1.0
-    n = np.linalg.solve((np.eye(len(open_states)) - P).T, s0)
-    return {s: float(n[index[s]]) for s in open_states}
+    def _matrix(self, policy: np.ndarray) -> np.ndarray:
+        chosen = np.zeros(len(self.pair_cost), dtype=bool)
+        chosen[policy] = True
+        m = chosen[self.e_pair] & self.e_open
+        P = np.zeros((self.n, self.n))
+        np.add.at(P, (self.pair_state[self.e_pair[m]], self.e_next[m]), self.e_prob[m])
+        return np.eye(self.n) - P
+
+    def evaluate(self, policy: np.ndarray) -> np.ndarray:
+        return np.linalg.solve(self._matrix(policy), self.pair_cost[policy])
+
+    def visits(self, policy: np.ndarray, start: int) -> np.ndarray:
+        """Expected times each state is acted on, starting from state `start`."""
+        s0 = np.zeros(self.n)
+        s0[start] = 1.0
+        return np.linalg.solve(self._matrix(policy).T, s0)
 
 
 def describe(problem: Problem, s: State) -> str:

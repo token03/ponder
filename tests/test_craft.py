@@ -152,10 +152,7 @@ def test_metamod_keeps_one_side_and_matches_simulation():
     for s in plan.policy:
         if lock.name in edges[s] and s.status[1] == MISSING and s.junk[3]:
             plan.policy[s] = lock.name
-    open_states = list(plan.policy)
-    index = {s: i for i, s in enumerate(open_states)}
-    costs = {a.name: craft.action_cost(a, prices) for a in problem.actions}
-    exact = craft._evaluate(open_states, index, edges, plan.policy, costs)[index[problem.start]]
+    exact = craft.evaluate(problem, plan.policy, prices)
     assert exact > plan.cost  # the solver was right to skip it here
     assert craft.simulate(problem, plan, prices, runs=4000, seed=4) == pytest.approx(exact, rel=0.08)
 

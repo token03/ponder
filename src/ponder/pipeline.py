@@ -9,11 +9,17 @@ TUI render the `Report`, and `Report.to_dict()` gives plain JSON.
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import numpy as np
 
 from . import cluster, craft, gear, pob, prices, trade
 from .item import parse_item
@@ -153,8 +159,10 @@ def run(
     min_builds: int = 2,
     top: int = 30,
     trade_lookup: bool = False,
+    workers: int | None = None,
     progress: Progress | None = None,
 ) -> Report:
+    """`workers` processes solve in parallel (default: every CPU; 1 solves inline)."""
     say = progress or (lambda _msg: None)
     table, prices_source = prices.load()
     league = current_league()
@@ -181,8 +189,7 @@ def run(
             if key is None:
                 continue
             if key not in by_key:
-                say(f"solving {item.base}")
-                by_key[key] = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets)
+                by_key[key] = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets, solve=False)
                 by_key[key].key = key
                 by_key[key].slot = pob_item.slot
             if source not in by_key[key].builds:
@@ -198,8 +205,9 @@ def run(
             if " cluster: " in c.item_class:
                 size, tag = c.item_class.split(" cluster: ")
                 est = next((e for e in estimates if e.key[:3] == ("cluster", size, tag) and set(c.families) == set(e.targets)), None)
-                est = est or estimate_cluster(size, tag, list(c.families), table, league)
+                est = est or estimate_cluster(size, tag, list(c.families), table, league, solve=False)
             shared.append(Shared(c, est))
+    solve_all(estimates + [s.estimate for s in shared if s.estimate and s.estimate not in estimates], table, workers, say)
 
     if trade_lookup:
         for e in [e for e in estimates if e.query]:
@@ -224,14 +232,14 @@ def item_key(match: ItemMatch, settle: int = 0) -> tuple | None:
     return ("gear", item.base, families, settle, tuple(sorted(m.mod_id for m in match.mods if m.source != "natural")))
 
 
-def estimate_item(db: ModDB, match: ItemMatch, table: dict[str, float], league: str, settle: int = 0, max_targets: int = 4) -> Estimate:
+def estimate_item(db: ModDB, match: ItemMatch, table: dict[str, float], league: str, settle: int = 0, max_targets: int = 4, solve: bool = True) -> Estimate:
     item = match.item
     if item.base.endswith("Cluster Jewel"):
         cls, notables = target_key(match)
         size, tag = cls.split(" cluster: ")
         count = item.header.get("Cluster Jewel Node Count")
-        return estimate_cluster(size, tag, notables, table, league, passives=int(count) if count else None)
-    return estimate_gear(db, match, table, settle=settle, max_targets=max_targets)
+        return estimate_cluster(size, tag, notables, table, league, passives=int(count) if count else None, solve=solve)
+    return estimate_gear(db, match, table, settle=settle, max_targets=max_targets, solve=solve)
 
 
 def estimate_cluster(
@@ -245,7 +253,9 @@ def estimate_cluster(
     item_level: int = 84,
     need: int | None = None,
     fractured: list[str] = (),
+    solve: bool = True,
 ) -> Estimate:
+    """With `solve=False` the problem is built but left for `solve_all`."""
     passives = passives or cluster.DEFAULT_PASSIVES[size]
     try:
         ench = cluster.find_enchant(size, enchant)
@@ -260,7 +270,7 @@ def estimate_cluster(
         fixed=list(fractured),
     )
     try:
-        est.problem, est.plan = cluster.cost(size, ench.tag, list(notables), table, need, item_level, fractured)
+        est.problem = cluster.problem(size, ench.tag, list(notables), need, item_level, fractured)
     except ValueError as e:
         est.error = str(e)
         return est
@@ -271,10 +281,14 @@ def estimate_cluster(
     wanted = [m.id for m in cluster.resolve_notables(est.problem.pool, list(notables))]
     est.query = trade.cluster_query(size, prices.enchant_option(ench.short), passives, wanted, item_level)
     est.trade_url = trade.search_url(league, est.query)
+    if solve:
+        solve_one(est, table)
     return est
 
 
-def estimate_gear(db: ModDB, match: ItemMatch, table: dict[str, float], *, settle: int = 0, item_level: int | None = None, max_targets: int = 4) -> Estimate:
+def estimate_gear(
+    db: ModDB, match: ItemMatch, table: dict[str, float], *, settle: int = 0, item_level: int | None = None, max_targets: int = 4, solve: bool = True
+) -> Estimate:
     gp = gear.build(db, match, settle, item_level)
     est = Estimate(
         "gear",
@@ -289,11 +303,68 @@ def estimate_gear(db: ModDB, match: ItemMatch, table: dict[str, float], *, settl
     if len(gp.problem.targets) > max_targets:
         est.error = f"{len(gp.problem.targets)} target mods (raise max_targets, or settle to loosen)"
         return est
-    try:
-        est.plan = craft.solve(gp.problem, table)
-    except ValueError as e:
-        est.error = str(e)
+    if solve:
+        solve_one(est, table)
     return est
+
+
+def solve_one(est: Estimate, table: dict[str, float]) -> None:
+    try:
+        _attach(est, craft.solve(est.problem, table))
+    except (ValueError, ArithmeticError, np.linalg.LinAlgError) as e:
+        est.error = str(e)
+
+
+def solve_all(estimates: list[Estimate], table: dict[str, float], workers: int | None = None, progress: Progress | None = None) -> None:
+    """Solve every estimate that has a problem but no plan yet, in parallel processes.
+
+    Each solve is independent CPU work in Python and numpy, so processes (not
+    threads) scale with cores. Biggest problems go first so no core idles at the end.
+    """
+    say = progress or (lambda _msg: None)
+    todo = [e for e in estimates if e.problem is not None and e.plan is None and e.error is None]
+    todo.sort(key=lambda e: -len(e.problem.targets))
+    workers = workers or os.cpu_count() or 1
+    if workers == 1 or len(todo) < 4:
+        for i, e in enumerate(todo, 1):
+            say(f"solving {i}/{len(todo)}: {e.title}")
+            solve_one(e, table)
+        return
+    with _one_blas_thread(), ProcessPoolExecutor(min(workers, len(todo)), mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = {pool.submit(craft.solve, e.problem, table): e for e in todo}
+        for i, done in enumerate(as_completed(futures), 1):
+            e = futures[done]
+            say(f"solved {i}/{len(todo)}: {e.title}")
+            try:
+                _attach(e, done.result())
+            except (ValueError, ArithmeticError, np.linalg.LinAlgError) as err:
+                e.error = str(err)
+
+
+@contextmanager
+def _one_blas_thread() -> Iterator[None]:
+    """Workers each get one BLAS thread: N processes x N BLAS threads ran 7x slower than one process.
+
+    Spawned workers import numpy fresh, so they read these variables; forked
+    ones would inherit the parent's thread pool instead.
+    """
+    names = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+    saved = {n: os.environ.get(n) for n in names}
+    os.environ.update({n: "1" for n in names})
+    try:
+        yield
+    finally:
+        for n, v in saved.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v
+
+
+def _attach(est: Estimate, plan: craft.Plan) -> None:
+    # A worker solved a copy; drop the same unpriced actions here so recipe and simulate agree.
+    est.problem.actions = [a for a in est.problem.actions if a.name not in plan.unpriced]
+    est.plan = plan
 
 
 def lookup_market(est: Estimate, table: dict[str, float], league: str) -> None:
