@@ -69,6 +69,9 @@ class ItemMatch:
     mods: list[ModMatch] = field(default_factory=list)
     unmatched: list[ModLine] = field(default_factory=list)  # look like mods, but no mod fits
     notes: list[ModLine] = field(default_factory=list)  # text no mod has, e.g. author notes
+    # What else a finished item needs (ladder archetypes): {"families": {family: worst tier},
+    # "sides": (prefix, suffix) filler count, "order": families commonest first}; see gear.build.
+    finish: dict | None = None
 
     @property
     def prefixes(self) -> list[ModMatch]:

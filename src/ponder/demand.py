@@ -68,6 +68,10 @@ class Archetype:
     bases: Counter = field(default_factory=Counter)  # which bases characters wear it on
     tiers: dict[str, Counter] = field(default_factory=dict)  # main stat -> tiers worn
     resistances: Counter = field(default_factory=Counter)  # resistance mods per item
+    others: Counter = field(default_factory=Counter)  # other main stats on the same items: what finishes them
+    fillers: Counter = field(default_factory=Counter)  # (family, side) of the other useful mods on its items
+    filler_tiers: dict[str, Counter] = field(default_factory=dict)  # family -> tiers worn
+    filled: dict[str, Counter] = field(default_factory=lambda: {"prefix": Counter(), "suffix": Counter()})  # side -> useful mods per item
     lift: float = 0.0  # items wearing all of it / items expected if its mods were worn independently
 
     @property
@@ -168,11 +172,14 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
     combos_of = []
     group_items: Counter = Counter()
     key_items: Counter = Counter()
+    family_items: Counter = Counter()
     for w in worn:  # pass 1: who wears what (cheap), so pass 2 only details the survivors
         fams = stat_keys(w.match)
         group_items[w.group] += 1
         for k in fams:
             key_items[(w.group, k)] += 1
+        for f in {m.family for m in _worn_mods(w.match)}:
+            family_items[(w.group, f)] += 1
         mine = [(w.group, c) for size in range(min_size, min(max_size, len(fams)) + 1) for c in combinations(fams, size)]
         combos_of.append(mine)
         for key in mine:
@@ -192,6 +199,9 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
         if not hits:
             continue
         best, n_res = best_tiers(w.match)
+        keys = set(stat_keys(w.match)) - {RES}
+        # Mods often worn on this kind of item count as useful: what fills a finished item's slots.
+        useful = [m for m in _worn_mods(w.match) if family_items[(w.group, m.family)] >= USEFUL_SHARE * group_items[w.group]]
         for a in hits:
             a.items += 1
             a.skills[w.skill] += 1
@@ -199,9 +209,19 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
             for k in a.families:
                 if k in best:
                     a.tiers.setdefault(k, Counter())[best[k]] += 1
-            if RES in a.families:
-                a.resistances[n_res] += 1
-            if len(a.examples) < 5:
+            a.resistances[n_res] += 1
+            a.others.update(keys - set(a.families))
+            for k in keys - set(a.families):
+                if k in best:
+                    a.tiers.setdefault(k, Counter())[best[k]] += 1
+            for side in ("prefix", "suffix"):
+                a.filled[side][sum(m.kind == side for m in useful)] += 1
+            for m in useful:
+                if stat_key(m.mod_id) not in a.families:
+                    a.fillers[(m.family, m.kind)] += 1
+                    if m.tier:
+                        a.filler_tiers.setdefault(m.family, Counter())[m.tier] += 1
+            if len(a.examples) < 20:
                 a.examples.append(w.match)
     for a in found.values():
         n = group_items[a.group]
@@ -210,6 +230,13 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
             independent *= key_items[(a.group, k)] / n
         a.lift = a.items / independent if independent else 0.0
     return sorted(found.values(), key=lambda a: (-a.characters, -len(a.families)))
+
+
+USEFUL_SHARE = 0.05  # a mod family worn on this share of a base group's items is useful there, not junk
+
+
+def _worn_mods(match: ItemMatch):
+    return [m for m in match.mods if m.source in ("natural", "essence")]
 
 
 _stat_key: dict[str, str] = {}
@@ -449,34 +476,69 @@ def _usual(tiers: Counter, share: float = 0.5) -> int:
     return max(tiers)
 
 
+COMPLETE_SHARE = 0.5  # a mod most of an archetype's wearers also have is part of the finished item
+FILLER_SHARE = 0.1  # other mods on this share of its items are acceptable filler for the open slots
+MAX_KEYS = 4  # wanted mods per item, filler aside
+
+
+def finished_keys(a: Archetype) -> list[str]:
+    """The archetype's mods plus those at least `COMPLETE_SHARE` of its items also carry, commonest first.
+
+    Archetypes are the combinations many characters share, so they are often
+    two mods of a five- or six-mod item; the buyer wants the rest too.
+    """
+    keys = [k for k in a.families if k != RES]
+    for k, n in a.others.most_common():
+        if len(keys) >= MAX_KEYS or n < COMPLETE_SHARE * a.items:
+            break
+        keys.append(k)
+    return keys
+
+
 def archetype_match(db: ModDB, a: Archetype) -> ItemMatch | None:
-    """An item carrying exactly the archetype's mods, each at the tier most of its wearers reach,
-    with the usual number of resistances; what `pipeline.estimate_gear` costs."""
+    """The finished item an archetype's wearers have, as `pipeline.estimate_gear` costs it.
+
+    Its wanted mods are the archetype's plus those most of its wearers also
+    have (`finished_keys`), each at the tier most of them reach. The open
+    slots are filler: on each side, as many as its wearers' items usually
+    have useful mods there, from any mod at least `FILLER_SHARE` of them wear
+    (resistances always count), at their usual tier. That goes in
+    `ItemMatch.finish` for `gear.build`.
+    """
     import dataclasses
     import statistics
 
     ex = a.examples[0]
     pool = {(db.mods[m.id]["type"], db.tier(m.id, ex.tags)): m.id for m in gear.pool(db, ex.base_id, ex.tags, NATURAL_LEVEL)}
     mods = []
-    for key in a.families:
-        if key == RES:
-            continue
+    for key in finished_keys(a):
         found = [m for e in a.examples for m in e.mods if m.source not in ("crafted", "legacy-crafted") and m.tier and stat_key(m.mod_id) == key]
         if not found:
-            return None
+            if key in a.families:
+                return None
+            continue  # an extra mod the examples happen not to show
         m = min(found, key=lambda m: ("/" in _template(db, m.mod_id), m.tier))  # the plain mod when there is one
+        if key not in a.families and sum(x.kind == m.kind for x in mods) >= 3:
+            continue
         tier = a.usual_tier(key) or m.tier
         mod_id = pool.get((m.family, tier), m.mod_id)
         mods.append(dataclasses.replace(m, mod_id=mod_id, tier=tier, lines=[ModLine(t) for t in db.mods[mod_id].get("text", "").splitlines()] or m.lines))
-    if RES in a.families:
-        want = max(1, round(statistics.median(a.resistances.elements()))) if a.resistances else 1
-        seen = set()
-        for e in a.examples:
-            for m in e.mods:
-                if m.family in gear.FILLER_FAMILIES and m.family not in seen and len(seen) < want and m.source == "natural":
-                    seen.add(m.family)
-                    mods.append(dataclasses.replace(m, tier=max(m.tier or 1, gear.FILLER_TIER)))
     sides = Counter(m.kind for m in mods)
     if sides["prefix"] > 3 or sides["suffix"] > 3:
         return None
-    return dataclasses.replace(ex, mods=mods, unmatched=[], notes=[])
+    taken = {m.family for m in mods}
+    families: dict[str, int] = {f: gear.FILLER_TIER for f in gear.FILLER_FAMILIES}
+    order = []
+    for (family, _side), n in a.fillers.most_common():
+        if n < FILLER_SHARE * a.items or family in taken:
+            continue
+        if family not in families:
+            families[family] = _usual(a.filler_tiers.get(family, Counter()) or Counter({gear.FILLER_TIER: 1}), 0.8)  # filler: lenient
+        if family not in order:
+            order.append(family)
+    need = {}
+    for side in ("prefix", "suffix"):
+        usual = round(statistics.median(a.filled[side].elements())) if a.filled[side] else 0
+        need[side] = max(0, min(usual, 3) - sides[side])
+    finish = {"families": families, "sides": (need["prefix"], need["suffix"]), "order": order}
+    return dataclasses.replace(ex, mods=mods, unmatched=[], notes=[], finish=finish)

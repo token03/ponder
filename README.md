@@ -143,8 +143,17 @@ Everything is cached under `.cache/ladder/<snapshot>`.
   multipliers say what T1 is worth per mod, in this market.
 
 - **crafts**: turns the ladder into crafting candidates and costs them.
-  Gear archetypes become items with each mod at the tier most of its wearers
-  reach and their usual number of resistances (filler). Picked: the most worn
+  Gear archetypes become **finished** items, the way their wearers' items
+  are: the archetype's mods plus any other mod at least half of its items
+  carry (`demand.COMPLETE_SHARE`), each at the tier most wearers reach; then
+  each side is filled to the number of useful mods its wearers usually have
+  there, from *filler*: any mod at least 10% of them wear on that item
+  (`demand.FILLER_SHARE`; resistances always count) at the tier 80% of them
+  have or beat. "Useful" means a mod family worn on 5%+ of that base group's
+  items. One open slot is finished at the bench when it offers a filler mod
+  for that side (suffix first: a crafted resistance). So "life + block" on a
+  Shaper armour shield costs as life, block and recover-life-on-block (most
+  wear it) plus filled sides, not as a two-mod item. Picked: the most worn
   overall (`--gear`), the top few of every base group (`--per-group`, so
   quivers, claws and shields aren't crowded out by rings) and the most
   *niche* 3+ mod combos (`--niche`): mods worn together far more often than
@@ -337,7 +346,7 @@ Kept as constants so they're easy to correct:
 - clicking time is charged at `PONDER_CHAOS_PER_HOUR` (default 1500, set it in
   the environment or `.env`; 0 turns it off): about 1 s per alteration or
   augment, 2 s per regal, exalt, annul, chaos or essence (+1 s with a scour),
-  2 s + 2 s per fossil for a resonator, 8 s per Harvest reforge, 5 s more for
+  2 s + 2 s per fossil for a resonator, 2 s per Harvest reforge (one click), 5 s more for
   a bench metamod, 15 s per recombination (`craft.SECONDS` and friends). The
   solver minimises currency plus time, so it stops planning ten thousand
   alterations for a long shot; plans show the hours and what they were charged

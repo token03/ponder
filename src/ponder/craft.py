@@ -107,6 +107,7 @@ class Problem:
     reserve: dict[str, int] = field(default_factory=dict)  # side -> slots left open for bench crafts at the end
     filler: frozenset[str] = frozenset()  # mods that count as filler (e.g. any resistance at T3+)
     filler_need: int = 0  # how many filler mods the finished item needs, on top of the targets
+    filler_sides: tuple[int, int] | None = None  # (prefix, suffix) filler each side needs; None: any mix of filler_need
     junk_cap: tuple[int, int] | None = None  # most other mods allowed (prefix, suffix): recombinator donors want clean items
 
     @cached_property
@@ -189,6 +190,8 @@ class Problem:
 
     def done(self, s: State) -> bool:
         if sum(v == GOOD for v in s.status) < self.need or s.junk[4] + s.junk[5] < self.filler_need:
+            return False
+        if self.filler_sides and (s.junk[4] < self.filler_sides[0] or s.junk[5] < self.filler_sides[1]):
             return False
         if self.junk_cap and (s.junk[0] + s.junk[1] > self.junk_cap[0] or s.junk[2] + s.junk[3] > self.junk_cap[1]):
             return False
@@ -411,7 +414,7 @@ CHAOS_PER_HOUR = float(data.env("PONDER_CHAOS_PER_HOUR") or 1500)
 
 # Seconds per use, including reading the result.
 SECONDS = {"transmute": 1.0, "alt": 1.0, "aug": 1.0, "regal": 2.0, "exalt": 2.0, "annul": 2.0, "reroll_magic": 3.0}
-HARVEST_SECONDS = 8.0
+HARVEST_SECONDS = 2.0  # one click, like a chaos orb
 FOSSIL_SECONDS = 2.0  # socketing each fossil into the resonator
 LOCK_SECONDS = 5.0  # a bench metamod, on top of the reroll after it
 

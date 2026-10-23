@@ -609,6 +609,7 @@ def estimate_gear(
             gp.item_level,
             p.filler_need,
             p.filler,
+            p.filler_sides,
         ),
         base=grp.best,
         used_base=match.item.base if match.item.base != grp.best else "",

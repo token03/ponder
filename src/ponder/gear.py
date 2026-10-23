@@ -188,7 +188,20 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         rows.append(Row("bench", "suffix", "Can have up to 3 Crafted Modifiers", "bench"))
         reserve["suffix"] = reserve.get("suffix", 0) + 1
     filler, worst = frozenset(), 0
-    if filler_mods:
+    filler_sides = None
+    families = sorted({m.family for m, _ in filler_mods})
+    if match.finish and not exact:
+        filler, filler_sides, families = _finish(db, match, mods, rows)
+        if not bench and (craft := _bench_filler(db, item_class, match.finish["families"], filler_sides)):
+            side, mod_id, text, cost = craft
+            bench.append((text, cost))
+            bench_ids.append(mod_id)
+            reserve[side] = reserve.get(side, 0) + 1
+            filler_sides = (filler_sides[0] - (side == "prefix"), filler_sides[1] - (side == "suffix"))
+            i = next(i for i, r in enumerate(rows) if r.role == "filler" and r.side == side)
+            rows[i] = Row("bench", side, text, "bench")
+        filler_mods = [None] * sum(filler_sides)
+    elif filler_mods:
         worst = max(FILLER_TIER, max(m.tier for m, _ in filler_mods) + settle)
         filler = frozenset(x.id for x in mods if db.mods[x.id]["type"] in FILLER_FAMILIES and (db.tier(x.id, match.tags) or 99) <= worst)
         for m, text in filler_mods:
@@ -211,9 +224,52 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         reserve=reserve,
         filler=filler,
         filler_need=len(filler_mods),
+        filler_sides=filler_sides,
     )
-    families = sorted({m.family for m, _ in filler_mods})
     return GearProblem(problem, ilvl, skipped, bench, rows, bench_ids, families)
+
+
+def _finish(db: ModDB, match: ItemMatch, mods: list[Mod], rows: list[Row]) -> tuple[frozenset[str], tuple[int, int], list[str]]:
+    """Filler from `match.finish`: any of its families at its tier or better, so many per side."""
+    spec = match.finish
+    families = spec["families"]
+    filler = frozenset(x.id for x in mods if (f := db.mods[x.id]["type"]) in families and (db.tier(x.id, match.tags) or 99) <= families[f])
+    need = spec["sides"]
+    for side, n in zip(("prefix", "suffix"), need):
+        on_side = [f for f in [*spec["order"], *sorted(FILLER_FAMILIES)] if any(x.side == side and db.mods[x.id]["type"] == f for x in mods if x.id in filler)]
+        if not on_side:
+            continue
+        names = list(dict.fromkeys(_family_name(db, f, mods) for f in on_side))
+        shown = ", ".join(names[:4]) + (f" +{len(names) - 4} more" if len(names) > 4 else "")
+        for _ in range(n):
+            rows.append(Row("filler", side, f"any of: {shown}", "filler"))
+    sides = tuple(n if any(x.side == side for x in mods if x.id in filler) else 0 for side, n in zip(("prefix", "suffix"), need))
+    return filler, sides, list(spec["order"][:2])
+
+
+def _bench_filler(db: ModDB, item_class: str, families: dict[str, int], need: tuple[int, int]):
+    """The bench craft that fills one open filler slot, suffix side first: (side, mod id, text, cost)."""
+    for side, n in zip(("suffix", "prefix"), (need[1], need[0])):
+        if n <= 0:
+            continue
+        best = None
+        for option in data.load("crafting_bench_options"):
+            mod_id = (option.get("actions") or {}).get("add_explicit_mod")
+            mod = db.mods.get(mod_id or "")
+            if not mod or mod["type"] not in families or mod["generation_type"] != side or item_class not in option["item_classes"]:
+                continue
+            if best is None or mod["required_level"] > db.mods[best]["required_level"]:
+                best = mod_id
+        if best and (cost := actions.bench_cost(item_class, best)):
+            return side, best, db.mods[best]["text"].splitlines()[0], cost
+    return None
+
+
+def _family_name(db: ModDB, family: str, mods: list[Mod]) -> str:
+    if family in FILLER_FAMILIES:
+        return "res"
+    m = next(x for x in mods if db.mods[x.id]["type"] == family)
+    return _short(re.sub(r"\(?-?\d+(\.\d+)?(-\d+(\.\d+)?)?\)?", "#", m.label), 28)
 
 
 def problem_on(

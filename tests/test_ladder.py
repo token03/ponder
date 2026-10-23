@@ -166,3 +166,27 @@ def test_passive_point_clusters_become_tiered_crafts():
     assert len(cluster.resolve(p.pool, ["HaveIncreasedEffect@2"])[0].good) == 2  # T2+: 25% or 35%
     fixed = cluster.resolve_fixed(p.pool, ["HaveIncreasedEffect@1"])
     assert fixed[0].label.endswith("35% increased Effect")
+
+
+@pytest.mark.skipif(not data.available(), reason="run `ponder data fetch` first")
+def test_archetypes_become_finished_items():
+    """Belts worn as life + armour + 3 suffixes cost as that, not as the mods everyone shares."""
+    from ponder import gear
+    from ponder.mods import ModDB
+
+    db = ModDB()
+    suffixes = [["ChaosResist6", "FireResist5", "Strength5"], ["ColdResist5", "FireResist5", "LightningResist5"], ["Strength5", "ColdResist5", "ChaosResist6"]]
+    worn = []
+    for i in range(12):
+        ids = ["IncreasedLife6", "IncreasedPhysicalDamageReductionRating5", *suffixes[i % 3]]
+        m = db.match_ids("Heavy Belt", {"explicit": [{"id": x} for x in ids]})
+        worn.append(demand.Worn(f"c{i}", "Cyclone", m, gear.group(db, m).label))
+    a = next(a for a in demand.archetypes(worn, min_characters=5) if set(a.families) >= {demand.stat_key("IncreasedLife6")})
+    match = demand.archetype_match(db, a)
+    assert match.finish["sides"] == (2 - sum(m.kind == "prefix" for m in match.mods), 3 - sum(m.kind == "suffix" for m in match.mods))
+    gp = gear.build(db, match, item_level=84)
+    p = gp.problem
+    assert len(p.targets) + p.filler_need + len(gp.bench) == 5  # a full item
+    assert gp.bench and p.reserve  # one open suffix is a bench resistance
+    assert any(db.mods[x]["type"] == "Strength" for t in p.targets for x in t.good)  # on 2 of 3: wanted
+    assert any(db.mods[x]["type"] == "ColdResistance" for x in p.filler)

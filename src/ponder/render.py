@@ -220,12 +220,13 @@ def mods_inline(e: Estimate, pal: Palette = ANSI, width: int = 0, sep: str = "\n
         out.append(text, style=_role_style(r.role, pal))
         if r.tier and r.role == "target":
             out.append(f" {r.tier}", style=_tier_style(r.tier, pal))
-    filler = [r for r in e.rows if r.role == "filler"]
-    if filler:
-        if out:
-            out.append(sep, style="dim")
-        out.append("S ", style="dim")
-        out.append(f"{len(filler)}× {filler[0].tier}", style=pal.share)
+    for side in ("prefix", "suffix"):
+        filler = [r for r in e.rows if r.role == "filler" and r.side == side]
+        if filler:
+            if out:
+                out.append(sep, style="dim")
+            out.append(f"{side[0].upper()} ", style="dim")
+            out.append(f"{len(filler)}× {filler[0].tier}", style=pal.share)
     return out
 
 
