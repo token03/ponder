@@ -60,6 +60,24 @@ def test_planner_builds_padded_leaves_and_a_tree():
     assert best.cost <= plain + 1e-9
 
 
+@pytest.mark.skipif(not data.available(), reason="run `ponder data fetch` first")
+def test_filler_slots_get_distinct_resistance_families():
+    from dataclasses import replace
+
+    from ponder import gear
+    from ponder.mods import ModDB
+
+    db = ModDB()
+    base = db.find_base("Warlock Gloves")
+    problem = gear.problem_on(db, base, [], 84)
+    res = frozenset(m for m in problem.mods if db.mods[m]["type"] in gear.FILLER_FAMILIES)
+    problem = replace(problem, filler=res, filler_need=3)
+    slots = [w.target.good for w in recomb.wants(problem)]
+    assert len(slots) == 3 and all(slots)
+    groups = [{g for m in ids for g in problem.mods[m].groups} for ids in slots]
+    assert not (groups[0] & groups[1] or groups[0] & groups[2] or groups[1] & groups[2])  # two donors can't both bring fire
+
+
 def test_chance_matches_a_simulation_with_nnn_and_junk_free_donors():
     a = {"prefix": ["life"], "suffix": ["res"]}
     b = {"prefix": ["es", "nnn1", "nnn2"], "suffix": ["nnn3"]}
@@ -67,3 +85,39 @@ def test_chance_matches_a_simulation_with_nnn_and_junk_free_donors():
     sim = recomb.simulate(a, b, legal, same_base=False, wanted=legal, trials=40000)
     exact = recomb.chance({"prefix": (1, 0), "suffix": (1, 0)}, {"prefix": (1, 2), "suffix": (0, 1)}, same_base=False)
     assert sim == pytest.approx(exact, abs=0.01)
+
+
+def test_failures_that_hand_back_an_input_cut_the_cost():
+    # life (prefix) + int (suffix) on two target-base donors: each side keeps its mod 59% of the time.
+    a, b = {"prefix": (1, 0)}, {"suffix": (1, 0)}
+    assert recomb.salvage(a, b, same_base=True) == pytest.approx(0.59 * 0.41)  # life kept, int lost
+    # Exact salvage chances plus success and the rest add up over the four outcomes.
+    total = recomb.chance(a, b, True) + recomb.salvage(a, b, True) + recomb.salvage(b, a, True) + 0.41 * 0.41
+    assert total == pytest.approx(1.0)
+    x = recomb.Donor("A", "a", ("life",))
+    y = recomb.Donor("A", "a", ("int",))
+    x.plan = y.plan = type("P", (), {"cost": 10.0})()
+    step = recomb.Step(x, y, 0.59 * 0.59, 0.59 * 0.41, 0.59 * 0.41)
+    assert step.cost == pytest.approx(20 * (1 - 0.59 * 0.41) / (0.59 * 0.59))
+
+
+def test_salvage_matches_a_simulation():
+    import random
+
+    a = {"prefix": ["life", "es"], "suffix": ["res"]}
+    b = {"prefix": ["nnn1"], "suffix": ["int", "nnn2"]}
+    legal = {"life", "es", "res", "int"}
+    rng, hits, trials = random.Random(1), 0, 40000
+    for _ in range(trials):
+        if rng.random() >= 0.5:
+            continue
+        kept = set()
+        for side in recomb.SIDES:
+            pool = a.get(side, []) + b.get(side, [])
+            row = recomb.SIDE_COUNTS[min(len(pool), 6)]
+            k = rng.choices(list(row), weights=list(row.values()))[0]
+            eligible = [m for m in pool if m in legal]
+            kept |= set(rng.sample(eligible, min(k, len(eligible))))
+        hits += kept == {"life", "es", "res"}
+    exact = recomb.salvage({"prefix": (2, 0), "suffix": (1, 0)}, {"prefix": (0, 1), "suffix": (1, 1)}, same_base=False)
+    assert hits / trials == pytest.approx(exact, abs=0.01)

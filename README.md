@@ -169,8 +169,12 @@ model:
 
 Leaves carry 1-2 wanted mods, on the target base (optionally with one essence
 pad) or on a partner base with up to 2 NNN pads per side (4 mods per donor at
-most). `recomb.simulate` checks the closed-form odds by Monte Carlo. Failed
-recombinations are counted as a total loss, so real costs are a bit lower.
+most). Resistance filler is split into distinct families per slot (fire,
+cold, ...), so two donors never both bring the same resistance. A failure that
+keeps exactly one input's mods on the target base is a clean copy of that input
+and is reused on the next attempt; the plan shows it as "#1 back 24%". Other
+partial outputs are counted as a loss, so real costs are a little lower still.
+`recomb.simulate` checks the closed-form odds by Monte Carlo.
 
 ### Single tools
 

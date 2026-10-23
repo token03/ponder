@@ -20,7 +20,9 @@ carries the rest, either on the target base too (no base coin flip) or on a
 partner base whose native mods are NNN for the target (a 50% base flip, but
 padding on both sides). Each donor is an ordinary craft with a "no other
 mods" constraint, solved like any other item; the plan's expected cost is
-(donor A + donor B + fee) / chance of success, every attempt from scratch.
+(donor A + donor B + fee) / chance of success, less what failures hand back:
+a failure that keeps exactly one input's mods on the target base is a clean
+copy of that input, reused on the next attempt instead of crafted again.
 
 Fractured mods can't move between bases; influenced, veiled and essence-only
 "special" mods are left out (3.26 nerfed recombining those).
@@ -56,6 +58,31 @@ def keep_at_least(pool_size: int, wanted: int) -> float:
     """Chance a side with `pool_size` pooled mods keeps at least `wanted` of them."""
     row = SIDE_COUNTS[min(pool_size, 6)]
     return sum(p for k, p in row.items() if k >= wanted)
+
+
+def keep_exactly(pool_size: int, wanted: int, subset: int) -> float:
+    """Chance a side keeps exactly one particular `subset`-sized set of its `wanted` legal mods.
+
+    With clean donors only wanted mods are legal, so the side keeps min(k, wanted)
+    of them, uniformly: a particular set of that size is one of C(wanted, size).
+    """
+    from math import comb
+
+    row = SIDE_COUNTS[min(pool_size, 6)]
+    return sum(p for k, p in row.items() if min(k, wanted) == subset) / comb(wanted, subset) if wanted else 1.0
+
+
+def salvage(a: dict[str, tuple[int, int]], b: dict[str, tuple[int, int]], same_base: bool) -> float:
+    """Chance a failed recombination still gives a clean target-base copy of `a`'s wanted mods, and nothing else.
+
+    That output replaces input `a` on the next attempt, so `a` isn't crafted again.
+    """
+    p = 1.0 if same_base else 0.5
+    for side in SIDES:
+        (wa, na), (wb, nb) = a.get(side, (0, 0)), b.get(side, (0, 0))
+        if wa + wb:
+            p *= keep_exactly(wa + na + wb + nb, wa + wb, wa)
+    return p
 
 
 def chance(a: dict[str, tuple[int, int]], b: dict[str, tuple[int, int]], same_base: bool) -> float:
@@ -110,11 +137,26 @@ class Want:
 
 
 def wants(problem: Problem) -> list[Want]:
-    """What the finished item needs, one entry per mod: targets, then each filler mod."""
+    """What the finished item needs, one entry per mod: targets, then each filler mod.
+
+    Filler slots get distinct resistance families (fire, cold, ... by weight),
+    so two donors can't both bring fire resistance and collide in the output.
+    """
     out = [Want(t.name, t.side, t) for t in problem.targets]
-    filler_side = {problem.mods[m].side for m in problem.filler if m in problem.mods}
-    side = "suffix" if filler_side != {"prefix"} else "prefix"
-    out += [Want(f"res {i + 1}", side, None) for i in range(problem.filler_need)]
+    if not problem.filler_need:
+        return out
+    families: dict[str, set[str]] = {}
+    for m in problem.filler:
+        if m in problem.mods:
+            families.setdefault(problem.mods[m].groups[0] if problem.mods[m].groups else m, set()).add(m)
+    order = sorted(families, key=lambda g: -sum(problem.mods[m].weight for m in families[g]))
+    for i in range(problem.filler_need):
+        mine = order[i::problem.filler_need] if len(order) > problem.filler_need else order[i : i + 1]
+        ids = frozenset(m for g in mine for m in families[g])
+        if not ids:
+            return out + [Want(f"res {j + 1}", "suffix", None) for j in range(i, problem.filler_need)]
+        side = problem.mods[next(iter(ids))].side
+        out.append(Want(f"res {i + 1}", side, Target(f"res {i + 1}", side, ids, frozenset(g for m in ids for g in problem.mods[m].groups))))
     return out
 
 
@@ -199,6 +241,10 @@ class Step:
     a: Donor | Step
     b: Donor | Step
     chance: float
+    # Chance a failure hands back a clean copy of a (or of b, when b sits on the
+    # target base): that input is reused instead of crafted again.
+    back_a: float = 0.0
+    back_b: float = 0.0
 
     @property
     def carries(self) -> tuple[str, ...]:
@@ -216,7 +262,7 @@ class Step:
     def cost(self) -> float | None:
         if self.a.cost is None or self.b.cost is None or self.chance <= 0:
             return None
-        return (self.a.cost + self.b.cost + RECOMB_FEE) / self.chance
+        return (self.a.cost * (1 - self.back_a) + self.b.cost * (1 - self.back_b) + RECOMB_FEE) / self.chance
 
     def counts(self, side: str, wants: dict[str, str]) -> tuple[int, int]:
         return sum(1 for n in self.carries if wants[n] == side), 0
@@ -238,11 +284,12 @@ class Step:
             else:
                 out.append(("craft", x.describe(), x.cost))
                 refs.append(len(out))
-        out.append(("recombine", f"#{refs[0]} + #{refs[1]} → " + " + ".join(self.carries) + f"  ({self.chance:.0%})", self.cost))
+        back = ", ".join(f"#{r} back {q:.0%}" for r, q in zip(refs, (self.back_a, self.back_b)) if q >= 0.005)
+        out.append(("recombine", f"#{refs[0]} + #{refs[1]} → " + " + ".join(self.carries) + f"  ({self.chance:.0%}" + (f"; {back}" if back else "") + ")", self.cost))
         return len(out)
 
     def to_dict(self) -> dict:
-        return {"cost": self.cost, "chance": self.chance, "table": TABLE_VERSION, "steps": [{"do": d, "what": w, "chaos": c} for d, w, c in self.steps()]}
+        return {"cost": self.cost, "chance": self.chance, "salvage": [self.back_a, self.back_b], "table": TABLE_VERSION, "steps": [{"do": d, "what": w, "chaos": c} for d, w, c in self.steps()]}
 
 
 class Planner:
@@ -351,10 +398,13 @@ class Planner:
                             if not x.on_target:
                                 continue  # the first input sits on the target base
                             for y in options.get(s2, []):
-                                c = chance({s: x.counts(s, self.side) for s in SIDES}, {s: y.counts(s, self.side) for s in SIDES}, y.on_target)
-                                cost = (x.cost + y.cost + RECOMB_FEE) / c if c > 0 else None
-                                if cost is not None and (top is None or cost < top.cost):
-                                    top = Step(x, y, c)
+                                cx, cy = {s: x.counts(s, self.side) for s in SIDES}, {s: y.counts(s, self.side) for s in SIDES}
+                                c = chance(cx, cy, y.on_target)
+                                if c <= 0:
+                                    continue
+                                step = Step(x, y, c, salvage(cx, cy, y.on_target), salvage(cy, cx, True) if y.on_target else 0.0)
+                                if top is None or step.cost < top.cost:
+                                    top = step
                 if top is not None:
                     best_step[full] = top
                     options.setdefault(full, []).append(top)

@@ -132,9 +132,10 @@ re-lock. Community testing suggests previews are deterministic per donor
 4. Assembly planner with a recombinator kernel table. *First cut done*
    (`recomb.py`): clean donors (a `junk_cap` constraint on the single-item
    solver), NNN padding from partner bases and essence-forced named mods, and a
-   DP over subsets of wanted mods for two-level trees. Next: reuse partial
-   failures (a "kept 1 of 2" output is a donor again), donors with tolerated
-   junk, exclusive-mod rules, and the 3.26 special-mod penalty.
+   DP over subsets of wanted mods for two-level trees. Failures that hand back
+   one input exactly are credited (that input isn't re-crafted). Next: credit
+   other partial outputs, donors with tolerated junk, exclusive-mod rules, and
+   the 3.26 special-mod penalty.
 5. Influence: Dominance, Awakener, lock/preview observation nodes.
 6. Prices and market search on top (exists in part).
 
