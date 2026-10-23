@@ -9,3 +9,6 @@ dist/
 .cache/
 
 .env
+
+# Local secrets (POESESSID)
+.env
