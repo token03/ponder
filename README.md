@@ -92,7 +92,7 @@ crafts beside the selected one's detail: prefixes and suffixes with tiers,
 costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
 them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
 `/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
-builds), `t` price the selected item on trade, `T` price everything shown
+builds, hole, demand, recomb saving), `R` cost a recombinator tree, `t` price the selected item on trade, `T` price everything shown
 within the search budget, `F` price the two most promising fractured bases
 of every item shown, `o`/`y` open or copy its trade search, `b` other
 builds, `q` quit.
@@ -111,6 +111,9 @@ ponder ladder fetch                      # top characters of every popular skill
 ponder ladder archetypes --group Bow     # mod combinations many characters share = crafting candidates
 ponder ladder tiers --group "Gloves (ES)"   # how often each mod is worn, and how much its tier matters
 ponder ladder prices --group Bow --top 3    # fit what each tier is worth from trade listings
+ponder ladder crafts                     # cost what the ladder wears (gear + cluster notables), rank market holes
+ponder ladder crafts --trade --recomb    # ... priced on trade, with recombinator trees
+ponder tui --ladder                      # the same, interactively (R costs a recomb tree, s sorts by hole/demand)
 ```
 
 `fetch` reads poe.ninja's builds data: for every main skill with at least 40
@@ -132,6 +135,42 @@ Everything is cached under `.cache/ladder/<snapshot>`.
   core mod at T4 or better, then a least-squares fit of log price on which
   core mods are T1 / T2, the number of resistances and open affixes. The
   multipliers say what T1 is worth per mod, in this market.
+
+- **crafts**: turns the ladder into crafting candidates and costs them.
+  Gear archetypes become items with each mod at the tier most of its wearers
+  reach and their usual number of resistances (filler). Picked: the most worn
+  overall (`--gear`), the top few of every base group (`--per-group`, so
+  quivers, claws and shields aren't crowded out by rings) and the most
+  *niche* 3+ mod combos (`--niche`): mods worn together far more often than
+  chance (lift), which marks one build's item (minion rings, Kinetic Blast
+  chaos wands). Cluster jewels are read too (6k on a typical sample): by
+  size, enchant, usual passive count and notable combination (2+ notables
+  on larges, all of them on mediums and smalls). With `--trade` each gets a
+  selling price and listing count, and `hole = margin × wearers / (listed + 5)`
+  ranks market holes: wanted, thinly supplied, profitable.
+
+### Recombinators (`recomb.py`)
+
+`--recomb` (or `R` in the TUI) costs a recombinator tree for each gear item:
+clean donors (an extra solver constraint: no mods but the wanted ones), then
+recombinations, cheapest first over every split of the wanted mods (a DP over
+subsets, so a 3-4 mod item can come from two smaller recombinations). The
+model:
+
+- the output takes either input's base, 50/50;
+- per side, how many mods the output keeps depends only on that side's pool
+  size across both inputs (`recomb.SIDE_COUNTS`; community-measured rows 1-4,
+  5-6 extrapolated: edit it when a patch changes the odds);
+- kept mods are drawn from the pool *after* removing those that can't roll
+  on the output base. That is **NNN padding**: a partner base's native mods
+  (an evasion donor's "+% Evasion" for an ES target) or an essence-forced
+  named mod the target base can't roll inflate the pool size, so the output
+  keeps more, without ever displacing a wanted mod.
+
+Leaves carry 1-2 wanted mods, on the target base (optionally with one essence
+pad) or on a partner base with up to 2 NNN pads per side (4 mods per donor at
+most). `recomb.simulate` checks the closed-form odds by Monte Carlo. Failed
+recombinations are counted as a total loss, so real costs are a bit lower.
 
 ### Single tools
 
@@ -227,10 +266,14 @@ Fractured mods (`--fractured`, or read from a PoB item) stay through every
 reroll and can't be annulled. Actions with no price are left out rather than
 counted as free.
 
+Solved plans are cached in `.cache/plans`, keyed by the problem and the
+prices its actions use (to 3 significant figures), so reruns, the TUI and
+recombinator donors shared between items don't solve twice.
+
 Not modelled yet: bench crafts used mid-craft (e.g. to block a mod group
 before an exalt), "Cannot roll Attack/Caster Modifiers", multi-fossil combos,
 Eldritch Chaos Orbs and eldritch implicits as targets, influence orbs,
-Awakener, Recombinator, veiled mods, and Harvest's newer crafts. `ponder craft` lists the mods on an item it doesn't
+Awakener, veiled mods, and Harvest's newer crafts (recombinators: see below). `ponder craft` lists the mods on an item it doesn't
 try to make (veiled, legacy-crafted and special mods).
 
 ### Assumptions not in the game data
@@ -246,6 +289,8 @@ Kept as constants so they're easy to correct:
   ones and the metamod included
 - Harvest reforge costs: fire, cold and lightning are sourced; the other tags
   are guesses priced at the dearest lifeforce (`actions.HARVEST`)
+- recombinator odds by pool size (`recomb.SIDE_COUNTS`), a 50/50 base, NNN
+  mods counted then dropped; failed attempts are worth nothing
 
 ### Prices and the trade site
 
@@ -292,7 +337,8 @@ src/ponder/
   prices.py poe.ninja prices
   trade.py  trade-site queries, listings, rate limits, cache
   ladder.py poe.ninja ladder characters (protobuf search, NDIC dictionaries, item mod ids)
-  demand.py tier demand and archetypes from ladder items
+  demand.py tier demand, gear archetypes (lift / niche) and cluster notable combos from ladder items
+  recomb.py recombinator odds, NNN padding, donor trees
   pricing.py tier price multipliers fitted on trade listings
   cli.py    the `ponder` command
 builds/     lists of build links per league

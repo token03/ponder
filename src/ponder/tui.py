@@ -39,8 +39,11 @@ SORTS = {
     "cheapest": lambda e: (e.total is None, e.total or 0),
     "fracture saving": lambda e: (e.best_fracture is None, -((e.total or 0) - (e.best_fracture.total if e.best_fracture else 0))),
     "builds": lambda e: (-len(e.builds), e.total is None, -(e.total or 0)),
+    "hole": lambda e: (e.hole is None, -(e.hole or 0), -e.demand),
+    "demand": lambda e: (-e.demand, e.total is None, -(e.total or 0)),
+    "recomb saving": lambda e: (e.recomb_total is None, (e.recomb_total or 0) - (e.total or 0)),
 }
-CRAFT_COLUMNS = [("item", 30), ("craft", 9), ("fractured", 11), ("market", 8), ("margin", 9), ("builds", 6), ("mods", 64)]
+CRAFT_COLUMNS = [("item", 30), ("craft", 9), ("fractured", 11), ("recomb", 10), ("market", 8), ("margin", 9), ("builds", 6), ("mods", 64)]
 KEYS = [
     ("j / k", "move down / up"),
     ("g / G", "first / last row"),
@@ -49,7 +52,8 @@ KEYS = [
     ("J / K", "scroll the detail pane"),
     ("/", "search items and mods (esc clears)"),
     ("f", "filter: all · clusters · gear"),
-    ("s", "sort: margin · craft · cheapest · fracture saving · builds"),
+    ("s", "sort: margin · craft · cheapest · fracture saving · builds (ladder: hole · demand · recomb saving)"),
+    ("R", "cost a recombinator tree for the selected item (clean donors, NNN pads)"),
     ("t", "price the selected item on trade (item, fractured bases)"),
     ("T", "price everything shown, within the trade budget"),
     ("F", "price the 2 most promising fractured bases of every item shown"),
@@ -91,6 +95,7 @@ class PonderApp(App):
         Binding("t", "trade", "price"),
         Binding("T", "trade_all", "price all"),
         Binding("F", "fracture_prices", "fracture bases"),
+        Binding("R", "recomb", "recomb"),
         Binding("o", "open_link", "open"),
         Binding("y", "copy_link", "copy link", show=False),
         Binding("f", "cycle_filter", "filter"),
@@ -105,10 +110,11 @@ class PonderApp(App):
         Binding("q", "quit", "quit"),
     ]
 
-    def __init__(self, sources: list[str], trade_on_load: bool = False):
+    def __init__(self, sources: list[str], trade_on_load: bool = False, ladder: bool = False):
         super().__init__()
         self.sources = sources
         self.trade_on_load = trade_on_load
+        self.ladder = ladder
         self.report: pipeline.Report | None = None
         self.table: dict[str, float] = {}
         self.by_key: dict[str, pipeline.Estimate] = {}
@@ -147,7 +153,13 @@ class PonderApp(App):
         for label in ["builds", "items", "class", "mods", "craft"]:
             shared.add_column(label, key=label)
         box = self.query_one("#sources", Input)
-        if self.sources:
+        if self.ladder:
+            crafts.columns["builds"].label = Text("chars")
+            self.sort = "demand"
+            box.value = "ladder: what poe.ninja characters wear"
+            crafts.focus()
+            self.analyze_ladder()
+        elif self.sources:
             box.value = " ".join(self.sources)
             crafts.focus()  # so the keys work straight away
             self.analyze(self.sources)
@@ -181,6 +193,17 @@ class PonderApp(App):
         self.call_from_thread(self.show_report, report)
         if self.trade_on_load:
             self.call_from_thread(self.action_trade_all)
+
+    @work(thread=True, exclusive=True)
+    def analyze_ladder(self) -> None:
+        try:
+            r = pipeline.ladder(progress=lambda m: self.call_from_thread(self.set_status, escape(m)))
+        except Exception as e:  # no cache yet, a bad file...
+            self.call_from_thread(self.set_status, f"[red]failed: {escape(str(e))}[/red]")
+            return
+        report = pipeline.Report([], r.estimates, [], r.prices_source, r.league, divine=r.divine)
+        self.call_from_thread(self.show_report, report)
+        self.call_from_thread(self.set_status, escape(render.ladder_summary(r).plain) + " · R recomb, t trade, s sort, ? keys")
 
     def set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
@@ -234,9 +257,10 @@ class PonderApp(App):
             render.item_title(e, self.pal),
             render.total_text(e, self.pal),
             render.fracture_text(e, self.pal),
+            render.recomb_text(e, self.pal),
             render.market_text(e),
             render.margin_text(e.margin, self.pal),
-            Text(str(len(e.builds)), style=self.pal.good if len(e.builds) > 1 else "dim"),
+            Text(str(e.demand), style=self.pal.share) if self.ladder else Text(str(len(e.builds)), style=self.pal.good if len(e.builds) > 1 else "dim"),
             _cut(render.mods_inline(e, self.pal, width=24, sep="  "), 64),
         ]
 
@@ -273,6 +297,16 @@ class PonderApp(App):
     def action_trade_all(self) -> None:
         if self.report:
             self.lookup(self.rows(), budget=40)
+
+    def action_recomb(self) -> None:
+        if self.current and self.current.kind == "gear":
+            self.cost_recomb([self.current])
+
+    @work(thread=True, exclusive=True, group="recomb")
+    def cost_recomb(self, estimates: list[pipeline.Estimate]) -> None:
+        pipeline.add_recombs(estimates, self.table, progress=lambda m: self.call_from_thread(self.set_status, escape(m)))
+        self.call_from_thread(self.after_lookup, estimates, 0)
+        self.call_from_thread(self.set_status, "recombinator tree costed" if estimates[0].recomb else "no recombinator plan for this item")
 
     def action_fracture_prices(self) -> None:
         if self.report:
@@ -443,15 +477,15 @@ def _save_config(config: dict) -> None:
         pass
 
 
-def run_tui(sources: list[str], trade: bool = False) -> int:
-    PonderApp(sources, trade).run()
+def run_tui(sources: list[str], trade: bool = False, ladder: bool = False) -> int:
+    PonderApp(sources, trade, ladder).run()
     return 0
 
 
 def main() -> int:
     """`ponder-tui [--trade] SOURCES...`"""
     args = sys.argv[1:]
-    return run_tui([a for a in args if a != "--trade"], "--trade" in args)
+    return run_tui([a for a in args if a not in ("--trade", "--ladder")], "--trade" in args, "--ladder" in args)
 
 
 if __name__ == "__main__":

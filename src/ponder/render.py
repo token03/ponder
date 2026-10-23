@@ -103,6 +103,16 @@ def fracture_text(e: Estimate, pal: Palette = ANSI) -> Text:
     return Text("")
 
 
+def recomb_text(e: Estimate, pal: Palette = ANSI) -> Text:
+    """The recombinator route against crafting in one go, for tables."""
+    r = e.recomb_total
+    if r is None:
+        return Text("")
+    if e.total is None or r < e.total:
+        return Text(f"{money(r)} ↓", style=pal.good)
+    return Text(money(r), style="dim")
+
+
 def estimates_table(estimates: list[Estimate], links: bool = True, title: str | None = None, pal: Palette = ANSI) -> Table:
     t = Table(title=title, title_justify="left", title_style="bold", header_style="bold", expand=False, pad_edge=False, box=None)
     t.add_column("#", justify="right", style="dim")
@@ -111,6 +121,9 @@ def estimates_table(estimates: list[Estimate], links: bool = True, title: str | 
     t.add_column("builds", justify="right")
     t.add_column("craft", justify="right")
     t.add_column("fractured", justify="right")
+    recombs = any(e.recomb for e in estimates)
+    if recombs:
+        t.add_column("recomb", justify="right")
     t.add_column("market", justify="right")
     t.add_column("margin", justify="right")
     if links:
@@ -123,6 +136,7 @@ def estimates_table(estimates: list[Estimate], links: bool = True, title: str | 
             str(len(e.builds)),
             total_text(e, pal),
             fracture_text(e, pal),
+            *([recomb_text(e, pal)] if recombs else []),
             market_text(e),
             margin_text(e.margin, pal),
             *([link("search", e.trade_url, pal=pal)] if links else []),
@@ -138,6 +152,9 @@ def ladder_table(estimates: list[Estimate], links: bool = True, title: str | Non
     t.add_column("mods", overflow="fold")
     t.add_column("chars", justify="right", style=pal.share)
     t.add_column("craft", justify="right")
+    recombs = any(e.recomb for e in estimates)
+    if recombs:
+        t.add_column("recomb", justify="right")
     t.add_column("market", justify="right")
     t.add_column("listed", justify="right", style="dim")
     t.add_column("margin", justify="right")
@@ -153,6 +170,7 @@ def ladder_table(estimates: list[Estimate], links: bool = True, title: str | Non
             mods_inline(e, pal),
             str(e.demand),
             total_text(e, pal),
+            *([recomb_text(e, pal)] if recombs else []),
             market_text(e),
             str(e.market[1]) if e.market else "",
             margin_text(e.margin, pal),
@@ -228,6 +246,8 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
     parts += [Text(""), _costs(e, prices_source, links, pal)]
     if e.fractures:
         parts += [Text(""), _fractures(e, links, pal)]
+    if e.recomb is not None and e.recomb.cost is not None:
+        parts += [Text(""), recomb_steps(e, pal)]
     pick = suggested_fracture(e)
     if pick and pick.plan:
         title = Text.assemble("recipe · starting from a base with ", (f"fractured {pick.target}", pal.fractured))
@@ -319,6 +339,24 @@ def _costs(e: Estimate, prices_source: str, links: bool, pal: Palette) -> Table:
         t.add_row(Text("margin", style="bold"), margin_text(e.margin, pal), Text("buying the best fractured base" if uses_fracture else ""))
     else:
         t.add_row("market", Text("-", style="dim"), Text.assemble(e.market_error or "not priced yet  ", link("search", e.trade_url, links, pal)))
+    return t
+
+
+def recomb_steps(e: Estimate, pal: Palette = ANSI) -> Table:
+    """The recombinator tree as numbered steps: clean donors, then each recombination."""
+    from . import recomb
+
+    r = e.recomb
+    cheaper = e.total is None or r.cost + e.bench_cost < e.total
+    title = Text.assemble("or recombine clean donors  ", (f"{money(r.cost)} expected", f"bold {pal.good}" if cheaper else "bold"))
+    title.append(f"  · odds table: {recomb.TABLE_VERSION}", style="dim")
+    t = Table(title=title, title_justify="left", box=None, pad_edge=False, show_header=False)
+    t.add_column(justify="right", style="dim")
+    t.add_column()
+    t.add_column(justify="right")
+    for i, (do, what, cost) in enumerate(r.steps(), 1):
+        style = pal.action if do == "recombine" else ""
+        t.add_row(f"{i}.", Text.assemble((do, style), "  ", what), money_text(cost, "dim" if do == "craft" else ""))
     return t
 
 

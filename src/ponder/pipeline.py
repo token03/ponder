@@ -116,6 +116,7 @@ class Estimate:
     search: dict = field(default_factory=dict)  # how to search its bases: cluster size/enchant/passives, or gear base/category
     error: str | None = None  # why there is no plan
     demand: int = 0  # ladder characters wearing it (ladder runs)
+    recomb: object | None = None  # recomb.Step: the cheapest recombinator tree, when costed
     skills: list[str] = field(default_factory=list)  # their most common main skills
 
     @property
@@ -160,9 +161,16 @@ class Estimate:
         return min(priced, key=lambda f: f.total) if priced else None
 
     @property
+    def recomb_total(self) -> float | None:
+        """Recombining clean donors instead of crafting in one go (then the same bench crafts)."""
+        if self.recomb is None or self.recomb.cost is None:
+            return None
+        return self.recomb.cost + self.bench_cost
+
+    @property
     def cheapest(self) -> float | None:
-        """The cheaper of crafting from scratch and the best priced fracture."""
-        options = [x for x in (self.total, self.best_fracture.total if self.best_fracture else None) if x is not None]
+        """The cheapest of crafting from scratch, the best priced fracture and recombining."""
+        options = [x for x in (self.total, self.best_fracture.total if self.best_fracture else None, self.recomb_total) if x is not None]
         return min(options) if options else None
 
     def recipe(self, rows: int = 12) -> list[tuple[str, str, float]]:
@@ -202,6 +210,8 @@ class Estimate:
             "fractures": [f.to_dict() for f in self.fractures],
             "not_crafted": self.skipped,
             "trade_url": self.trade_url,
+            "recomb": self.recomb.to_dict() if self.recomb else None,
+            "recomb_total": self.recomb_total,
             "demand": self.demand,
             "skills": self.skills,
             "hole": self.hole,
@@ -278,6 +288,7 @@ def run(
     exact: bool = False,
     trade_lookup: bool = False,
     trade_budget: int = 40,
+    recombs: bool = False,
     workers: int | None = None,
     progress: Progress | None = None,
 ) -> Report:
@@ -330,6 +341,8 @@ def run(
             add_fractures(e, league)
     extra = [s.estimate for s in shared if s.estimate and s.estimate not in estimates]
     solve_all(estimates + extra + [f for e in estimates for f in e.fractures], table, workers, say)
+    if recombs:
+        add_recombs(estimates, table, workers, say, db)
 
     if trade_lookup:
         price_on_trade(sorted(estimates, key=priority), table, league, budget=trade_budget, progress=say)
@@ -374,11 +387,13 @@ def ladder(
     *,
     gear_top: int = 80,
     per_group: int = 3,
+    niche: int = 40,
     cluster_top: int = 80,
     min_characters: int = 5,
     group: str | None = None,
     trade_lookup: bool = False,
     trade_budget: int = 40,
+    recombs: bool = False,
     workers: int | None = None,
     progress: Progress | None = None,
 ) -> LadderReport:
@@ -413,6 +428,19 @@ def ladder(
         if len(picked) < gear_top or per[a.group] < per_group:
             picked.append(a)
             per[a.group] += 1
+    # ...and the most niche: 3+ mods worn together far more than chance (one build's item).
+    chosen = {id(a) for a in picked}
+    niches: list = []
+    for a in sorted(found, key=lambda a: -a.niche):
+        if len(niches) >= niche:
+            break
+        if id(a) in chosen or len(a.families) < 3:
+            continue
+        # Variants of one niche item (the same mods give or take one) are costed once.
+        if any(o.group == a.group and len(set(o.families) & set(a.families)) >= min(len(o.families), len(a.families)) - 1 for o in niches):
+            continue
+        niches.append(a)
+    picked += niches
     for a in picked:
         m = demand.archetype_match(db, a)
         if m is None:
@@ -434,6 +462,8 @@ def ladder(
         estimates[est.key] = est
     out = list(estimates.values())
     solve_all(out, table, workers, say)
+    if recombs:
+        add_recombs(out, table, workers, say, db)
     if trade_lookup:
         price_on_trade(sorted(out, key=lambda e: -e.demand), table, league, budget=trade_budget, progress=say)
     return LadderReport(len(characters), len(worn), len(clusters), out, len(found), len(found_cl), prices_source, league, table.get("divine", 0.0))
@@ -591,6 +621,29 @@ def _filler_stats(filler) -> list[tuple[str, float | None]]:
         if sid := trade.stat_id(ids[0]):
             out.append((sid, trade.stat_min(ids)))
     return out
+
+
+def add_recombs(estimates: list[Estimate], table: dict[str, float], workers: int | None = None, progress: Progress | None = None, db: ModDB | None = None) -> None:
+    """Cost a recombinator tree for every gear estimate that has 2+ wanted mods.
+
+    All their leaf donors are solved in one parallel batch (and plan-cached).
+    """
+    from . import recomb
+
+    db = db or ModDB()
+    planners = []
+    for e in estimates:
+        if e.kind != "gear" or e.problem is None or e.error or not (bid := db.find_base(e.base)):
+            continue
+        planner = recomb.Planner(db, e.problem, bid, e.item_level)
+        if planner.ok:
+            planners.append((e, planner))
+    leaves = [d for _, p in planners for d in p.leaves()]
+    if progress:
+        progress(f"recombinator donors: {len(leaves)} for {len(planners)} items")
+    solve_all(leaves, table, workers, progress)
+    for e, planner in planners:
+        e.recomb = planner.best()
 
 
 def add_fractures(est: Estimate, league: str) -> None:

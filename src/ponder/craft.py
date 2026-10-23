@@ -105,6 +105,7 @@ class Problem:
     reserve: dict[str, int] = field(default_factory=dict)  # side -> slots left open for bench crafts at the end
     filler: frozenset[str] = frozenset()  # mods that count as filler (e.g. any resistance at T3+)
     filler_need: int = 0  # how many filler mods the finished item needs, on top of the targets
+    junk_cap: tuple[int, int] | None = None  # most other mods allowed (prefix, suffix): recombinator donors want clean items
 
     @cached_property
     def mods(self) -> dict[str, Mod]:
@@ -186,6 +187,8 @@ class Problem:
 
     def done(self, s: State) -> bool:
         if sum(v == GOOD for v in s.status) < self.need or s.junk[4] + s.junk[5] < self.filler_need:
+            return False
+        if self.junk_cap and (s.junk[0] + s.junk[1] > self.junk_cap[0] or s.junk[2] + s.junk[3] > self.junk_cap[1]):
             return False
         limit = 1 if s.rarity == MAGIC else self.limit
         return all(self.count(s, side) + n <= limit for side, n in self.reserve.items())

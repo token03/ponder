@@ -58,6 +58,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--trade", action="store_true", help="price finished items and fractured bases on the trade site (POESESSID in .env)")
     run.add_argument("--trade-budget", type=int, default=40, help="most trade searches to send (cached answers are free; default 40)")
     run.add_argument("--fractures", action="store_true", help="also cost starting from a base with each target already fractured")
+    run.add_argument("--recomb", action="store_true", help="also cost recombinator trees of clean donors (NNN padding included)")
     run.add_argument("--exact", action="store_true", help="every mod as on the PoB item (resistances aren't treated as interchangeable filler)")
     run.add_argument("--settle", type=int, default=0, help="accept tiers this many steps worse")
     run.add_argument("--max-targets", type=int, default=4, help="skip items with more target mods than this")
@@ -70,6 +71,7 @@ def parser() -> argparse.ArgumentParser:
     tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
     tui.add_argument("sources", nargs="*", help=SOURCES_HELP)
     tui.add_argument("--trade", action="store_true")
+    tui.add_argument("--ladder", action="store_true", help="browse ladder crafts (`ponder ladder fetch` first) instead of builds")
 
     lad = sub.add_parser("ladder", help="what ladder characters wear (poe.ninja): tiers that matter, archetypes")
     lad_sub = lad.add_subparsers(dest="ladder_command", required=True)
@@ -96,9 +98,11 @@ def parser() -> argparse.ArgumentParser:
     lad_crafts.add_argument("--min-characters", type=int, default=5, help="rarer combinations are skipped (lower finds more niche ones)")
     lad_crafts.add_argument("--gear", type=int, default=80, help="gear archetypes to cost, most worn first")
     lad_crafts.add_argument("--per-group", type=int, default=3, help="also cost the top few of every base group (niche groups)")
+    lad_crafts.add_argument("--niche", type=int, default=40, help="also cost the most niche 3+ mod combos (worn together far above chance)")
     lad_crafts.add_argument("--clusters", type=int, default=80, help="cluster notable combos to cost")
     lad_crafts.add_argument("--trade", action="store_true", help="price finished items on trade: market, listings, hole score (POESESSID in .env)")
     lad_crafts.add_argument("--trade-budget", type=int, default=40)
+    lad_crafts.add_argument("--recomb", action="store_true", help="also cost recombinator trees (slow the first time; plans are cached)")
     lad_crafts.add_argument("--top", type=int, default=50)
     lad_crafts.add_argument("--detail", type=int, default=0, help="show the full recipe for this many top rows")
     lad_crafts.add_argument("--workers", type=int)
@@ -174,6 +178,7 @@ def _run(args) -> int:
         exact=args.exact,
         trade_lookup=args.trade,
         trade_budget=args.trade_budget,
+        recombs=args.recomb,
         workers=args.workers,
     )
     if args.json:
@@ -213,7 +218,7 @@ def _tui(args) -> int:
     except ImportError:
         out("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
         return 1
-    return run_tui(args.sources, trade=args.trade)
+    return run_tui(args.sources, trade=args.trade, ladder=args.ladder)
 
 
 def _ladder(args) -> int:
@@ -257,11 +262,13 @@ def _ladder_crafts(args) -> int:
         r = pipeline.ladder(
             gear_top=args.gear,
             per_group=args.per_group,
+            niche=args.niche,
             cluster_top=args.clusters,
             min_characters=args.min_characters,
             group=args.group,
             trade_lookup=args.trade,
             trade_budget=args.trade_budget,
+            recombs=args.recomb,
             workers=args.workers,
             progress=status.update,
         )

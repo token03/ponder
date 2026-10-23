@@ -216,6 +216,36 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
     return GearProblem(problem, ilvl, skipped, bench, rows, bench_ids, families)
 
 
+def problem_on(
+    db: ModDB,
+    base_id: str,
+    targets: list[Target],
+    item_level: int = DEFAULT_ITEM_LEVEL,
+    influences: frozenset[str] = frozenset(),
+    junk_cap: tuple[int, int] | None = None,
+) -> Problem:
+    """A craft of `targets` on a plain base, with every action `build` offers (no bench, no filler)."""
+    base = db.bases[base_id]
+    item_class = base["item_class"]
+    tags = db.item_tags(base_id, set(influences))
+    mods = pool(db, base_id, tags, item_level)
+    harvest, h_profiles = actions.harvest(mods)
+    fossil, f_profiles = actions.fossils(mods)
+    essence, forced = actions.essences(item_class, item_level)
+    extra = {m: _mod(m, db.mods[m], 0) for m in forced.values()}
+    return Problem(
+        pool=mods,
+        targets=targets,
+        need=len(targets),
+        actions=actions.BASIC + harvest + fossil + essence + actions.metamods(item_class, _lock_rerolls(harvest, h_profiles, targets, frozenset()))
+        + actions.eldritch(item_class, set(influences)),
+        kind="jewel" if item_class in JEWEL_CLASSES else "gear",
+        profiles={**h_profiles, **f_profiles},
+        extra_mods=extra,
+        junk_cap=junk_cap,
+    )
+
+
 def _lock_rerolls(harvest: list, profiles: dict, targets: list[Target], filler: frozenset[str]) -> list:
     """Harvest reforges worth pairing with a side lock: their tag can hit a target or filler mod."""
     wanted = {m for t in targets for m in t.good} | set(filler)

@@ -68,6 +68,14 @@ class Archetype:
     bases: Counter = field(default_factory=Counter)  # which bases characters wear it on
     tiers: dict[str, Counter] = field(default_factory=dict)  # main stat -> tiers worn
     resistances: Counter = field(default_factory=Counter)  # resistance mods per item
+    lift: float = 0.0  # items wearing all of it / items expected if its mods were worn independently
+
+    @property
+    def niche(self) -> float:
+        """Specific demand: mods worn together far more than chance (one build's item), with real volume."""
+        import math
+
+        return math.log(max(self.lift, 1.0)) * math.sqrt(self.characters)
 
     def usual_tier(self, key: str, share: float = 0.5) -> int | None:
         """The tier at least `share` of the items reach: what a buyer of this archetype expects."""
@@ -158,8 +166,13 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
     """
     who: dict[tuple, set[str]] = defaultdict(set)
     combos_of = []
+    group_items: Counter = Counter()
+    key_items: Counter = Counter()
     for w in worn:  # pass 1: who wears what (cheap), so pass 2 only details the survivors
         fams = stat_keys(w.match)
+        group_items[w.group] += 1
+        for k in fams:
+            key_items[(w.group, k)] += 1
         mine = [(w.group, c) for size in range(min_size, min(max_size, len(fams)) + 1) for c in combinations(fams, size)]
         combos_of.append(mine)
         for key in mine:
@@ -172,8 +185,7 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
         if len(k[1]) > min_size:
             n = len(who[k])
             for sub in combinations(k[1], len(k[1]) - 1):
-                if best_super[(k[0], sub)] < n:
-                    best_super[(k[0], sub)] = n
+                best_super[(k[0], sub)] = max(best_super[(k[0], sub)], n)
     found = {k: Archetype(k[0], k[1], len(who[k]), 0) for k in keys if best_super[k] < implied * len(who[k])}
     for w, mine in zip(worn, combos_of):
         hits = [found[k] for k in mine if k in found]
@@ -191,6 +203,12 @@ def archetypes(worn: list[Worn], min_characters: int = 8, max_size: int = 4, min
                 a.resistances[n_res] += 1
             if len(a.examples) < 5:
                 a.examples.append(w.match)
+    for a in found.values():
+        n = group_items[a.group]
+        independent = n
+        for k in a.families:
+            independent *= key_items[(a.group, k)] / n
+        a.lift = a.items / independent if independent else 0.0
     return sorted(found.values(), key=lambda a: (-a.characters, -len(a.families)))
 
 

@@ -129,7 +129,12 @@ re-lock. Community testing suggests previews are deterministic per donor
    and backward induction between stages.
 3. Legality engine with source classification per base (native, NNN,
    essence-only, veiled, exclusive) as an explicit API.
-4. Assembly planner with a recombinator kernel table.
+4. Assembly planner with a recombinator kernel table. *First cut done*
+   (`recomb.py`): clean donors (a `junk_cap` constraint on the single-item
+   solver), NNN padding from partner bases and essence-forced named mods, and a
+   DP over subsets of wanted mods for two-level trees. Next: reuse partial
+   failures (a "kept 1 of 2" output is a donor again), donors with tolerated
+   junk, exclusive-mod rules, and the 3.26 special-mod penalty.
 5. Influence: Dominance, Awakener, lock/preview observation nodes.
 6. Prices and market search on top (exists in part).
 
