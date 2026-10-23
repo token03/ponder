@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
             match = db.match(item)
             matched.append((source, match))
             if args.command == "items":
-                _print_match(pob_item.slot, match)
+                _print_match(pob_item.slot, pob_item.sets, match)
 
     if args.command == "mine":
         print(f"{len(matched)} rare items from {len(args.sources)} builds")
@@ -57,19 +57,23 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _print_match(slot: str | None, m: ItemMatch) -> None:
+def _print_match(slot: str | None, sets: list[str], m: ItemMatch) -> None:
     item = m.item
     extra = ", ".join(sorted(item.influences | item.flags))
     print(f"\n[{slot or 'unequipped'}] {item.name} / {item.base}  ilvl {item.item_level or '?'}" + (f"  ({extra})" if extra else ""))
+    if sets:
+        print(f"   sets: {', '.join(sets)}")
     if m.base_id is None:
         print("   ! base type not found in data")
     for mod in m.prefixes + m.suffixes:
         tier = f"T{mod.tier}" if mod.tier else "  "
-        flags = "".join(["F" if mod.fractured else "", f" ~{mod.alternatives}" if mod.alternatives else ""])
+        flags = "".join(["F" if mod.fractured else "", " +" if mod.merged else "", f" ~{mod.alternatives}" if mod.alternatives else ""])
         text = " / ".join(line.text for line in mod.lines)
         print(f"   {mod.kind[0].upper()} {tier:<3} {mod.source:<8} {mod.mod_id:<32} {text}  {flags}".rstrip())
     for line in m.unmatched:
-        print(f"   ?              {'(unmatched)':<32} {line.text}")
+        print(f"   ?              {'(no mod fits)':<32} {line.text}")
+    for line in m.notes:
+        print(f"   # {line.text}")
 
 
 if __name__ == "__main__":

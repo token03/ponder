@@ -10,7 +10,7 @@ needs_data = pytest.mark.skipif(not data.available(), reason="run `ponder data f
 
 
 def test_normalize_and_ranges():
-    assert normalize("+(100-114) to maximum Life") == normalize("+105 to maximum Life") == "+# to maximum Life"
+    assert normalize("+(100-114) to maximum Life") == normalize("+105 to maximum Life") == "+# to maximum life"
     assert template_ranges("Adds (5-7) to (11-13) Fire Damage") == [(5, 7), (11, 13)]
 
 
@@ -54,6 +54,19 @@ def test_influence_mod_needs_influence(db):
 
 
 @needs_data
-def test_unknown_line_is_reported(db):
-    item = parse_item("Rarity: RARE\nX\nHubris Circlet\nImplicits: 0\nYou feel great\n")
-    assert [line.text for line in db.match(item).unmatched] == ["You feel great"]
+def test_unknown_lines_are_reported(db):
+    item = parse_item("Rarity: RARE\nX\nHubris Circlet\nImplicits: 0\nUse a fossil here\n+999 to maximum Life\n")
+    match = db.match(item)
+    assert [line.text for line in match.notes] == ["Use a fossil here"]
+    assert [line.text for line in match.unmatched] == ["+999 to maximum Life"]
+
+
+@needs_data
+def test_summed_line_split_into_hybrid_and_single(db):
+    item = parse_item(
+        "Rarity: RARE\nX\nHubris Circlet\nItem Level: 86\nImplicits: 0\n"
+        "136% increased Energy Shield\n16% increased Stun and Block Recovery\n"
+    )
+    match = db.match(item)
+    assert match.unmatched == [] and len(match.mods) == 2
+    assert all(m.merged for m in match.mods)

@@ -20,11 +20,15 @@ _RAW_URLS = [
 ]
 
 
+_COLOR = re.compile(r"\^(x[0-9a-fA-F]{6}|\d)")
+
+
 @dataclass
 class PobItem:
     id: str
     text: str
-    slot: str | None = None
+    slot: str | None = None  # slot in the active item set, else the first set using it
+    sets: list[str] = field(default_factory=list)  # titles of item sets using it, e.g. "Early game"
 
 
 @dataclass
@@ -79,7 +83,7 @@ def parse(xml: str) -> Build:
     attrs = build_el.attrib if build_el is not None else {}
     build = Build(
         class_name=attrs.get("className", ""),
-        ascendancy=attrs.get("ascendClassName", ""),
+        ascendancy=attrs.get("ascendClassName", "").replace("None", ""),
         level=int(attrs.get("level", 0) or 0),
         main_skill=_main_skill(root, attrs.get("mainSocketGroup")),
     )
@@ -87,35 +91,41 @@ def parse(xml: str) -> Build:
     items_el = root.find("Items")
     if items_el is None:
         return build
-    slots = _active_slots(items_el)
+    usage = _item_usage(items_el)
     for item_el in items_el.findall("Item"):
         item_id = item_el.get("id", "")
         text = "\n".join(line.strip() for line in "".join(item_el.itertext()).strip().splitlines())
-        build.items.append(PobItem(id=item_id, text=text, slot=slots.get(item_id)))
+        uses = usage.get(item_id, [])
+        slot = next((slot for _, slot, active in uses if active), uses[0][1] if uses else None)
+        sets = list(dict.fromkeys(title for title, _, _ in uses if title))
+        build.items.append(PobItem(id=item_id, text=text, slot=slot, sets=sets))
     return build
 
 
-def _active_slots(items_el: ET.Element) -> dict[str, str]:
-    """Map item id -> slot name for the active item set."""
+def _item_usage(items_el: ET.Element) -> dict[str, list[tuple[str, str, bool]]]:
+    """Item id -> (item set title, slot, is active set) for every set equipping it."""
     active = items_el.get("activeItemSet")
-    slot_els = items_el.findall("Slot")  # older exports keep slots at top level
-    for item_set in items_el.findall("ItemSet"):
-        if item_set.get("id") == active or not slot_els:
-            slot_els = item_set.findall("Slot")
-            if item_set.get("id") == active:
-                break
-    return {
-        s.get("itemId"): s.get("name")
-        for s in slot_els
-        if s.get("itemId") not in (None, "0") and "Swap" not in s.get("name", "")
-    }
+    sets = [(s.get("title") or f"Set {s.get('id')}", s.get("id") == active, s) for s in items_el.findall("ItemSet")]
+    if not sets:  # older exports keep slots at top level
+        sets = [("", True, items_el)]
+    usage: dict[str, list[tuple[str, str, bool]]] = {}
+    for title, is_active, el in sets:
+        for slot in el.findall("Slot"):
+            item_id, name = slot.get("itemId"), slot.get("name", "")
+            if item_id in (None, "0") or "Swap" in name:
+                continue
+            usage.setdefault(item_id, []).append((_COLOR.sub("", title).strip(), name, is_active))
+    return usage
 
 
 def _main_skill(root: ET.Element, main_group: str | None) -> str | None:
     skills = root.find("Skills")
     if skills is None:
         return None
-    groups = skills.findall(".//Skill")
+    active = skills.get("activeSkillSet")
+    skill_sets = skills.findall("SkillSet")
+    container = next((s for s in skill_sets if s.get("id") == active), skill_sets[0] if skill_sets else skills)
+    groups = container.findall("Skill")
     try:
         group = groups[int(main_group) - 1]
     except (TypeError, ValueError, IndexError):

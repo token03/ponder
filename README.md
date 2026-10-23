@@ -46,14 +46,21 @@ ponder mine build1.txt build2.txt ...    # mod combos shared across builds
 ```
 
 `P`/`S` is prefix/suffix, `T1` is the best tier that can roll on that base,
-`F` marks a fractured mod and `~N` means N other mods fit the line equally
-well. Sources:
+`F` marks a fractured mod, `+` marks two mods the game summed into one line
+(e.g. a hybrid %ES prefix plus a plain %ES prefix) and `~N` means N other mods
+fit the line equally well. Sources:
 
 - `natural`: can roll on this base, with these influences
 - `essence`: only from essences
-- `special`: a real mod that can't roll naturally here (veiled, delve,
-  incursion, wrong influence...)
+- `veiled` / `delve`: unveiled mods and fossil-only mods
+- `special`: a real mod that can't roll naturally here (wrong influence,
+  incursion, cluster notables...)
 - `crafted` / `legacy-crafted`: bench craft, current or no longer offered
+
+Each item also lists the PoB item sets that use it (guide authors often name
+them by stage: "Early game", "Mid game", "Endgame"). Lines no mod has, usually
+the author's own notes inside an item, are printed with `#`; lines that look
+like a mod but fit no roll range are printed with `?`.
 
 `ponder mine` counts mod families (all tiers of a mod) per item class and
 lists the combinations shared by the most builds. A combo is hidden when a
@@ -70,12 +77,18 @@ src/ponder/
   mine.py   rank shared mod combinations
   cli.py    the `ponder` command
 tests/      unit tests; the mod tests run once data is fetched
+tests/fixtures/real/  real PoB exports used as regression tests
 ```
+
+## Build sources
+
+pobb.in and pastebin links are fetched directly. Mobalytics sits behind a
+Cloudflare bot check, so copy the PoB code from the page instead.
 
 ## Known gaps
 
-- When the game merges the same stat from two mods into one line (say a
-  hybrid's life plus a flat life prefix), that line is reported as unmatched.
+- A summed line is only split when it is a hybrid plus a single mod; two
+  single mods summed (e.g. natural plus crafted fire res) stay unmatched.
 - Mining groups by exact mod family, so `+1 to Level of all Fire Skill Gems`
   and `... Lightning Skill Gems` count separately. Grouping by what a build
   actually treats as interchangeable comes later.

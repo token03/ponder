@@ -28,9 +28,10 @@ _FLAGS = {
     "Eater of Worlds Item": "eater",
 }
 _MARKER = re.compile(r"^\{(\w+)(?::([^}]*))?\}")
+_COLOR = re.compile(r"\^(x[0-9a-fA-F]{6}|\d)")  # PoB colour codes, e.g. in author notes
 
 
-@dataclass
+@dataclass(eq=False)  # lines are compared by identity; an item can repeat a line
 class ModLine:
     text: str
     markers: dict[str, str] = field(default_factory=dict)
@@ -67,7 +68,8 @@ class Item:
 
 
 def parse_item(text: str) -> Item:
-    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    lines = [_COLOR.sub("", line).strip() for line in text.strip().splitlines()]
+    lines = [line for line in lines if line]
     if not lines or not lines[0].startswith("Rarity:"):
         raise ValueError(f"not a PoB item: {lines[:1]}")
     rarity = lines[0].split(":", 1)[1].strip().upper()
