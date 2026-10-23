@@ -9,7 +9,7 @@ description = "Mine Path of Exile builds for profitable crafting candidates."
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26"]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["pytest>=8"]
 
 [project.scripts]

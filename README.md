@@ -15,10 +15,12 @@ The plan, in stages:
 
 ## Setup
 
+Needs [uv](https://docs.astral.sh/uv/).
+
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/ponder data fetch      # ~60 MB of repoe-fork game data into .cache/repoe
+uv sync                      # makes .venv, installs ponder + pytest
+uv run ponder data fetch     # ~60 MB of repoe-fork game data into .cache/repoe
+uv run pytest                # run the tests
 ```
 
 Game data comes from [repoe-fork](https://github.com/repoe-fork/repoe), which
