@@ -18,7 +18,7 @@ The plan, in stages:
 Needs [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv sync                      # makes .venv, installs ponder + pytest
+uv sync                      # makes .venv, installs ponder, pytest and textual (TUI)
 uv run ponder data fetch     # ~60 MB of repoe-fork game data into .cache/repoe
 uv run pytest                # run the tests
 ```
@@ -31,6 +31,30 @@ somewhere else.
 
 Each source can be a pobb.in or pastebin link, a file holding a PoB code or
 XML, or a PoB code pasted directly.
+
+### One command
+
+```sh
+ponder build.txt                         # = ponder run build.txt
+ponder builds/3.29.txt --trade           # many builds, with trade prices for clusters
+ponder https://pobb.in/XXXX --json       # the same report as JSON, for scripts and LLMs
+ponder tui builds/3.29.txt               # browse it interactively (also: ponder-tui)
+```
+
+`ponder run` loads every build, works out the cheapest craft for each rare
+(gear and cluster jewels), merges the same craft across builds, ranks mod
+combinations the builds share, and with `--trade` prices the cluster jewels
+on the trade site. It prints a table of cluster jewels and one of gear, then
+the full recipe for the top few (`--detail N`). In a terminal the trade links
+are clickable; piped output prints the raw URLs and never wraps.
+
+The TUI runs the same pipeline. Keys: `t` price the selected cluster on
+trade, `T` price all of them, `o` open its trade search, `y` copy the link,
+`f` filter (all / clusters / gear), `s` sort (margin / total / builds /
+cheapest), `n` new builds, `q` quit. It needs `textual`, which `uv sync`
+installs; elsewhere use `pip install 'ponder[tui]'`.
+
+### Single tools
 
 ```sh
 ponder items https://pobb.in/XXXX        # every rare, mod by mod
@@ -141,12 +165,23 @@ Kept as constants so they're easy to correct:
 base prices under `.cache/ninja`; without it a built-in snapshot is used.
 The trade API (the one Awakened PoE Trade uses) refuses some networks; set
 `POESESSID` to your pathofexile.com session cookie if `--trade` gets a 403.
-The printed search link always works in a browser.
+The printed search link always works in a browser. To keep the cookie in a
+git-ignored `.env` (`POESESSID=...`), run `uv run --env-file .env ponder ...`
+or set `UV_ENV_FILE=.env`.
 
 ## Layout
 
+The library has no UI code, so scripts and LLM tools can call it directly
+(`pipeline.run(sources)` returns a `Report`; `Report.to_dict()` is JSON).
+`render.py` turns results into rich renderables, and `cli.py` and `tui.py`
+are thin front ends over both.
+
 ```
 src/ponder/
+  pipeline.py the whole run: builds -> priced crafting estimates (library API)
+  render.py rich tables and recipe panels shared by the CLI and TUI
+  cli.py    `ponder` command line
+  tui.py    `ponder tui` / `ponder-tui` (textual)
   pob.py    decode PoB codes, fetch share links, list items and slots
   item.py   parse PoB item text (header, influences, markers, variants)
   data.py   download and load repoe-fork JSON

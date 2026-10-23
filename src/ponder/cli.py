@@ -1,21 +1,60 @@
-"""Command line entry point: `ponder data|prices|items|mine|cluster|craft`."""
+"""Command line entry point: `ponder [run] SOURCES` and the `data|prices|items|mine|craft|cluster|tui` tools.
+
+The work happens in `pipeline` and the other library modules; this file only
+parses arguments and renders results with rich.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-import urllib.error
-from pathlib import Path
 
-from . import cluster, craft, data, gear, pob, prices, trade
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
+
+from . import cluster, data, gear, pipeline, pob, prices, render
 from .item import parse_item
 from .mine import mine
-from .mods import ItemMatch, ModDB
+from .mods import ModDB
+
+COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui"}
+SOURCES_HELP = "pobb.in/pastebin URL, file, PoB code, or .txt list of links"
+
+# Piped output (files, scripts, LLMs) never wraps, so long trade links stay whole.
+console = Console() if sys.stdout.isatty() else Console(width=100_000)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ponder")
-    sub = parser.add_subparsers(dest="command", required=True)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help"):
+        argv.insert(0, "run")  # `ponder build.txt` is `ponder run build.txt`
+    args = parser().parse_args(argv)
+    try:
+        return COMMAND_FUNCS[args.command](args)
+    except FileNotFoundError as e:
+        console.print(str(e), style="red", markup=False)
+        return 1
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="ponder", description="Cost crafting the rares in PoB builds. `ponder SOURCES` runs the whole pipeline.")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    run = sub.add_parser("run", help="the whole pipeline: cost every rare, mine shared combos, price clusters")
+    run.add_argument("sources", nargs="+", help=SOURCES_HELP)
+    run.add_argument("--trade", action="store_true", help="look up cluster jewel selling prices on the trade site")
+    run.add_argument("--settle", type=int, default=0, help="accept tiers this many steps worse")
+    run.add_argument("--max-targets", type=int, default=4, help="skip items with more target mods than this")
+    run.add_argument("--min-builds", type=int, default=2)
+    run.add_argument("--top", type=int, default=40, help="rows to show")
+    run.add_argument("--detail", type=int, default=3, help="show the full recipe for this many top rows")
+    run.add_argument("--json", action="store_true", help="print the report as JSON")
+
+    tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
+    tui.add_argument("sources", nargs="*", help=SOURCES_HELP)
+    tui.add_argument("--trade", action="store_true")
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -25,11 +64,11 @@ def main(argv: list[str] | None = None) -> int:
     prices_cmd.add_argument("--league", help="poe.ninja league id (default: current challenge league)")
 
     items_cmd = sub.add_parser("items", help="show the rare items in builds, matched to mod ids")
-    items_cmd.add_argument("sources", nargs="+", help="pobb.in/pastebin URL, file, PoB code, or .txt list of links")
+    items_cmd.add_argument("sources", nargs="+", help=SOURCES_HELP)
     items_cmd.add_argument("--all", action="store_true", help="include non-rare items")
 
     mine_cmd = sub.add_parser("mine", help="rank mod combinations shared across builds")
-    mine_cmd.add_argument("sources", nargs="+", help="pobb.in/pastebin URL, file, PoB code, or .txt list of links")
+    mine_cmd.add_argument("sources", nargs="+", help=SOURCES_HELP)
     mine_cmd.add_argument("--min-builds", type=int, default=2)
     mine_cmd.add_argument("--top", type=int, default=30)
 
@@ -57,126 +96,132 @@ def main(argv: list[str] | None = None) -> int:
     cl_cost.add_argument("--passives", type=int, help="added passives on the base (default fewest)")
     cl_cost.add_argument("--fractured", nargs="*", default=[], help="notables already fractured on the base")
     cl_cost.add_argument("--trade", action="store_true", help="look up selling prices on the trade site")
+    return p
 
-    args = parser.parse_args(argv)
-    if args.command == "data":
-        if args.action == "fetch":
-            print(f"fetched repoe data for {data.fetch()} into {data.data_dir()}")
-        else:
-            print(data.version() or "no data; run `ponder data fetch`")
+
+def _links() -> bool:
+    return console.is_terminal
+
+
+def _rule() -> None:
+    console.rule() if console.is_terminal else console.print("-" * 80)
+
+
+def _print_estimates(rows, title: str) -> None:
+    links = _links()
+    console.print()
+    console.print(render.estimates_table(rows, links, title=title))
+    if not links:
+        for i, e in enumerate(rows, 1):
+            if e.trade_url:
+                console.print(f"  #{i} trade: {e.trade_url}", markup=False, highlight=False)
+
+
+def _run(args) -> int:
+    if args.json:
+        report = pipeline.run(args.sources, settle=args.settle, max_targets=args.max_targets, min_builds=args.min_builds, trade_lookup=args.trade)
+        print(json.dumps(report.to_dict(), indent=1))
         return 0
-    if args.command == "prices":
-        if args.action == "fetch":
-            league, n = prices.fetch(args.league)
-            print(f"fetched {n} prices for {league}")
-        table, source = prices.load()
-        print(f"prices from {source}:")
-        for pid in sorted(prices.SNAPSHOT):
-            print(f"  {table.get(pid, 0):>9.3f}c  {pid}")
-        return 0
-    if args.command == "cluster":
-        return _cluster(args)
-    if args.command == "craft":
-        return _craft(args)
-
-    db = ModDB()
-    matched: list[tuple[str, ItemMatch]] = []
-    args.sources = _expand(args.sources)
-    for source in args.sources:
-        build = pob.load(source)
-        if args.command == "items":
-            print(f"== {build.ascendancy or build.class_name} lvl {build.level}: {build.main_skill}  [{source[:60]}]")
-        for pob_item in build.items:
-            item = parse_item(pob_item.text)
-            if item.rarity != "RARE" and not getattr(args, "all", False):
-                continue
-            match = db.match(item)
-            matched.append((source, match))
-            if args.command == "items":
-                _print_match(pob_item.slot, pob_item.sets, match)
-
-    if args.command == "mine":
-        table, source = prices.load()
-        print(f"{len(matched)} rare items from {len(args.sources)} builds; costs use {source}")
-        for c in mine(matched, min_builds=args.min_builds)[: args.top]:
-            cost = _cluster_cost(c.item_class, c.families, table)
-            print(f"{c.builds:>3} builds {c.count:>3} items  {c.item_class:<14} {' + '.join(c.families)}{cost}")
+    with console.status("starting") as status:
+        report = pipeline.run(
+            args.sources,
+            settle=args.settle,
+            max_targets=args.max_targets,
+            min_builds=args.min_builds,
+            trade_lookup=args.trade,
+            progress=lambda msg: status.update(msg[:100]),
+        )
+    links = _links()
+    console.print(render.report_summary(report))
+    ranked = report.ranked()
+    clusters = [e for e in ranked if e.kind == "cluster"]
+    gear_rows = [e for e in ranked if e.kind == "gear"]
+    if clusters:
+        _print_estimates(clusters[: args.top], "Cluster jewels")
+    if gear_rows:
+        _print_estimates(gear_rows[: args.top], "Gear (dearest crafts first)")
+    if report.shared:
+        console.print()
+        console.print(render.shared_table(report.shared[: args.top], links))
+    for e in [e for e in clusters + gear_rows if e.plan][: args.detail]:
+        _rule()
+        console.print(render.estimate_detail(e, report.prices_source, links, rows=8))
+    if not args.trade and clusters:
+        console.print("\n[dim]add --trade to price cluster jewels on the trade site (needs POESESSID if it 403s)[/dim]")
     return 0
 
 
-def _expand(sources: list[str]) -> list[str]:
-    """A text file listing links (one per line, # comments) stands for those links."""
-    out = []
-    for source in sources:
-        path = Path(source)
-        if len(source) < 1024 and path.is_file() and path.suffix == ".txt":
-            lines = [line.split("#")[0].strip() for line in path.read_text().splitlines()]
-            links = [line for line in lines if line]
-            if links and all(line.startswith("http") for line in links):
-                out.extend(links)
-                continue
-        out.append(source)
-    return out
-
-
-def _cluster_cost(key: str, notables, table) -> str:
-    if " cluster: " not in key:
-        return ""
-    size, tag = key.split(" cluster: ")
+def _tui(args) -> int:
     try:
-        _, plan = cluster.cost(size, tag, list(notables), table)
-    except ValueError as e:
-        return f"  (no cost: {e})"
-    base = prices.cluster_base(size, cluster.find_enchant(size, tag).short, cluster.DEFAULT_PASSIVES[size], 84)
-    base_text = f" + {base[0]:,.0f}c base" if base else ""
-    return f"  ~{plan.cost:,.0f}c craft{base_text}"
+        from .tui import run_tui
+    except ImportError:
+        console.print("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
+        return 1
+    return run_tui(args.sources, trade=args.trade)
 
 
-def _cluster(args) -> int:
-    if args.cluster_command == "enchants":
-        for e in cluster.enchants(args.size):
-            print(f"{e.tag:<48} {' / '.join(e.text)}")
-        return 0
-    enchant = cluster.find_enchant(args.size, args.enchant)
-    if args.cluster_command == "notables":
-        mods = cluster.pool(args.size, enchant, args.ilvl)
-        for side in ("prefix", "suffix"):
-            side_total = sum(m.weight for m in mods if m.side == side)
-            print(f"{side}es ({side_total} total weight):")
-            for m in sorted((m for m in mods if m.side == side and m.notable), key=lambda m: -m.weight):
-                print(f"  {m.weight:>6} {m.weight / side_total:>6.1%}  {m.label}")
-        return 0
+def _data(args) -> int:
+    if args.action == "fetch":
+        with console.status("downloading repoe data"):
+            version = data.fetch()
+        console.print(f"fetched repoe data for {version} into {data.data_dir()}", markup=False)
+    else:
+        console.print(data.version() or "no data; run `ponder data fetch`", markup=False)
+    return 0
 
+
+def _prices(args) -> int:
+    if args.action == "fetch":
+        with console.status("fetching poe.ninja prices"):
+            league, n = prices.fetch(args.league)
+        console.print(f"fetched {n} prices for {league}", markup=False)
     table, source = prices.load()
-    problem, plan = cluster.cost(args.size, enchant.tag, args.notables, table, args.need, args.ilvl, args.fractured)
-    passives = args.passives or cluster.DEFAULT_PASSIVES[args.size]
-    print(f"{args.size} cluster, {enchant.short}, {passives} passives, ilvl {args.ilvl}+: {problem.need} of {', '.join(args.notables)}")
-    if args.fractured:
-        print(f"starting from a base with fractured {', '.join(args.fractured)}")
-    _print_plan(problem, plan, source)
+    t = Table(title=f"prices from {source}", title_justify="left", box=None)
+    t.add_column("chaos", justify="right")
+    t.add_column("id")
+    for pid in sorted(prices.SNAPSHOT):
+        t.add_row(f"{table.get(pid, 0):.3f}", pid)
+    console.print(t)
+    return 0
 
-    base = prices.cluster_base(args.size, enchant.short, passives, args.ilvl)
-    total = plan.cost + (base[0] if base else 0)
-    if base and not args.fractured:
-        print(f"base: ~{base[0]:,.1f}c on poe.ninja ({base[1]} listed); total ~{total:,.1f}c")
-    elif not args.fractured:
-        print("base: no poe.ninja price (run `ponder prices fetch`)")
 
-    league = _league()
-    wanted = [m.id for m in problem.pool if m.label.lower() in {n.lower() for n in args.notables}]
-    query = trade.cluster_query(args.size, prices.enchant_option(enchant.short), passives, wanted, args.ilvl)
-    print(f"trade search: {trade.search_url(league, query)}")
-    if args.trade:
-        try:
-            found = trade.price(league, query, table)
-        except urllib.error.HTTPError as e:
-            print(f"trade lookup failed ({e.code}); set POESESSID or use the link above")
-            return 0
-        if found:
-            ask, listed = found
-            print(f"market: median of cheapest asks ~{ask:,.1f}c ({listed} listed); margin ~{ask - total:,.1f}c")
-        else:
-            print("market: no listings found")
+def _items(args) -> int:
+    db = ModDB()
+    for source in pipeline.expand_sources(args.sources):
+        build = pob.load(source)
+        title = f"{escape(pipeline.build_name(build))}  [dim]{escape(source[:60])}[/dim]"
+        console.rule(title) if console.is_terminal else console.print(f"== {title}")
+        for pob_item in build.items:
+            item = parse_item(pob_item.text)
+            if item.rarity != "RARE" and not args.all:
+                continue
+            console.print(render.item_match(pob_item.slot, pob_item.sets, db.match(item)))
+    return 0
+
+
+def _mine(args) -> int:
+    db = ModDB()
+    sources = pipeline.expand_sources(args.sources)
+    matched = []
+    with console.status("loading builds") as status:
+        for source in sources:
+            status.update(f"loading {source[:70]}")
+            for pob_item in pob.load(source).items:
+                item = parse_item(pob_item.text)
+                if item.rarity == "RARE":
+                    matched.append((source, db.match(item)))
+        table, source_note = prices.load()
+        league = pipeline.current_league()
+        shared = []
+        for c in mine(matched, min_builds=args.min_builds)[: args.top]:
+            est = None
+            if " cluster: " in c.item_class:
+                size, tag = c.item_class.split(" cluster: ")
+                status.update(f"solving {c.item_class}")
+                est = pipeline.estimate_cluster(size, tag, list(c.families), table, league)
+            shared.append(pipeline.Shared(c, est))
+    console.print(f"{len(matched)} rare items from {len(sources)} builds; costs use {source_note}", markup=False)
+    console.print(render.shared_table(shared, _links()))
     return 0
 
 
@@ -192,73 +237,67 @@ def _craft(args) -> int:
         match = db.match(item)
         if match.base_id is None or item.base.endswith("Cluster Jewel"):
             continue  # clusters: use `ponder cluster cost`
-        gp = gear.build(db, match, args.settle, args.ilvl)
-        key = (item.base, tuple(t.name for t in gp.problem.targets))
-        if key in seen or not gp.problem.targets:
+        key = pipeline.item_key(match, args.settle)
+        if key in seen:
             continue
         seen.add(key)
-        print(f"\n[{pob_item.slot or 'unequipped'}] {item.base}, ilvl {gp.item_level}")
-        for t in gp.problem.targets:
-            print(f"   target {t.side:<6} {t.name}")
-        for m in gp.problem.fixed:
-            print(f"   fractured     {m.label}")
-        for label, cost in gp.bench:
-            print(f"   bench last    {label}  ({_cost_text(cost)})")
-        for s in gp.skipped:
-            print(f"   not crafted   {s}")
-        if len(gp.problem.targets) > args.max_targets:
-            print(f"   skipped: {len(gp.problem.targets)} targets (raise --max-targets, or --settle to loosen)")
+        with console.status(f"solving {item.base}"):
+            est = pipeline.estimate_gear(db, match, table, settle=args.settle, item_level=args.ilvl, max_targets=args.max_targets)
+        if not est.targets:
             continue
-        try:
-            plan = craft.solve(gp.problem, table)
-        except ValueError as e:
-            print(f"   skipped: {e}")
-            continue
-        _print_plan(gp.problem, plan, source, rows=6)
-        if gp.bench:
-            missing = sorted({pid for _, cost in gp.bench for pid, _ in cost if pid not in table})
-            note = f" (no price for {', '.join(missing)})" if missing else ""
-            print(f"plus bench crafts ~{gp.bench_cost(table):,.1f}c; total ~{plan.cost + gp.bench_cost(table):,.1f}c{note}")
+        est.slot = pob_item.slot or "unequipped"
+        _rule()
+        console.print(render.estimate_detail(est, source, _links(), rows=6))
     return 0
 
 
-def _cost_text(cost) -> str:
-    return ", ".join(f"{n:g} {pid}" for pid, n in cost)
+def _cluster(args) -> int:
+    if args.cluster_command == "enchants":
+        t = Table(box=None, header_style="bold")
+        t.add_column("tag")
+        t.add_column("enchant")
+        for e in cluster.enchants(args.size):
+            t.add_row(e.tag, " / ".join(e.text))
+        console.print(t)
+        return 0
+    enchant = cluster.find_enchant(args.size, args.enchant)
+    if args.cluster_command == "notables":
+        mods = cluster.pool(args.size, enchant, args.ilvl)
+        for side in ("prefix", "suffix"):
+            side_total = sum(m.weight for m in mods if m.side == side)
+            t = Table(title=f"{side}es ({side_total} total weight)", title_justify="left", box=None)
+            t.add_column("weight", justify="right")
+            t.add_column("chance", justify="right")
+            t.add_column("notable")
+            for m in sorted((m for m in mods if m.side == side and m.notable), key=lambda m: -m.weight):
+                t.add_row(str(m.weight), f"{m.weight / side_total:.1%}", m.label)
+            console.print(t)
+        return 0
+
+    table, source = prices.load()
+    league = pipeline.current_league()
+    with console.status("solving"):
+        est = pipeline.estimate_cluster(
+            args.size, enchant.tag, args.notables, table, league,
+            passives=args.passives, item_level=args.ilvl, need=args.need, fractured=args.fractured,
+        )  # fmt: skip
+    if args.trade and est.query:
+        with console.status("asking the trade site"):
+            pipeline.lookup_market(est, table, league)
+    console.print(render.estimate_detail(est, source, _links()))
+    return 0 if est.error is None else 1
 
 
-def _print_plan(problem: craft.Problem, plan: craft.Plan, source: str, rows: int = 12) -> None:
-    print(f"expected cost ~{plan.cost:,.1f}c (prices: {source}; base not included)")
-    used = ", ".join(f"{n:,.1f} {a}" for a, n in sorted(plan.usage.items(), key=lambda x: -x[1]) if n >= 0.05)
-    print(f"expected currency: {used}")
-    print("recipe (most common situations first):")
-    for state, action, share in craft.recipe(problem, plan)[:rows]:
-        print(f"  {share:>6.1%}  {state:<62} -> {action}")
-
-
-def _league() -> str:
-    try:
-        return prices.leagues()[0]
-    except (urllib.error.URLError, OSError, IndexError):
-        return "Standard"
-
-
-def _print_match(slot: str | None, sets: list[str], m: ItemMatch) -> None:
-    item = m.item
-    extra = ", ".join(sorted(item.influences | item.flags))
-    print(f"\n[{slot or 'unequipped'}] {item.name} / {item.base}  ilvl {item.item_level or '?'}" + (f"  ({extra})" if extra else ""))
-    if sets:
-        print(f"   sets: {', '.join(sets)}")
-    if m.base_id is None:
-        print("   ! base type not found in data")
-    for mod in m.prefixes + m.suffixes:
-        tier = f"T{mod.tier}" if mod.tier else "  "
-        flags = "".join(["F" if mod.fractured else "", " +" if mod.merged else "", f" ~{mod.alternatives}" if mod.alternatives else ""])
-        text = " / ".join(line.text for line in mod.lines)
-        print(f"   {mod.kind[0].upper()} {tier:<3} {mod.source:<8} {mod.mod_id:<32} {text}  {flags}".rstrip())
-    for line in m.unmatched:
-        print(f"   ?              {'(no mod fits)':<32} {line.text}")
-    for line in m.notes:
-        print(f"   # {line.text}")
+COMMAND_FUNCS = {
+    "run": _run,
+    "tui": _tui,
+    "data": _data,
+    "prices": _prices,
+    "items": _items,
+    "mine": _mine,
+    "craft": _craft,
+    "cluster": _cluster,
+}
 
 
 if __name__ == "__main__":
