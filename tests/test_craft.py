@@ -136,3 +136,33 @@ def test_gear_targets_respect_tier_and_essences():
     assert any("essence" in a.name for a in gp.problem.actions)
     plan = solve(gp.problem, {**PRICES})  # essences unpriced here, so left out
     assert plan.unpriced and plan.cost > 0
+
+
+def test_metamod_keeps_one_side_and_matches_simulation():
+    lock = Action("lock prefixes+scour", "keep_prefixes", (("divine", 1), ("scour", 1)), (RARE,))
+    problem = toy([lock])
+    [(_, kept)] = problem.outcomes(State(RARE, (GOOD, MISSING), (0, 1, 0, 1)), lock)
+    assert kept == State(RARE, (GOOD, MISSING), (0, 1, 0, 0))
+    assert problem.outcomes(State(RARE, (GOOD, MISSING), (0, 0, 0, 2)), lock) == []  # no suffix room for the metamod
+    # The toy pool is too small for the lock to pay off, so force it wherever it applies
+    # and check the solver's exact value for that policy against a replay.
+    prices = {**PRICES, "divine": 0.5}
+    plan = solve(problem, prices)
+    states, edges = craft._explore(problem)
+    for s in plan.policy:
+        if lock.name in edges[s] and s.status[1] == MISSING and s.junk[3]:
+            plan.policy[s] = lock.name
+    open_states = list(plan.policy)
+    index = {s: i for i, s in enumerate(open_states)}
+    costs = {a.name: craft.action_cost(a, prices) for a in problem.actions}
+    exact = craft._evaluate(open_states, index, edges, plan.policy, costs)[index[problem.start]]
+    assert exact > plan.cost  # the solver was right to skip it here
+    assert craft.simulate(problem, plan, prices, runs=4000, seed=4) == pytest.approx(exact, rel=0.08)
+
+
+def test_reserved_bench_slot_must_stay_open():
+    problem = toy(targets=("A",))
+    problem.reserve = {"prefix": 1}
+    assert not problem.done(State(RARE, (GOOD,), (0, 1, 0, 0)))  # jewel: two prefixes, none left
+    assert problem.done(State(RARE, (GOOD,), (0, 0, 0, 2)))
+    assert solve(problem, PRICES).cost > solve(toy(targets=("A",)), PRICES).cost

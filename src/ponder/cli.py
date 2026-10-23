@@ -202,14 +202,28 @@ def _craft(args) -> int:
             print(f"   target {t.side:<6} {t.name}")
         for m in gp.problem.fixed:
             print(f"   fractured     {m.label}")
+        for label, cost in gp.bench:
+            print(f"   bench last    {label}  ({_cost_text(cost)})")
         for s in gp.skipped:
             print(f"   not crafted   {s}")
         if len(gp.problem.targets) > args.max_targets:
             print(f"   skipped: {len(gp.problem.targets)} targets (raise --max-targets, or --settle to loosen)")
             continue
-        plan = craft.solve(gp.problem, table)
+        try:
+            plan = craft.solve(gp.problem, table)
+        except ValueError as e:
+            print(f"   skipped: {e}")
+            continue
         _print_plan(gp.problem, plan, source, rows=6)
+        if gp.bench:
+            missing = sorted({pid for _, cost in gp.bench for pid, _ in cost if pid not in table})
+            note = f" (no price for {', '.join(missing)})" if missing else ""
+            print(f"plus bench crafts ~{gp.bench_cost(table):,.1f}c; total ~{plan.cost + gp.bench_cost(table):,.1f}c{note}")
     return 0
+
+
+def _cost_text(cost) -> str:
+    return ", ".join(f"{n:g} {pid}" for pid, n in cost)
 
 
 def _print_plan(problem: craft.Problem, plan: craft.Plan, source: str, rows: int = 12) -> None:

@@ -39,6 +39,19 @@ HARVEST = {
 }
 RESONATOR = "primitive-chaotic-resonator"
 
+# Crafting bench costs are game metadata ids; these are their poe.ninja price ids.
+BENCH_CURRENCY = {
+    "CurrencyUpgradeToMagic": "transmute", "CurrencyRerollMagic": "alt", "CurrencyAddModToMagic": "aug",
+    "CurrencyUpgradeMagicToRare": "regal", "CurrencyUpgradeToRare": "alch", "CurrencyRerollRare": "chaos",
+    "CurrencyAddModToRare": "exalted", "CurrencyUpgradeRandomly": "chance", "CurrencyModValues": "divine",
+    "CurrencyCorrupt": "vaal", "CurrencyConvertToNormal": "scour", "CurrencyInstillingOrb": "instilling-orb",
+    "CurrencyRerollSocketNumbers": "jewellers", "CurrencyRerollSocketLinks": "fusing",
+    "CurrencyRerollSocketColours": "chrome", "CurrencyArmourQuality": "scrap",
+}  # fmt: skip
+LOCK_PREFIXES = "StrMasterItemGenerationCannotChangePrefixes"  # a suffix
+LOCK_SUFFIXES = "DexMasterItemGenerationCannotChangeSuffixes"  # a prefix
+MULTIMOD = "StrIntMasterItemGenerationCanHaveMultipleCraftedMods"  # a suffix
+
 
 def harvest(pool: list[Mod]) -> tuple[list[Action], dict[str, dict[str, float]]]:
     """Harvest reforges whose tag at least one mod in the pool carries."""
@@ -97,6 +110,25 @@ def fossils(pool: list[Mod]) -> tuple[list[Action], dict[str, dict[str, float]]]
         pid = _slug(fossil["name"])
         acts.append(Action(f"{name} fossil", "reroll_rare", ((pid, 1), (RESONATOR, 1)), (NORMAL, RARE), profile=f"fossil:{name}"))
     return acts, profiles
+
+
+def bench_cost(item_class: str, mod_id: str) -> tuple[tuple[str, float], ...] | None:
+    """What the crafting bench charges to add `mod_id`, or None if it can't."""
+    for option in data.load("crafting_bench_options"):
+        if (option.get("actions") or {}).get("add_explicit_mod") == mod_id and item_class in option["item_classes"]:
+            return tuple((BENCH_CURRENCY.get(k.rsplit("/", 1)[-1], k), float(n)) for k, n in option["cost"].items())
+    return None
+
+
+def metamods(item_class: str) -> list[Action]:
+    """Lock one side with a bench metamod, then scour away the other side."""
+    acts = []
+    for mod_id, kind in ((LOCK_PREFIXES, "keep_prefixes"), (LOCK_SUFFIXES, "keep_suffixes")):
+        cost = bench_cost(item_class, mod_id)
+        if cost:
+            name = "lock prefixes+scour" if kind == "keep_prefixes" else "lock suffixes+scour"
+            acts.append(Action(name, kind, cost + (("scour", 1),), (RARE,)))
+    return acts
 
 
 def _slug(name: str) -> str:

@@ -67,7 +67,7 @@ class Action:
     """One currency use. `cost` is [(price id, quantity)]."""
 
     name: str
-    kind: str  # transmute alt aug regal exalt annul reroll_magic reroll_rare
+    kind: str  # transmute alt aug regal exalt annul reroll_magic reroll_rare keep_prefixes keep_suffixes
     cost: tuple[tuple[str, float], ...]
     from_rarity: tuple[int, ...]
     profile: str = "base"  # weight profile for rolled mods
@@ -86,6 +86,7 @@ class Problem:
     fixed: list[Mod] = field(default_factory=list)  # fractured mods, never removed
     profiles: dict[str, dict[str, float]] = field(default_factory=dict)  # name -> mod id -> weight
     extra_mods: dict[str, Mod] = field(default_factory=dict)  # forced mods outside the pool
+    reserve: dict[str, int] = field(default_factory=dict)  # side -> slots left open for bench crafts at the end
 
     @cached_property
     def mods(self) -> dict[str, Mod]:
@@ -164,7 +165,24 @@ class Problem:
         return self.count(s, "prefix") + self.count(s, "suffix")
 
     def done(self, s: State) -> bool:
-        return sum(v == GOOD for v in s.status) >= self.need
+        if sum(v == GOOD for v in s.status) < self.need:
+            return False
+        limit = 1 if s.rarity == MAGIC else self.limit
+        return all(self.count(s, side) + n <= limit for side, n in self.reserve.items())
+
+    def keep(self, s: State, side: str) -> list[tuple[float, State]]:
+        """Bench "<other side> Cannot Be Changed", then scour: only `side` (and fractured mods) stay.
+
+        The metamod takes a slot on the other side, so that side needs room.
+        """
+        other = "suffix" if side == "prefix" else "prefix"
+        if self.count(s, other) >= self.limit:
+            return []
+        status = tuple(v if self.targets[i].side == side else self.base.status[i] for i, v in enumerate(s.status))
+        kept = (0, 1) if side == "prefix" else (2, 3)
+        junk = tuple(n if slot in kept else self.base.junk[slot] for slot, n in enumerate(s.junk))
+        out = State(RARE, status, junk)
+        return [(1.0, out if self.total(out) else State(NORMAL, status, junk))]
 
     # -- mechanics ----------------------------------------------------------
 
@@ -272,6 +290,8 @@ class Problem:
             return self.add_mod(s) if self.total(s) < 2 * self.limit else []
         if a.kind == "annul":
             return self.annul(s)
+        if a.kind in ("keep_prefixes", "keep_suffixes"):
+            return self.keep(s, a.kind[5:-2])
         return []
 
 
@@ -468,6 +488,10 @@ def _apply(problem: Problem, a: Action, rarity: int, mods: list[Mod], rng, cache
             gone = rng.choice(removable)
             mods = [m for m in mods if m is not gone]
         return rarity, mods
+    if a.kind in ("keep_prefixes", "keep_suffixes"):
+        side = a.kind[5:-2]
+        kept = [m for m in mods if m.side == side or m in problem.fixed]
+        return (RARE if kept else NORMAL), kept
     raise ValueError(a.kind)
 
 

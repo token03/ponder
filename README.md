@@ -102,15 +102,25 @@ Actions, built from repoe data and costed in poe.ninja prices:
 - Harvest "reforge with a <tag> modifier" for every tag the pool has
 - essences (Shrieking and Deafening) for the item class, with a scour on rares
 - single fossils with a Primitive Chaotic Resonator (gear only)
+- metamods: "Prefixes/Suffixes Cannot Be Changed" then scour, which keeps one
+  side and clears the other (gear only; the metamod needs a free slot on the
+  side it takes)
 
-Item level filters the mod pool. Fractured mods (`--fractured`, or read from
-a PoB item) stay through every reroll and can't be annulled. Actions with no
-price are left out rather than counted as free.
+Crafted mods on a PoB item that the bench still offers become the last step:
+the plan must finish with a free slot on that side, and the bench cost (plus
+"Can have up to 3 Crafted Modifiers" when there are two) is added on top.
 
-Not modelled yet: bench crafts and metamods ("prefixes cannot be changed"),
-multi-fossil combos, Eldritch currency, influence orbs, Awakener, Recombinator,
-veiled mods, and Harvest's newer crafts. `ponder craft` lists the mods on an
-item it doesn't try to make (bench crafts, veiled and special mods).
+Item level filters the mod pool. When a PoB item has no item level, it is
+raised from 84 to whatever its mods need (T1 life or movement speed need 86).
+Fractured mods (`--fractured`, or read from a PoB item) stay through every
+reroll and can't be annulled. Actions with no price are left out rather than
+counted as free.
+
+Not modelled yet: bench crafts used mid-craft (e.g. to block a mod group
+before an exalt), "Cannot roll Attack/Caster Modifiers", multi-fossil combos,
+Eldritch currency, influence orbs, Awakener, Recombinator, veiled mods, and
+Harvest's newer crafts. `ponder craft` lists the mods on an item it doesn't
+try to make (veiled, legacy-crafted and special mods).
 
 ### Assumptions not in the game data
 
@@ -141,9 +151,9 @@ src/ponder/
   mods.py   match lines to mod ids, tiers and sources
   mine.py   rank shared mod combinations
   craft.py  crafting states, policy iteration, simulation
-  actions.py currencies, Harvest, essences and fossils as solver actions
+  actions.py currencies, Harvest, essences, fossils, bench and metamods
   cluster.py cluster jewel enchants, mod pools, costs
-  gear.py   targets from a PoB rare (tiers, fractures, essence mods)
+  gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods)
   prices.py poe.ninja prices
   trade.py  trade-site queries
   cli.py    the `ponder` command
