@@ -257,3 +257,17 @@ def test_self_fracture_needs_four_mods_and_pays_for_misses():
     a = next(a for a in p.actions if a.name == f.action)
     assert abs(f.cost - (craft.step_cost(a, prices) / f.hit + 100.0) / f.fracture_chance) < 1e-9
     assert craft.self_fracture(toy(), 0, prices) is None  # jewels can't be fractured
+
+
+def test_steps_follow_the_policy_flow():
+    """Steps start at the normal base, every listed exit points at a step or finishes, and the chances add up."""
+    problem = toy()
+    plan = solve(problem, PRICES)
+    steps = craft.steps(problem, plan, min_reach=0.0)
+    assert steps[0].rarity == NORMAL and steps[0].reached == pytest.approx(1.0)
+    numbers = {st.number for st in steps}
+    for st in steps:
+        assert sum(x.chance for x in st.exits) == pytest.approx(1.0, abs=1e-6)
+        assert all(x.to in numbers for x in st.exits if x.kind != "done")
+    assert sum(st.uses for st in steps) == pytest.approx(sum(plan.usage.values()))
+    assert any(x.kind == "done" for st in steps for x in st.exits)

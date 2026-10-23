@@ -197,6 +197,10 @@ class Estimate:
     def recipe(self, rows: int = 12) -> list[tuple[str, str, float]]:
         return craft.recipe(self.problem, self.plan)[:rows] if self.plan else []
 
+    def steps(self) -> list[craft.Step]:
+        """The plan from scratch as numbered steps (`craft.steps`)."""
+        return craft.steps(self.problem, self.plan) if self.plan and self.problem else []
+
     def recipe_states(self, rows: int = 12) -> list[tuple[craft.State, str, float]]:
         return craft.recipe_states(self.plan)[:rows] if self.plan else []
 
@@ -230,6 +234,7 @@ class Estimate:
             "clicking_hours": self.plan.hours if self.plan else None,
             "currency_chaos": self.plan.currency if self.plan else None,
             "recipe": [{"state": s, "action": a, "share": share} for s, a, share in self.recipe()],
+            "steps": [dataclasses.asdict(st) for st in self.steps()],
             "fractures": [f.to_dict() for f in self.fractures],
             "not_crafted": self.skipped,
             "trade_url": self.trade_url,

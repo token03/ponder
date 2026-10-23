@@ -251,7 +251,7 @@ def shared_table(shared: list[Shared], links: bool = True, pal: Palette = ANSI) 
     return t
 
 
-def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, rows: int = 12, pal: Palette = ANSI) -> RenderableType:
+def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, pal: Palette = ANSI) -> RenderableType:
     parts: list[RenderableType] = [_header(e, pal), Text(""), _mod_lines(e, pal)]
     if e.error:
         parts += [Text(""), Text(f"no plan: {e.error}", style=pal.bad)]
@@ -263,10 +263,12 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
         parts += [Text(""), recomb_steps(e, pal)]
     pick = suggested_fracture(e)
     if pick and pick.plan:
-        title = Text.assemble("recipe · starting from a base with ", (f"fractured {pick.target}", pal.fractured))
-        parts += [Text(""), _recipe(pick.problem, pick.plan, title, rows, pal), Text(""), _currency(pick.plan)]
+        how = "making" if pick.self_made else "buying"
+        title = Text.assemble(f"recipe · {how} a base with ", (f"fractured {pick.target}", pal.fractured))
+        made = pick.made if pick.self_made else None
+        parts += [Text(""), steps_text(pick.problem, pick.plan, title, pal, made), Text(""), _currency(pick.plan)]
     else:
-        parts += [Text(""), _recipe(e.problem, e.plan, Text("recipe · what to do in each situation, commonest first"), rows, pal)]
+        parts += [Text(""), steps_text(e.problem, e.plan, Text("recipe · step by step"), pal)]
         parts += [Text(""), _currency(e.plan)]
     return Group(*parts)
 
@@ -414,15 +416,67 @@ def suggested_fracture(e: Estimate):
     return best if best and e.total and best.plan.cost < 0.5 * e.total else None
 
 
-def _recipe(problem: craft.Problem, plan: craft.Plan, title: Text, rows: int, pal: Palette) -> Table:
-    title.stylize("bold")
-    t = Table(title=title, title_justify="left", box=None, pad_edge=False, header_style="dim")
-    t.add_column("share", justify="right", style=pal.share)
-    t.add_column("situation")
-    t.add_column("do", style=f"bold {pal.action}")
-    for state, action, share in craft.recipe_states(plan)[:rows]:
-        t.add_row(f"{share:.0%}" if share >= 0.1 else f"{share:.1%}", situation(problem, state, pal), Text(action))
-    return t
+def steps_text(problem: craft.Problem, plan: craft.Plan, title: Text, pal: Palette = ANSI, made: craft.SelfFracture | None = None) -> Text:
+    """The plan as numbered steps: what to spam, and where each outcome sends you.
+
+    1. magic, nothing yet: spam alt ~38× (aug if 1 other suffix)
+         a. 50% +Life → 3
+         b. 50% +Mana → 4
+    """
+    out = Text()
+    out.append_text(title.copy())
+    out.stylize("bold")
+    if made:
+        t = problem.fixed[-1].label
+        out.append("\n 0. ", style="bold")
+        out.append("make the base: ")
+        out.append(f"spam {made.action}", style=f"bold {pal.action}")
+        out.append(f" until {t} lands with ≤{made.max_mods} mods, then ")
+        out.append("Fracturing Orb", style=f"bold {pal.action}")
+        out.append(f"\n      a. {made.fracture_chance:.0%} it fractures {t} → 1", style="")
+        out.append(f"\n      b. {1 - made.fracture_chance:.0%} another mod fractures: new base, back to 0", style=pal.bad)
+        out.append(f"\n      (~{made.rerolls:,.0f} rerolls and {made.orbs:.1f} orbs in all, {money(made.cost)})", style="dim")
+    for st in craft.steps(problem, plan):
+        out.append(f"\n{st.number:2d}. ", style="bold")
+        out.append(("normal", "magic", "rare")[st.rarity], style={1: pal.magic, 2: pal.rare}.get(st.rarity, ""))
+        if st.have:
+            out.append(" with ")
+            out.append(" + ".join(st.have), style=pal.good)
+        elif not (st.number == 1 and problem.fixed):
+            out.append(", nothing yet", style="dim")
+        out.append(": ")
+        for i, (a, when, n) in enumerate(st.actions[:3]):
+            if i:
+                out.append(f"; if {when}: ", style="dim")
+            out.append(f"spam {a}" if n >= 3 else a, style=f"bold {pal.action}")
+            if n >= 1.5:
+                out.append(f" ~{n:,.0f}×" if n >= 10 else f" ~{n:.1f}×", style="dim")
+        letter = 0
+        rest = 0.0
+        main = st.actions[0][0] if st.actions else ""
+        for x in st.exits:
+            if x.chance < 0.01:
+                rest += x.chance
+                continue
+            out.append(f"\n      {'abcdefghij'[letter]}. {x.chance:4.0%} ", style="dim")
+            letter += 1
+            if x.kind == "done":
+                if x.what != "done":
+                    out.append(f"{x.what}  ", style=pal.good)
+                out.append("→ done", style=f"bold {pal.good}")
+                continue
+            if x.kind == "rare":
+                out.append(f"{x.what}: start over", style="dim")
+                continue
+            if x.via != main:
+                out.append(f"{x.via}: ", style=pal.action)
+            out.append(x.what, style={"win": pal.good, "back": pal.bad}.get(x.kind, ""))
+            out.append(f"  → back to {x.to}" if x.kind == "back" else f"  → {x.to}", style="bold")
+            if letter >= 6:
+                break
+        if rest >= 0.005:
+            out.append(f"\n      {'abcdefghij'[letter]}. {rest:4.0%} other outcomes", style="dim")
+    return out
 
 
 def situation(problem: craft.Problem, state: craft.State, pal: Palette = ANSI) -> Text:

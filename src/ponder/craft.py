@@ -739,6 +739,111 @@ def recipe(problem: Problem, plan: Plan, min_share: float = 0.01) -> list[tuple[
     return sorted(rows, key=lambda r: -r[2])
 
 
+@dataclass
+class Exit:
+    chance: float  # per time you reach the step
+    to: int | None  # step number; None when the item is done or the branch is too rare to list
+    what: str  # e.g. "+Life", "lost Life", "done"
+    kind: str  # "done", "win", "back" (lost a target), "side" (same targets, something else changed), "rare" (unlisted)
+    via: str = ""  # the action that mostly leads here
+
+
+@dataclass
+class Step:
+    """One stretch of a recipe: every situation with the same rarity and the same targets on the item."""
+
+    number: int
+    rarity: int
+    have: tuple[str, ...]  # target names on the item
+    actions: list[tuple[str, str, float]]  # (action, what else is on the item when you use it, uses per reach), most used first
+    reached: float  # expected times you get here per finished item
+    uses: float  # expected actions here per finished item
+    exits: list[Exit]
+
+    @property
+    def per_reach(self) -> float:
+        return self.uses / self.reached if self.reached else 0.0
+
+
+def steps(problem: Problem, plan: Plan, min_reach: float = 0.02) -> list[Step]:
+    """The policy as numbered steps ("spam X until Y: a. ... → 3, b. ... → back to 1").
+
+    States are grouped by progress: rarity plus which targets are on at a good
+    tier. Following the policy's flow between groups gives, per step, how
+    often you reach it, how many actions it takes and where each outcome
+    leads. Steps reached less than `min_reach` times per item are folded
+    into their parent's "rare" exit.
+    """
+    by_name = {a.name: a for a in problem.actions}
+
+    def key(st: State) -> tuple[int, frozenset[int]]:
+        return st.rarity, frozenset(i for i, v in enumerate(st.status) if v == GOOD)
+
+    open_visits = {st: v for st, v in plan.visits.items() if v > 1e-9 and st in plan.policy}
+    groups: dict[tuple, list[State]] = {}
+    for st in open_visits:
+        groups.setdefault(key(st), []).append(st)
+    reached = {k: 0.0 for k in groups}
+    if key(problem.start) in reached:
+        reached[key(problem.start)] += 1.0
+    flow: dict[tuple, dict] = {k: {} for k in groups}  # group -> next group (or "done") -> expected moves
+    via: dict[tuple, dict] = {}  # (group, next) -> action -> expected moves
+    for st, v in open_visits.items():
+        k = key(st)
+        a = plan.policy[st]
+        for p, nxt in problem.outcomes(st, by_name[a]):
+            to = "done" if problem.done(nxt) else key(nxt)
+            if to == k:
+                continue
+            flow[k][to] = flow[k].get(to, 0.0) + v * p
+            by = via.setdefault((k, to), {})
+            by[a] = by.get(a, 0.0) + v * p
+            if to != "done" and to in reached:
+                reached[to] += v * p
+    kept = sorted((k for k in groups if reached[k] >= min_reach or k == key(problem.start)), key=lambda k: (len(k[1]), k[0], -reached[k]))
+    number = {k: i + 1 for i, k in enumerate(kept)}
+    names = [t.name for t in problem.targets]
+    out = []
+    for k in kept:
+        rarity, have = k
+        acts: dict[str, list] = {}
+        for st in groups[k]:
+            a = plan.policy[st]
+            acts.setdefault(a, [0.0, st, 0.0])
+            acts[a][0] += open_visits[st]
+            if open_visits[st] > acts[a][2]:
+                acts[a][1], acts[a][2] = st, open_visits[st]
+        uses = sum(v for v, _, _ in acts.values())
+        actions = [(a, _else(problem, st), v / reached[k]) for a, (v, st, _) in sorted(acts.items(), key=lambda x: -x[1][0])]
+        exits, rare = [], 0.0
+        for to, n in sorted(flow[k].items(), key=lambda x: -x[1]):
+            chance = n / reached[k]
+            by = max(via[(k, to)].items(), key=lambda x: x[1])[0]
+            if to == "done":
+                rest = [names[i] for i in range(len(names)) if i not in have]
+                what = f"got {', '.join(rest)}" if rest and problem.need == len(names) else "done"
+                exits.append(Exit(chance, None, what, "done", by))
+            elif to in number:
+                gained, lost = to[1] - have, have - to[1]
+                what = ", ".join([f"got {names[i]}" for i in sorted(gained)] + [f"lost {names[i]}" for i in sorted(lost)])
+                if not what:
+                    what = f"now {('normal', 'magic', 'rare')[to[0]]}"
+                kind = "back" if lost else "win" if gained else "side"
+                exits.append(Exit(chance, number[to], what, kind, by))
+            else:
+                rare += chance
+        if rare > 1e-6:
+            exits.append(Exit(rare, None, "something rarer", "rare"))
+        out.append(Step(number[k], rarity, tuple(names[i] for i in sorted(have)), actions, reached[k], uses, exits))
+    return out
+
+
+def _else(problem: Problem, s: State) -> str:
+    """What's on the item besides good targets, e.g. "2 other prefix + 1 other suffix"."""
+    _, parts = describe_parts(problem, s)
+    return " + ".join(text for text, kind in parts if kind != "good") or "nothing else"
+
+
 # -- simulation on real mods ----------------------------------------------------
 
 

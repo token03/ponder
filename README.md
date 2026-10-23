@@ -243,8 +243,23 @@ ponder cluster cost large "minion damage" HaveIncreasedEffect@1 GrantMinionAttac
 ponder craft https://pobb.in/XXXX --slot Helmet --settle 1                 # any rare in a build
 ```
 
-Each prints the expected cost, the expected currency used, and the recipe:
-the action to take in each situation you'll actually meet. `cluster cost`
+Each prints the expected cost, the expected currency used, and the recipe
+as numbered steps (`craft.steps`): situations with the same rarity and the
+same targets on the item form one step, which says what to spam (and what to
+use instead in its rarer situations), then lists each outcome with its chance
+and the step it leads to, or *back to* an earlier one when a target is lost:
+
+```
+ 2. magic, nothing yet: spam alt ~30×; if 1 other suffix: spam aug ~8.7×
+      a.  50% got +(39-49) to maximum Energy Shield (T1)  → 4
+      b.  50% got (92-100)% increased Energy Shield (T1)  → 3
+ 5. rare with (92-100)% increased Energy Shield (T1): eldritch exalt (prefix); if 2 other prefix + 1 other suffix: scour+transmute
+      a.  95% scour+transmute: lost (92-100)% increased Energy Shield (T1)  → back to 2
+      b.   2% got +(39-49) to maximum Energy Shield (T1)  → 7
+```
+
+A self-made fractured base is step 0. The per-state table (`craft.recipe`,
+the share of all actions each situation takes) is still in the JSON. `cluster cost`
 also prints the poe.ninja base price, a trade-site search link, and with
 `--trade` the market price and margin.
 

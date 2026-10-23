@@ -201,7 +201,7 @@ def _run(args) -> int:
         out(render.shared_table(report.shared[: args.top], links))
     for e in [e for e in clusters + gear_rows if e.plan][: args.detail]:
         _rule()
-        out(render.estimate_detail(e, report.prices_source, links, rows=8))
+        out(render.estimate_detail(e, report.prices_source, links))
     hints = []
     if not args.trade:
         hints.append("--trade to price items on the trade site")
@@ -394,7 +394,7 @@ def _craft(args) -> int:
         pipeline.solve_all(estimates, table, progress=status.update)
     for est in estimates:
         _rule()
-        out(render.estimate_detail(est, source, _links(), rows=6))
+        out(render.estimate_detail(est, source, _links()))
     return 0
 
 
