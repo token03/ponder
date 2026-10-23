@@ -71,9 +71,16 @@ For each craft it prints the expected cost and the recipe, and:
   Fractured bases are real money, so with `--trade` their price is looked up
   (a fractured-item search for that mod at its minimum tier and the item
   level the rest needs), each item's two most promising fractures first; once
-  priced, the suggestion is the cheapest total. Items in a build that already
-  have a fractured mod need such a base too; until it is priced their total
-  shows `+base`.
+  priced, the suggestion is the cheapest total. Gear bases can also be
+  **made**: reroll (chaos, scour+alch, an essence that forces the mod, a
+  fossil combo, Harvest) until the mod lands on an item with few enough mods,
+  then a Fracturing Orb, which needs 4+ mods and picks the wanted one 1 time
+  in k; a miss ruins the base and you start over (`craft.self_fracture`).
+  That also covers essence-only mods no bought base has, and the base column
+  says `make` when it beats buying. Ladder runs cost these for gear too.
+  Jewels are not fractured this way. Items in a build that already have a
+  fractured mod need such a base too; until it is priced their total shows
+  `+base`.
 - `--trade`: the selling price (median of the cheapest asks) and the margin,
   using whichever is cheaper, scratch or the best fracture. See below for the
   search budget.

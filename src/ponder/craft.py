@@ -487,6 +487,67 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     )
 
 
+FRACTURE_ORB = "fracturing-orb"
+FRACTURE_MIN_MODS = 4  # a Fracturing Orb needs a rare with at least this many mods
+FRACTURE_SECONDS = 3.0
+
+
+@dataclass
+class SelfFracture:
+    """Make your own fractured base: reroll until the mod lands with few enough mods, then fracture.
+
+    A Fracturing Orb fixes one random mod of `k`, so it hits the wanted one
+    1 time in k; a miss ruins the base and the loop starts over on a new one.
+    """
+
+    target: int  # index into the problem's targets
+    action: str  # the reroll to spam
+    max_mods: int  # fracture only when the item has at most this many mods
+    hit: float  # chance one reroll lands the mod with few enough mods
+    fracture_chance: float  # chance the orb then picks it
+    cost: float  # expected chaos (currency and clicking) to a base with the mod fractured
+    hours: float
+
+    @property
+    def rerolls(self) -> float:
+        return 1 / (self.hit * self.fracture_chance)
+
+    @property
+    def orbs(self) -> float:
+        return 1 / self.fracture_chance
+
+
+def self_fracture(problem: Problem, target: int, prices: dict[str, float]) -> SelfFracture | None:
+    """The cheapest way to roll and fracture `problem.targets[target]` yourself (gear only).
+
+    Each rare reroll (chaos, scour+alch, essences, fossils, Harvest) gives,
+    from its exact roll distribution, the chance P_k of the mod landing at a
+    good tier on an item with k mods. Fracturing only at k <= K costs
+    (reroll / P(k <= K) + orb) / E[1/k | k <= K]; the best reroll and K win.
+    """
+    if problem.kind != "gear" or problem.fixed or FRACTURE_ORB not in prices:
+        return None
+    orb = prices[FRACTURE_ORB] + FRACTURE_SECONDS * CHAOS_PER_HOUR / 3600
+    best = None
+    for a in problem.actions:
+        if a.kind != "reroll_rare" or RARE not in a.from_rarity or any(pid not in prices for pid, _ in a.cost):
+            continue
+        by_k: dict[int, float] = {}
+        for p, s in problem.roll(RARE, a.profile, a.first_profile, a.forced):
+            if s.status[target] == GOOD and (k := problem.total(s)) >= FRACTURE_MIN_MODS:
+                by_k[k] = by_k.get(k, 0.0) + p
+        step = step_cost(a, prices)
+        hit = chance = 0.0
+        for k in sorted(by_k):
+            hit += by_k[k]
+            chance = sum(p / j for j, p in by_k.items() if j <= k) / hit
+            cost = (step / hit + orb) / chance
+            if best is None or cost < best.cost:
+                hours = (seconds(a) / hit + FRACTURE_SECONDS) / chance / 3600
+                best = SelfFracture(target, a.name, k, hit, chance, cost, hours)
+    return best
+
+
 def _cheapest_of_equals(acts: list[Action], problem: Problem, prices: dict[str, float]) -> list[Action]:
     """Rerolls with the same outcomes from the same rarities: only the cheapest can be optimal."""
     best: dict[tuple, Action] = {}

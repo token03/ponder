@@ -58,16 +58,27 @@ class Fracture:
     base_price: tuple[float, int] | None = None
     base_error: str | None = None
     error: str | None = None
+    made: craft.SelfFracture | None = None  # fracturing the mod yourself, when that's possible
 
     @property
     def craft_cost(self) -> float | None:
         return self.plan.cost if self.plan else None
 
     @property
+    def base_cost(self) -> float | None:
+        """The cheaper of buying the fractured base and making it."""
+        options = [x for x in (self.base_price[0] if self.base_price else None, self.made.cost if self.made else None) if x is not None]
+        return min(options) if options else None
+
+    @property
+    def self_made(self) -> bool:
+        return self.made is not None and self.base_cost == self.made.cost
+
+    @property
     def total(self) -> float | None:
-        if self.plan is None or self.base_price is None:
+        if self.plan is None or self.base_cost is None:
             return None
-        return self.plan.cost + self.base_price[0]
+        return self.plan.cost + self.base_cost
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +86,7 @@ class Fracture:
             "craft_cost": self.craft_cost,
             "base_price": self.base_price[0] if self.base_price else None,
             "base_listed": self.base_price[1] if self.base_price else None,
+            "self_made": dataclasses.asdict(self.made) if self.made else None,
             "total": self.total,
             "trade_url": self.trade_url,
             "error": self.error or self.base_error,
@@ -350,7 +362,7 @@ def run(
 
     if fractures:
         for e in estimates:
-            add_fractures(e, league)
+            add_fractures(e, league, table)
     extra = [s.estimate for s in shared if s.estimate and s.estimate not in estimates]
     solve_all(estimates + extra + [f for e in estimates for f in e.fractures], table, workers, say)
     if recombs:
@@ -462,6 +474,7 @@ def ladder(
             continue
         est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
         est.used_base = ""
+        add_fractures(est, league, table)  # self-made fractured bases: essence or reroll, then fracture
         estimates[est.key] = est
     n_gear = len(estimates)
     for a in found_cl:
@@ -659,12 +672,14 @@ def add_recombs(estimates: list[Estimate], table: dict[str, float], workers: int
         e.recomb = planner.best()
 
 
-def add_fractures(est: Estimate, league: str) -> None:
+def add_fractures(est: Estimate, league: str, table: dict[str, float] | None = None) -> None:
     """The same craft starting from a base with one wanted mod already fractured.
 
-    One option per target that can roll naturally (an essence-only mod can't
-    be on a base you buy), and one per filler family the item uses (e.g. "any
-    fractured fire resistance at T3+"). The solver's numbers come from `solve_all`.
+    One option per target, and one per filler family the item uses (e.g.
+    "any fractured fire resistance at T3+"). Bought bases get a trade search;
+    with `table`, gear targets are also costed as self-made (reroll, then a
+    Fracturing Orb: `craft.self_fracture`), which also covers essence-only
+    mods no bought base has. The solver's numbers come from `solve_all`.
     """
     if est.problem is None or est.error or est.fractures:
         return
@@ -688,7 +703,10 @@ def add_fractures(est: Estimate, league: str) -> None:
             f.trade_url = trade.search_url(league, f.query)
         est.fractures.append(f)
     for i, t in enumerate(p.targets):
+        made = craft.self_fracture(p, i, table) if table is not None else None
         candidates = [pool[m] for m in t.good if m in pool]
+        if not candidates and made:  # essence-only: no base drops with it, but you can make one
+            candidates = [p.mods[m] for m in t.good if m in p.mods]
         if not candidates:
             continue
         mod = max(candidates, key=lambda m: m.weight)  # the commonest acceptable tier
@@ -699,11 +717,11 @@ def add_fractures(est: Estimate, league: str) -> None:
             fixed=p.fixed + [dataclasses.replace(mod, weight=0)],
             actions=list(p.actions),
         )
-        f = Fracture(t.name, mod.id, problem)
+        f = Fracture(t.name, mod.id, problem, made=made)
         if est.kind == "cluster":
             c = est.search
             f.query = trade.cluster_query(c["size"], c["enchant"], c["passives"], [], est.item_level, fractured_ids=[mod.id] + est.fixed_ids)
-        else:
+        elif mod.id in pool:
             frac = [(sid, trade.stat_min(t.good if m == mod.id else [m])) for m in [mod.id] + est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
             if frac:
                 f.query = trade.item_query(**est.search, stats=frac, item_level=est.item_level, fractured_only=True)

@@ -245,3 +245,15 @@ def test_clicking_time_is_charged(monkeypatch):
     paid = solve(toy(), PRICES)
     assert paid.cost > free.cost
     assert abs(paid.cost - paid.currency - paid.hours * 3600) < 1e-6
+
+
+def test_self_fracture_needs_four_mods_and_pays_for_misses():
+    """Fracturing hits the wanted mod 1 time in k (k >= 4 mods); misses start over."""
+    p = Problem(pool=POOL, targets=[target("A"), target("B")], need=2, actions=list(actions.BASIC), kind="gear")
+    prices = {**PRICES, "fracturing-orb": 100.0}
+    f = craft.self_fracture(p, 0, prices)
+    assert f is not None and f.max_mods >= 4
+    assert 1 / 6 <= f.fracture_chance <= 1 / 4
+    a = next(a for a in p.actions if a.name == f.action)
+    assert abs(f.cost - (craft.step_cost(a, prices) / f.hit + 100.0) / f.fracture_chance) < 1e-9
+    assert craft.self_fracture(toy(), 0, prices) is None  # jewels can't be fractured

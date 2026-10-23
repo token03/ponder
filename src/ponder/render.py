@@ -391,7 +391,12 @@ def _fractures(e: Estimate, links: bool, pal: Palette) -> Table:
             vs = Text("-", style="dim")
         else:
             vs = Text(("−" if saving > 0 else "+") + money(abs(saving)), style=pal.good if saving > 0 else pal.bad)
-        base = money_text(f.base_price[0]) if f.base_price else Text(f.base_error or "?", style="dim")
+        if f.self_made:
+            base = Text.assemble(money_text(f.made.cost), (" make", pal.action))
+        elif f.base_price:
+            base = money_text(f.base_price[0])
+        else:
+            base = Text(f.base_error or "?", style="dim")
         name = Text(f.target, style=pal.fractured)
         if f is pick:
             name.append("  ◀ suggested", style=f"bold {pal.good}")
