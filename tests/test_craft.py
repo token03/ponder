@@ -163,3 +163,55 @@ def test_reserved_bench_slot_must_stay_open():
     assert not problem.done(State(RARE, (GOOD,), (0, 1, 0, 0)))  # jewel: two prefixes, none left
     assert problem.done(State(RARE, (GOOD,), (0, 0, 0, 2)))
     assert solve(problem, PRICES).cost > solve(toy(targets=("A",)), PRICES).cost
+
+
+FILLER_POOL = POOL + [Mod("r1", "suffix", 200, ("r1",), False, "fire res"), Mod("r2", "suffix", 200, ("r2",), False, "cold res")]
+GEAR_PRICES = {**PRICES, "eldritch-exalted-orb": 6.0, "eldritch-orb-of-annulment": 15.0, "divine": 30.0}
+
+
+def gear_toy(extra_actions=(), targets=("A", "C"), filler_need=1):
+    return Problem(
+        pool=FILLER_POOL,
+        targets=[target(t) for t in targets],
+        need=len(targets),
+        actions=list(actions.BASIC) + list(extra_actions),
+        kind="gear",
+        filler=frozenset({"r1", "r2"}),
+        filler_need=filler_need,
+    )
+
+
+def test_filler_counts_any_of_its_mods():
+    problem = gear_toy()
+    assert problem.classify("r2") == (-1, 5)
+    assert not problem.done(State(RARE, (GOOD, GOOD), (0, 1, 0, 1, 0, 0)))
+    assert problem.done(State(RARE, (GOOD, GOOD), (0, 0, 0, 0, 0, 1)))
+    plan = solve(problem, GEAR_PRICES)
+    assert craft.simulate(problem, plan, GEAR_PRICES, runs=4000, seed=5) == pytest.approx(plan.cost, rel=0.08)
+
+
+def test_eldritch_side_currencies_match_simulation():
+    eldritch = actions.eldritch("Gloves")
+    assert not actions.eldritch("Gloves", {"shaper"}) and not actions.eldritch("Ring")
+    problem = gear_toy(eldritch)
+    plan = solve(problem, GEAR_PRICES)
+    assert plan.cost < solve(gear_toy(), GEAR_PRICES).cost  # cheap side-only slams help
+    assert any("eldritch" in a and n > 0 for a, n in plan.usage.items())
+    assert craft.simulate(problem, plan, GEAR_PRICES, runs=4000, seed=6) == pytest.approx(plan.cost, rel=0.08)
+
+
+def test_lock_and_reroll_keeps_one_side_and_matches_simulation():
+    lock = Action("lock prefixes+chaos", "lockreroll_prefixes", (("divine", 1), ("chaos", 1)), (RARE,))
+    problem = gear_toy([lock], targets=("A", "C"), filler_need=2)
+    s = State(RARE, (GOOD, GOOD), (0, 0, 0, 1, 0, 1))
+    out = problem.outcomes(s, lock)
+    assert abs(sum(p for p, _ in out) - 1) < 1e-9
+    assert all(n.status == (GOOD, GOOD) and problem.count(n, "suffix") <= 2 for _, n in out)  # metamod holds a slot
+    # Force the lock wherever it applies and the prefixes are done, then replay.
+    plan = solve(problem, GEAR_PRICES)
+    states, edges = craft._explore(problem)
+    for st in plan.policy:
+        if lock.name in edges[st] and st.status == (GOOD, GOOD):
+            plan.policy[st] = lock.name
+    exact = craft.evaluate(problem, plan.policy, GEAR_PRICES)
+    assert craft.simulate(problem, plan, GEAR_PRICES, runs=4000, seed=7) == pytest.approx(exact, rel=0.08)

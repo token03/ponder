@@ -76,9 +76,11 @@ def item_query(
     item_level: int | None = None,
     fractured_only: bool = False,
     extra: list[dict] = (),
+    count: tuple[int, list[tuple[str, float | None]]] | None = None,
 ) -> dict:
-    """A search for non-unique items with all of `stats` (trade stat id, minimum value)."""
-    filters = [{"id": sid, "value": {"min": low} if low is not None else {}, "disabled": False} for sid, low in stats]
+    """A search for non-unique items with all of `stats` (trade stat id, minimum value),
+    and, with `count=(n, stats)`, at least n of those other stats."""
+    filters = [_stat_filter(sid, low) for sid, low in stats]
     filters += list(extra)
     type_filters: dict = {"rarity": {"option": "nonunique"}}
     if category:
@@ -88,6 +90,8 @@ def item_query(
         "stats": [{"type": "and", "filters": filters}],
         "filters": {"type_filters": {"filters": type_filters}},
     }
+    if count and count[0] and count[1]:
+        query["stats"].append({"type": "count", "value": {"min": count[0]}, "filters": [_stat_filter(sid, low) for sid, low in count[1]]})
     if base:
         query["type"] = base
     misc: dict = {}
@@ -98,6 +102,10 @@ def item_query(
     if misc:
         query["filters"]["misc_filters"] = {"filters": misc}
     return {"query": query, "sort": {"price": "asc"}}
+
+
+def _stat_filter(sid: str, low: float | None) -> dict:
+    return {"id": sid, "value": {"min": low} if low is not None else {}, "disabled": False}
 
 
 def cluster_query(

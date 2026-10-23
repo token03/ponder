@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import cluster, craft, gear, pob, prices, trade
+from . import cluster, craft, data, gear, pob, prices, trade
 from .gear import Row
 from .item import parse_item
 from .mine import Candidate, mine, target_key
@@ -108,6 +108,7 @@ class Estimate:
     market: tuple[float, int] | None = None  # (median of cheapest asks, total listed)
     market_error: str | None = None
     fractures: list[Fracture] = field(default_factory=list)
+    filler_families: list[str] = field(default_factory=list)  # e.g. ["ColdResistance", "FireResistance"]
     search: dict = field(default_factory=dict)  # how to search its bases: cluster size/enchant/passives, or gear base/category
     error: str | None = None  # why there is no plan
 
@@ -254,6 +255,7 @@ def run(
     min_builds: int = 2,
     top: int = 30,
     fractures: bool = False,
+    exact: bool = False,
     trade_lookup: bool = False,
     trade_budget: int = 40,
     workers: int | None = None,
@@ -282,7 +284,7 @@ def run(
             rares += 1
             match = db.match(item)
             matched.append((source, match))
-            est = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets, solve=False)
+            est = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets, exact=exact, solve=False)
             if est is None or not est.targets:
                 continue
             est = by_key.setdefault(est.key, est)
@@ -318,7 +320,14 @@ def run(
 
 
 def estimate_item(
-    db: ModDB, match: ItemMatch, table: dict[str, float], league: str, settle: int = 0, max_targets: int = 4, solve: bool = True
+    db: ModDB,
+    match: ItemMatch,
+    table: dict[str, float],
+    league: str,
+    settle: int = 0,
+    max_targets: int = 4,
+    exact: bool = False,
+    solve: bool = True,
 ) -> Estimate | None:
     """The craft for one rare, or None when we can't craft it (unknown base, cluster without notables)."""
     item = match.item
@@ -331,7 +340,7 @@ def estimate_item(
         return estimate_cluster(size, tag, notables, table, league, passives=int(count) if count else None, solve=solve)
     if match.base_id is None:
         return None
-    return estimate_gear(db, match, table, league, settle=settle, max_targets=max_targets, solve=solve)
+    return estimate_gear(db, match, table, league, settle=settle, max_targets=max_targets, exact=exact, solve=solve)
 
 
 def estimate_cluster(
@@ -395,9 +404,11 @@ def estimate_gear(
     settle: int = 0,
     item_level: int | None = None,
     max_targets: int = 4,
+    exact: bool = False,
     solve: bool = True,
 ) -> Estimate:
-    gp = gear.build(db, match, settle, item_level)
+    """With `exact`, resistances are targets like any other mod instead of filler."""
+    gp = gear.build(db, match, settle, item_level, exact=exact)
     grp = gear.group(db, match)
     p = gp.problem
     est = Estimate(
@@ -412,6 +423,8 @@ def estimate_gear(
             tuple(sorted(m.id for m in p.fixed)),
             tuple(sorted(gp.bench_ids)),
             gp.item_level,
+            p.filler_need,
+            p.filler,
         ),
         base=grp.best,
         used_base=match.item.base if match.item.base != grp.best else "",
@@ -423,12 +436,14 @@ def estimate_gear(
         skipped=list(gp.skipped),
         fixed=[m.label for m in p.fixed],
         fixed_ids=[m.id for m in p.fixed],
+        filler_families=gp.filler_families,
     )
     where = {"category": trade.CATEGORIES.get(grp.item_class)} if grp.item_class in JEWELLERY and len(grp.bases) > 1 else {"base": grp.best}
     stats = [(sid, trade.stat_min(t.good)) for t in p.targets if (sid := trade.stat_id(next(iter(t.good))))]
     stats += [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m))]
-    if stats:
-        est.query = trade.item_query(**where, stats=stats)
+    filler = _filler_stats(p.filler)
+    if stats or filler:
+        est.query = trade.item_query(**where, stats=stats, count=(p.filler_need, filler))
         est.trade_url = trade.search_url(league, est.query)
     if est.fixed_ids:
         frac = [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
@@ -442,16 +457,47 @@ def estimate_gear(
     return est
 
 
-def add_fractures(est: Estimate, league: str) -> None:
-    """One `Fracture` per target: the same craft starting from a base with that target fractured.
+def _filler_stats(filler) -> list[tuple[str, float | None]]:
+    """One (trade stat, minimum) per filler family, e.g. fire resistance at its T3 minimum."""
+    mods = data.load("mods")
+    by_family: dict[str, list[str]] = {}
+    for m in filler:
+        by_family.setdefault(mods[m]["type"], []).append(m)
+    out = []
+    for ids in by_family.values():
+        if sid := trade.stat_id(ids[0]):
+            out.append((sid, trade.stat_min(ids)))
+    return out
 
-    Only targets that can roll naturally are offered (an essence-only mod
-    can't be on a base you buy). The solver's numbers come from `solve_all`.
+
+def add_fractures(est: Estimate, league: str) -> None:
+    """The same craft starting from a base with one wanted mod already fractured.
+
+    One option per target that can roll naturally (an essence-only mod can't
+    be on a base you buy), and one per filler family the item uses (e.g. "any
+    fractured fire resistance at T3+"). The solver's numbers come from `solve_all`.
     """
-    if est.problem is None or est.error or len(est.problem.targets) < 2 or est.fractures:
+    if est.problem is None or est.error or est.fractures:
         return
     p = est.problem
+    if len(p.targets) + p.filler_need < 2:
+        return
     pool = {m.id: m for m in p.pool}
+    mods = data.load("mods")
+    for family in est.filler_families:
+        ids = [m for m in p.filler if mods[m]["type"] == family and m in pool]
+        if not ids:
+            continue
+        mod = max((pool[m] for m in ids), key=lambda m: m.weight)
+        # A fractured filler mod counts toward filler_need through the base state.
+        problem = dataclasses.replace(p, fixed=p.fixed + [dataclasses.replace(mod, weight=0)], actions=list(p.actions))
+        f = Fracture(f"{mod.label} (filler)", mod.id, problem)
+        frac = [(sid, trade.stat_min(ids))] if (sid := trade.stat_id(mod.id, "fractured")) else []
+        frac += [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
+        if frac:
+            f.query = trade.item_query(**est.search, stats=frac, item_level=est.item_level, fractured_only=True)
+            f.trade_url = trade.search_url(league, f.query)
+        est.fractures.append(f)
     for i, t in enumerate(p.targets):
         candidates = [pool[m] for m in t.good if m in pool]
         if not candidates:
@@ -578,8 +624,11 @@ def price_on_trade(
             jobs.append((e, "market"))
         if e.base_query and e.base_price is None:
             jobs.append((e, "base"))
-    for e in estimates:
-        jobs += [(f, "fracture") for f in e.fractures if f.query and f.plan and f.base_price is None]
+    # Fractured bases: every item's two most promising first (cheapest to finish), then the rest.
+    ranked = {id(e): sorted((f for f in e.fractures if f.query and f.plan), key=lambda f: f.plan.cost) for e in estimates}
+    for top in (slice(0, 2), slice(2, None)):
+        for e in estimates:
+            jobs += [(f, "fracture") for f in ranked[id(e)][top] if f.base_price is None]
     for i, (obj, what) in enumerate(jobs, 1):
         if used >= budget:
             say(f"trade budget of {budget} searches used; {len(jobs) - i + 1} left unpriced")
@@ -587,6 +636,25 @@ def price_on_trade(
         name = obj.target if what == "fracture" else obj.title
         say(f"trade {i}/{len(jobs)}: {what} · {name}")
         used += lookup(obj, what, table, league)
+    return used
+
+
+def price_fractures(
+    estimates: list[Estimate], table: dict[str, float], league: str, per_item: int = 2, budget: int = 40, progress: Progress | None = None
+) -> int:
+    """Batch-price fractured bases: each item's `per_item` most promising fractures (cheapest to finish)."""
+    say = progress or (lambda _msg: None)
+    jobs = []
+    for e in estimates:
+        best = sorted((f for f in e.fractures if f.query and f.plan and f.base_price is None), key=lambda f: f.plan.cost)
+        jobs += best[:per_item]
+    used = 0
+    for i, f in enumerate(jobs, 1):
+        if used >= budget:
+            say(f"trade budget of {budget} searches used; {len(jobs) - i + 1} fractured bases left unpriced")
+            break
+        say(f"fractured base {i}/{len(jobs)}: {f.target}")
+        used += lookup(f, "fracture", table, league)
     return used
 
 

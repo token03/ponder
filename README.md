@@ -51,14 +51,29 @@ then highest drop level; experimental bases are skipped), since the same mods
 sell for more on it. Jewellery is searched by category, since its bases differ
 only by implicit. The same craft needed by several builds is merged.
 
+**Targets vs filler.** A craft doesn't copy the PoB item mod for mod.
+Resistances (fire, cold, lightning, all, chaos) become *filler*: the item
+needs as many resistances as it had, any of them, at T3 or better (or the
+item's own tier if worse), because buyers want enough res, rarely a
+particular one. Everything else (life, attributes, ES, gem levels...) stays a
+target at its tier or better. This is what makes resistance-guaranteeing
+tools (Harvest fire/cold/lightning reforges, essences, Frigid/Scorched/Metallic
+fossils) and side-only finishing (eldritch currency) worth using. `--exact`
+turns it off and asks for every mod as it is.
+
 For each craft it prints the expected cost and the recipe, and:
 
-- `--fractures`: for every target, the cost of buying a base with that mod
-  already fractured and crafting the rest, against crafting from scratch.
+- `--fractures`: for every target, and every filler resistance the item uses,
+  the cost of buying a base with that mod already fractured and crafting the
+  rest, against crafting from scratch. The cheapest to finish is marked
+  *suggested* and its recipe is the one shown (e.g. wand: buy fractured +1
+  cold spell gems, spam Shrieking Essence of Misery for cast speed).
   Fractured bases are real money, so with `--trade` their price is looked up
   (a fractured-item search for that mod at its minimum tier and the item
-  level the rest needs). Items in a build that already have a fractured mod
-  need such a base too; until it is priced their total shows `+base`.
+  level the rest needs), each item's two most promising fractures first; once
+  priced, the suggestion is the cheapest total. Items in a build that already
+  have a fractured mod need such a base too; until it is priced their total
+  shows `+base`.
 - `--trade`: the selling price (median of the cheapest asks) and the margin,
   using whichever is cheaper, scratch or the best fracture. See below for the
   search budget.
@@ -78,7 +93,8 @@ costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
 them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
 `/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
 builds), `t` price the selected item on trade, `T` price everything shown
-within the search budget, `o`/`y` open or copy its trade search, `b` other
+within the search budget, `F` price the two most promising fractured bases
+of every item shown, `o`/`y` open or copy its trade search, `b` other
 builds, `q` quit.
 
 Colour means something: fractured mods gold, bench crafts light blue, essence
@@ -162,9 +178,15 @@ Actions, built from repoe data and costed in poe.ninja prices:
 - Harvest "reforge with a <tag> modifier" for every tag the pool has
 - essences (Shrieking and Deafening) for the item class, with a scour on rares
 - single fossils with a Primitive Chaotic Resonator (gear only)
-- metamods: "Prefixes/Suffixes Cannot Be Changed" then scour, which keeps one
-  side and clears the other (gear only; the metamod needs a free slot on the
-  side it takes)
+- metamods: "Prefixes/Suffixes Cannot Be Changed", then either scour (keeps
+  one side, clears the other) or a reroll of the other side: chaos, or a
+  Harvest reforge whose tag can hit a wanted mod there (gear only; the
+  metamod needs a free slot on the side it takes, and holds it during the
+  reroll)
+- eldritch currency on helmets, body armours, gloves and boots without
+  influence: Eldritch Exalted Orb adds a prefix or a suffix only, Eldritch
+  Orb of Annulment removes one from one side only (the implicits that pick
+  the side are cheap and not counted)
 
 Crafted mods on a PoB item that the bench still offers become the last step:
 the plan must finish with a free slot on that side, and the bench cost (plus
@@ -178,8 +200,8 @@ counted as free.
 
 Not modelled yet: bench crafts used mid-craft (e.g. to block a mod group
 before an exalt), "Cannot roll Attack/Caster Modifiers", multi-fossil combos,
-Eldritch currency, influence orbs, Awakener, Recombinator, veiled mods, and
-Harvest's newer crafts. `ponder craft` lists the mods on an item it doesn't
+Eldritch Chaos Orbs and eldritch implicits as targets, influence orbs,
+Awakener, Recombinator, veiled mods, and Harvest's newer crafts. `ponder craft` lists the mods on an item it doesn't
 try to make (veiled, legacy-crafted and special mods).
 
 ### Assumptions not in the game data
@@ -190,6 +212,9 @@ Kept as constants so they're easy to correct:
 - rare mod counts: gear 4/5/6 at 9:3:1 (a 1,000-chaos sample), jewels 3/4 at
   3:1 (`craft.RARE_MOD_COUNTS`)
 - jewels hold 2 prefixes and 2 suffixes; clusters hold 1 / 2 / 3 notables
+- filler: resistances at T3 or better (`gear.FILLER_FAMILIES`, `gear.FILLER_TIER`)
+- a side-locked reroll rolls the usual number of mods in total, the kept
+  ones and the metamod included
 - Harvest reforge costs: fire, cold and lightning are sourced; the other tags
   are guesses priced at the dearest lifeforce (`actions.HARVEST`)
 

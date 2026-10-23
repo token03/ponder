@@ -58,6 +58,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--trade", action="store_true", help="price finished items and fractured bases on the trade site (POESESSID in .env)")
     run.add_argument("--trade-budget", type=int, default=40, help="most trade searches to send (cached answers are free; default 40)")
     run.add_argument("--fractures", action="store_true", help="also cost starting from a base with each target already fractured")
+    run.add_argument("--exact", action="store_true", help="every mod as on the PoB item (resistances aren't treated as interchangeable filler)")
     run.add_argument("--settle", type=int, default=0, help="accept tiers this many steps worse")
     run.add_argument("--max-targets", type=int, default=4, help="skip items with more target mods than this")
     run.add_argument("--min-builds", type=int, default=2)
@@ -137,6 +138,7 @@ def _run(args) -> int:
         max_targets=args.max_targets,
         min_builds=args.min_builds,
         fractures=args.fractures,
+        exact=args.exact,
         trade_lookup=args.trade,
         trade_budget=args.trade_budget,
         workers=args.workers,

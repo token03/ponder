@@ -52,6 +52,7 @@ KEYS = [
     ("s", "sort: margin · craft · cheapest · fracture saving · builds"),
     ("t", "price the selected item on trade (item, fractured bases)"),
     ("T", "price everything shown, within the trade budget"),
+    ("F", "price the 2 most promising fractured bases of every item shown"),
     ("o / y", "open / copy the trade search"),
     ("b", "load other builds"),
     ("ctrl+p", "command palette (themes live here)"),
@@ -88,6 +89,7 @@ class PonderApp(App):
     BINDINGS = [
         Binding("t", "trade", "price"),
         Binding("T", "trade_all", "price all"),
+        Binding("F", "fracture_prices", "fracture bases"),
         Binding("o", "open_link", "open"),
         Binding("y", "copy_link", "copy link", show=False),
         Binding("f", "cycle_filter", "filter"),
@@ -270,6 +272,18 @@ class PonderApp(App):
     def action_trade_all(self) -> None:
         if self.report:
             self.lookup(self.rows(), budget=40)
+
+    def action_fracture_prices(self) -> None:
+        if self.report:
+            self.price_fractures(self.rows())
+
+    @work(thread=True, exclusive=True, group="trade")
+    def price_fractures(self, estimates: list[pipeline.Estimate]) -> None:
+        league = self.report.league
+        used = pipeline.price_fractures(
+            estimates, self.table, league, per_item=2, budget=40, progress=lambda m: self.call_from_thread(self.set_status, escape(m))
+        )
+        self.call_from_thread(self.after_lookup, estimates, used)
 
     @work(thread=True, exclusive=True, group="trade")
     def lookup(self, estimates: list[pipeline.Estimate], budget: int) -> None:

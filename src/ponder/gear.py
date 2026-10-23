@@ -23,6 +23,9 @@ DEFAULT_ITEM_LEVEL = 84
 
 
 DEFENCES = {"str": "Armour", "dex": "Evasion", "int": "ES"}
+# Resistances are filler: buyers want enough of them, rarely a particular one.
+FILLER_FAMILIES = frozenset({"FireResistance", "ColdResistance", "LightningResistance", "AllResistances", "ChaosResistance"})
+FILLER_TIER = 3  # filler at this tier or better counts (or the item's own tier, if worse)
 _DEFENCE_TAG = re.compile(r"^((?:str|dex|int)(?:_(?:str|dex|int))*)_(armour|shield)$")
 
 
@@ -59,6 +62,7 @@ class GearProblem:
     bench: list[tuple[str, tuple[tuple[str, float], ...]]] = field(default_factory=list)  # (label, cost) crafted last
     rows: list[Row] = field(default_factory=list)
     bench_ids: list[str] = field(default_factory=list)
+    filler_families: list[str] = field(default_factory=list)  # families of the item's filler mods
 
     def bench_cost(self, prices: dict[str, float]) -> float:
         return sum(action_cost_of(cost, prices) for _, cost in self.bench)
@@ -119,7 +123,9 @@ def _defence(tag: str) -> str:
     return "/".join(DEFENCES[p] for p in parts)
 
 
-def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None = None) -> GearProblem:
+def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None = None, exact: bool = False) -> GearProblem:
+    """The craft for a PoB rare. Its resistances become filler ("any N resistances at
+    T3+") unless `exact`, which asks for every mod as it is."""
     if match.base_id is None:
         raise ValueError(f"unknown base {match.item.base!r}")
     ilvl = item_level or match.item.item_level or DEFAULT_ITEM_LEVEL
@@ -128,11 +134,14 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
     mods = pool(db, match.base_id, match.tags, ilvl)
     item_class = match.item_class
     targets, fixed, skipped, extra, bench, rows, bench_ids = [], [], [], {}, [], [], []
+    filler_mods = []
     reserve: dict[str, int] = {}
     has_multimod = False
     for m in match.mods:
         text = " / ".join(line.text for line in m.lines)
-        if m.fractured:
+        if not exact and not m.fractured and m.source == "natural" and m.tier and m.family in FILLER_FAMILIES:
+            filler_mods.append((m, text))
+        elif m.fractured:
             fixed.append(_mod(m.mod_id, db.mods[m.mod_id], 0))
             rows.append(Row("fractured", m.kind, text, f"T{m.tier}" if m.tier else ""))
         elif m.source == "natural" and m.tier:
@@ -166,6 +175,12 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         bench_ids.insert(0, actions.MULTIMOD)
         rows.append(Row("bench", "suffix", "Can have up to 3 Crafted Modifiers", "bench"))
         reserve["suffix"] = reserve.get("suffix", 0) + 1
+    filler, worst = frozenset(), 0
+    if filler_mods:
+        worst = max(FILLER_TIER, max(m.tier for m, _ in filler_mods) + settle)
+        filler = frozenset(x.id for x in mods if db.mods[x.id]["type"] in FILLER_FAMILIES and (db.tier(x.id, match.tags) or 99) <= worst)
+        for m, text in filler_mods:
+            rows.append(Row("filler", m.kind, text, f"any res T{worst}+"))
     harvest, h_profiles = actions.harvest(mods)
     fossil, f_profiles = actions.fossils(mods)
     essence, forced = actions.essences(item_class, ilvl)
@@ -175,14 +190,24 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         pool=mods,
         targets=targets,
         need=len(targets),
-        actions=actions.BASIC + harvest + fossil + essence + actions.metamods(item_class),
+        actions=actions.BASIC + harvest + fossil + essence + actions.metamods(item_class, _lock_rerolls(harvest, h_profiles, targets, filler))
+        + actions.eldritch(item_class, match.item.influences),
         kind="jewel" if item_class in JEWEL_CLASSES else "gear",
         fixed=fixed,
         profiles={**h_profiles, **f_profiles},
         extra_mods=extra,
         reserve=reserve,
+        filler=filler,
+        filler_need=len(filler_mods),
     )
-    return GearProblem(problem, ilvl, skipped, bench, rows, bench_ids)
+    families = sorted({m.family for m, _ in filler_mods})
+    return GearProblem(problem, ilvl, skipped, bench, rows, bench_ids, families)
+
+
+def _lock_rerolls(harvest: list, profiles: dict, targets: list[Target], filler: frozenset[str]) -> list:
+    """Harvest reforges worth pairing with a side lock: their tag can hit a target or filler mod."""
+    wanted = {m for t in targets for m in t.good} | set(filler)
+    return [h for h in harvest if wanted & set(profiles[h.first_profile])]
 
 
 def cost(db: ModDB, match: ItemMatch, prices: dict[str, float], settle: int = 0, item_level: int | None = None) -> tuple[GearProblem, Plan]:

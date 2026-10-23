@@ -30,6 +30,8 @@ MAGIC_TWO_MOD_CHANCE = 0.5  # transmute/alteration roll 1 or 2 mods
 # Gear follows a 1,000-chaos sample (4:5:6 = 9:3:1); jewels assume the same 3:1 step.
 RARE_MOD_COUNTS = {"jewel": {3: 0.75, 4: 0.25}, "gear": {4: 9 / 13, 5: 3 / 13, 6: 1 / 13}}
 RARE_AFFIX_LIMIT = {"jewel": 2, "gear": 3}  # per side
+SIDE_SLOTS = {"prefix": (0, 1, 4), "suffix": (2, 3, 5)}  # State.junk slots on each side
+JUNK_LABELS = ("other prefix notable", "other prefix", "other suffix notable", "other suffix", "filler prefix", "filler suffix")
 
 NORMAL, MAGIC, RARE = 0, 1, 2
 MISSING, GOOD, BLOCKED = 0, 1, 2
@@ -59,7 +61,13 @@ class Target:
 class State:
     rarity: int
     status: tuple[int, ...]  # per target: MISSING, GOOD or BLOCKED
-    junk: tuple[int, int, int, int] = (0, 0, 0, 0)  # prefix notable/other, suffix notable/other
+    # Mods that aren't targets, by slot: prefix notable, prefix other, suffix notable,
+    # suffix other, prefix filler, suffix filler (filler: wanted, but any will do).
+    junk: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
+
+    def __post_init__(self) -> None:
+        if len(self.junk) < 6:
+            object.__setattr__(self, "junk", tuple(self.junk) + (0,) * (6 - len(self.junk)))
 
     def __hash__(self) -> int:  # states are hashed millions of times while solving
         try:
@@ -95,6 +103,8 @@ class Problem:
     profiles: dict[str, dict[str, float]] = field(default_factory=dict)  # name -> mod id -> weight
     extra_mods: dict[str, Mod] = field(default_factory=dict)  # forced mods outside the pool
     reserve: dict[str, int] = field(default_factory=dict)  # side -> slots left open for bench crafts at the end
+    filler: frozenset[str] = frozenset()  # mods that count as filler (e.g. any resistance at T3+)
+    filler_need: int = 0  # how many filler mods the finished item needs, on top of the targets
 
     @cached_property
     def mods(self) -> dict[str, Mod]:
@@ -120,12 +130,14 @@ class Problem:
                 return i, GOOD
             if set(mod.groups) & t.groups:
                 return i, BLOCKED
+        if mod_id in self.filler:
+            return -1, 4 if mod.side == "prefix" else 5
         return -1, (0 if mod.side == "prefix" else 2) + (0 if mod.notable else 1)
 
     @cached_property
     def base(self) -> State:
         """The fractured mods alone."""
-        status, junk = [MISSING] * len(self.targets), [0, 0, 0, 0]
+        status, junk = [MISSING] * len(self.targets), [0] * 6
         for m in self.fixed:
             i, v = self.classify(m.id)
             if i >= 0:
@@ -143,7 +155,7 @@ class Problem:
         out = {}
         for name in {"base", *self.profiles}:
             tw: dict[tuple[int, int], float] = {}
-            groups: dict[int, dict[tuple, float]] = {0: {}, 1: {}, 2: {}, 3: {}}
+            groups: dict[int, dict[tuple, float]] = {slot: {} for slot in range(6)}
             for mod_id, w in self.weights(name).items():
                 if w <= 0:
                     continue
@@ -163,7 +175,7 @@ class Problem:
 
     def count(self, s: State, side: str) -> int:
         n = sum(1 for i, v in enumerate(s.status) if v != MISSING and self.targets[i].side == side)
-        return n + (s.junk[0] + s.junk[1] if side == "prefix" else s.junk[2] + s.junk[3])
+        return n + sum(s.junk[slot] for slot in SIDE_SLOTS[side])
 
     def notables(self, s: State) -> int:
         on = sum(1 for i, v in enumerate(s.status) if v != MISSING and self.targets[i].notable)
@@ -173,7 +185,7 @@ class Problem:
         return self.count(s, "prefix") + self.count(s, "suffix")
 
     def done(self, s: State) -> bool:
-        if sum(v == GOOD for v in s.status) < self.need:
+        if sum(v == GOOD for v in s.status) < self.need or s.junk[4] + s.junk[5] < self.filler_need:
             return False
         limit = 1 if s.rarity == MAGIC else self.limit
         return all(self.count(s, side) + n <= limit for side, n in self.reserve.items())
@@ -187,21 +199,26 @@ class Problem:
         if self.count(s, other) >= self.limit:
             return []
         status = tuple(v if self.targets[i].side == side else self.base.status[i] for i, v in enumerate(s.status))
-        kept = (0, 1) if side == "prefix" else (2, 3)
+        kept = SIDE_SLOTS[side]
         junk = tuple(n if slot in kept else self.base.junk[slot] for slot, n in enumerate(s.junk))
         out = State(RARE, status, junk)
         return [(1.0, out if self.total(out) else State(NORMAL, status, junk))]
 
     # -- mechanics ----------------------------------------------------------
 
-    def add_mod(self, s: State, profile: str = "base") -> list[tuple[float, State]]:
-        """Add one random mod: augment, regal, exalt, or one draw of a reroll."""
+    def add_mod(
+        self, s: State, profile: str = "base", sides: tuple[str, ...] = ("prefix", "suffix"), taken: int = 0
+    ) -> list[tuple[float, State]]:
+        """Add one random mod: augment, regal, exalt, or one draw of a reroll (eldritch exalts: one side only).
+
+        `taken` slots on each allowed side are already used by something the state doesn't track (a metamod).
+        """
         tw, junk = self._lumped[profile]
         limit = 1 if s.rarity == MAGIC else self.limit
         cap_hit = self.notables(s) >= self.notable_cap
         options: list[tuple[float, State]] = []
-        for side in ("prefix", "suffix"):
-            if self.count(s, side) >= limit:
+        for side in sides:
+            if self.count(s, side) + taken >= limit:
                 continue
             for i, t in enumerate(self.targets):
                 if t.side != side or s.status[i] != MISSING or (t.notable and cap_hit):
@@ -211,7 +228,7 @@ class Problem:
                         status = list(s.status)
                         status[i] = v
                         options.append((tw[(i, v)], State(s.rarity, tuple(status), s.junk)))
-            for slot in (0, 1) if side == "prefix" else (2, 3):
+            for slot in SIDE_SLOTS[side]:
                 if slot in (0, 2) and cap_hit:
                     continue
                 total, removed = junk[slot]
@@ -258,15 +275,56 @@ class Problem:
             dist = nxt
         return [(p, s) for s, p in result.items() if p > 0]
 
-    def annul(self, s: State) -> list[tuple[float, State]]:
-        """Remove one random mod that isn't fractured."""
+    def lock_reroll(self, s: State, keep: str, profile: str = "base", first_profile: str | None = None) -> list[tuple[float, State]]:
+        """Bench "<keep side> Cannot Be Changed", then reroll (chaos, Harvest): only the other side rolls again.
+
+        The metamod takes one slot on the rerolled side (removed afterwards); the
+        roll's mod count includes the kept mods, as a normal reroll's would.
+        """
+        other = "suffix" if keep == "prefix" else "prefix"
+        if s.rarity != RARE or self.count(s, other) >= self.limit:
+            return []
+        status = tuple(v if self.targets[i].side == keep else self.base.status[i] for i, v in enumerate(s.status))
+        junk = tuple(n if slot in SIDE_SLOTS[keep] else self.base.junk[slot] for slot, n in enumerate(s.junk))
+        state = State(RARE, status, junk)
+        # Only the kept side matters, so states that agree on it share one (identical) outcome list.
+        key = (keep, profile, first_profile, state)
+        cache = self.__dict__.setdefault("_lock_cache", {})
+        if key not in cache:
+            cache[key] = self._lock_reroll(state, other, profile, first_profile)
+        return cache[key]
+
+    def _lock_reroll(self, state: State, other: str, profile: str, first_profile: str | None) -> list[tuple[float, State]]:
+        placed = self.total(state) + 1  # the metamod
+        dist, result, alive = {state: 1.0}, {}, 1.0
+        for k in range(placed, max(self.rare_counts) + 1):
+            more = sum(p for n, p in self.rare_counts.items() if n > k)
+            for st, p in dist.items():
+                result[st] = result.get(st, 0.0) + p * (alive - more)
+            alive = more
+            if alive <= 1e-15:
+                break
+            prof = first_profile if (k == placed and first_profile) else profile
+            nxt: dict[State, float] = {}
+            for st, p in dist.items():
+                for q, n in self.add_mod(st, prof, sides=(other,), taken=1) or [(1.0, st)]:
+                    nxt[n] = nxt.get(n, 0.0) + p * q
+            dist = nxt
+        for st, p in dist.items():  # counts above the last k (if any) end here
+            result[st] = result.get(st, 0.0) + p * alive
+        return [(p, st) for st, p in result.items() if p > 0]
+
+    def annul(self, s: State, side: str | None = None) -> list[tuple[float, State]]:
+        """Remove one random mod that isn't fractured (eldritch annulment: from one side only)."""
         options: list[tuple[float, State]] = []
         for i, v in enumerate(s.status):
+            if side and self.targets[i].side != side:
+                continue
             if v != MISSING and self.base.status[i] == MISSING:
                 status = list(s.status)
                 status[i] = MISSING
                 options.append((1.0, State(s.rarity, tuple(status), s.junk)))
-        for slot in range(4):
+        for slot in SIDE_SLOTS[side] if side else range(6):
             n = s.junk[slot] - self.base.junk[slot]
             if n > 0:
                 j = list(s.junk)
@@ -275,14 +333,28 @@ class Problem:
         total = sum(w for w, _ in options)
         return [(w / total, st) for w, st in options] if total else []
 
+    def roll_key(self, a: Action) -> tuple | None:
+        """What a reroll's outcome depends on; None for actions that aren't rerolls.
+
+        A forced (essence) mod matters only through what it counts as, so every
+        essence forcing an unwanted prefix rolls the same distribution.
+        """
+        if a.kind in ("transmute", "alt", "reroll_magic"):
+            return (MAGIC, a.profile)
+        if a.kind == "reroll_rare":
+            return (RARE, a.profile, a.first_profile, self.classify(a.forced) if a.forced else None)
+        return None
+
     @cached_property
     def _rolls(self) -> dict[str, list[tuple[float, State]]]:
-        out = {}
+        out, by_key = {}, {}
         for a in self.actions:
-            if a.kind in ("transmute", "alt", "reroll_magic"):
-                out[a.name] = self.roll(MAGIC, a.profile)
-            elif a.kind == "reroll_rare":
-                out[a.name] = self.roll(RARE, a.profile, a.first_profile, a.forced)
+            key = self.roll_key(a)
+            if key is None:
+                continue
+            if key not in by_key:
+                by_key[key] = self.roll(MAGIC, a.profile) if key[0] == MAGIC else self.roll(RARE, a.profile, a.first_profile, a.forced)
+            out[a.name] = by_key[key]
         return out
 
     def outcomes(self, s: State, a: Action) -> list[tuple[float, State]]:
@@ -298,8 +370,14 @@ class Problem:
             return self.add_mod(s) if self.total(s) < 2 * self.limit else []
         if a.kind == "annul":
             return self.annul(s)
+        if a.kind in ("exalt_prefix", "exalt_suffix"):
+            return self.add_mod(s, sides=(a.kind[6:],)) if self.total(s) < 2 * self.limit else []
+        if a.kind in ("annul_prefix", "annul_suffix"):
+            return self.annul(s, a.kind[6:])
         if a.kind in ("keep_prefixes", "keep_suffixes"):
             return self.keep(s, a.kind[5:-2])
+        if a.kind in ("lockreroll_prefixes", "lockreroll_suffixes"):
+            return self.lock_reroll(s, a.kind[11:-2], a.profile, a.first_profile)
         return []
 
 
@@ -326,8 +404,9 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     Actions with any unpriced input are left out rather than treated as free.
     """
     unpriced = [a.name for a in problem.actions if any(pid not in prices for pid, _ in a.cost)]
-    problem.actions = [a for a in problem.actions if a.name not in unpriced]
+    problem.actions = _cheapest_of_equals([a for a in problem.actions if a.name not in unpriced], problem, prices)
     problem.__dict__.pop("_rolls", None)
+    problem.__dict__.pop("_lock_cache", None)
     costs = {a.name: action_cost(a, prices) for a in problem.actions}
     if problem.done(problem.start):
         return Plan(0.0, {}, {}, {}, 1, unpriced)
@@ -356,6 +435,21 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
         len(states),
         unpriced,
     )
+
+
+def _cheapest_of_equals(acts: list[Action], problem: Problem, prices: dict[str, float]) -> list[Action]:
+    """Rerolls with the same outcomes from the same rarities: only the cheapest can be optimal."""
+    best: dict[tuple, Action] = {}
+    out = []
+    for a in acts:
+        key = problem.roll_key(a)
+        if key is None:
+            out.append(a)
+            continue
+        key = (key, a.from_rarity)
+        if key not in best or action_cost(a, prices) < action_cost(best[key], prices):
+            best[key] = a
+    return out + [a for a in acts if problem.roll_key(a) is not None and best[(problem.roll_key(a), a.from_rarity)] is a]
 
 
 def evaluate(problem: Problem, policy: dict[State, str], prices: dict[str, float]) -> float:
@@ -425,7 +519,9 @@ class _Graph:
         self.pair_state = np.array(pair_state, dtype=np.int64)
         self.pair_cost = np.array(pair_cost, dtype=float)
         self.state_ptr = np.array(state_ptr, dtype=np.int64)
-        self.e_pair = np.repeat(np.arange(len(pair_state)), [len(x) for x in nexts])
+        lengths = [len(x) for x in nexts]
+        self.e_pair = np.repeat(np.arange(len(pair_state)), lengths)
+        self.entry_ptr = np.concatenate(([0], np.cumsum(lengths)))[:-1]  # each pair's first entry
         self.e_next = np.concatenate(nexts)
         self.e_prob = np.concatenate(probs)
         self.e_open = self.e_next >= 0
@@ -458,14 +554,11 @@ class _Graph:
         """
         dist = np.full(self.n, np.inf)
         policy = np.full(self.n, -1, dtype=np.int64)
-        n_pairs = len(self.pair_cost)
         live = self.e_prob > 0
         while True:
             d = np.where(self.e_open, dist[self.e_next], 0.0)
             d[~live] = np.inf
-            pair_best = np.full(n_pairs, np.inf)
-            np.minimum.at(pair_best, self.e_pair, d)
-            step = pair_best + 1
+            step = np.minimum.reduceat(d, self.entry_ptr) + 1  # entries of a pair are contiguous
             best = np.minimum.reduceat(step, self.state_ptr[:-1])
             improved = best < dist
             if not improved.any():
@@ -505,8 +598,7 @@ def describe(problem: Problem, s: State) -> str:
             parts.append(problem.targets[i].name)
         elif v == BLOCKED:
             parts.append(f"{problem.targets[i].name} (blocked)")
-    labels = ("other prefix notable", "other prefix", "other suffix notable", "other suffix")
-    parts += [f"{n} {label}" for n, label in zip(s.junk, labels) if n]
+    parts += [f"{n} {label}" for n, label in zip(s.junk, JUNK_LABELS) if n]
     return f"{('normal', 'magic', 'rare')[s.rarity]}: {' + '.join(parts) or 'nothing useful'}"
 
 
@@ -518,8 +610,7 @@ def describe_parts(problem: Problem, s: State) -> tuple[str, list[tuple[str, str
             parts.append((problem.targets[i].name, "good"))
         elif v == BLOCKED:
             parts.append((f"{problem.targets[i].name} (blocked)", "blocked"))
-    labels = ("other prefix notable", "other prefix", "other suffix notable", "other suffix")
-    parts += [(f"{n} {label}", "other") for n, label in zip(s.junk, labels) if n]
+    parts += [(f"{n} {label}", "filler" if slot >= 4 else "other") for slot, (n, label) in enumerate(zip(s.junk, JUNK_LABELS)) if n]
     return ("normal", "magic", "rare")[s.rarity], parts
 
 
@@ -568,8 +659,11 @@ def _apply(problem: Problem, a: Action, rarity: int, mods: list[Mod], rng, cache
         rarity = MAGIC if a.kind == "aug" else RARE
         m = _draw(problem, rarity, mods, "base", rng, cache)
         return rarity, mods + [m] if m else mods
-    if a.kind == "annul":
-        removable = [m for m in mods if m not in problem.fixed]
+    if a.kind in ("exalt_prefix", "exalt_suffix"):
+        m = _draw(problem, RARE, mods, "base", rng, cache, side=a.kind[6:])
+        return rarity, mods + [m] if m else mods
+    if a.kind in ("annul", "annul_prefix", "annul_suffix"):
+        removable = [m for m in mods if m not in problem.fixed and (a.kind == "annul" or m.side == a.kind[6:])]
         if removable:
             gone = rng.choice(removable)
             mods = [m for m in mods if m is not gone]
@@ -578,6 +672,20 @@ def _apply(problem: Problem, a: Action, rarity: int, mods: list[Mod], rng, cache
         side = a.kind[5:-2]
         kept = [m for m in mods if m.side == side or m in problem.fixed]
         return (RARE if kept else NORMAL), kept
+    if a.kind in ("lockreroll_prefixes", "lockreroll_suffixes"):
+        keep = a.kind[11:-2]
+        other = "suffix" if keep == "prefix" else "prefix"
+        kept = [m for m in mods if m.side == keep or m in problem.fixed]
+        counts = problem.rare_counts
+        n = rng.choices(list(counts), weights=list(counts.values()))[0]
+        first = a.first_profile
+        while len(kept) + 1 < n:  # + the metamod
+            m = _draw(problem, RARE, kept, first or a.profile, rng, cache, side=other, occupied=1)
+            first = None
+            if m is None:
+                break
+            kept = kept + [m]
+        return RARE, kept
     raise ValueError(a.kind)
 
 
@@ -597,8 +705,8 @@ def _sim_roll(problem: Problem, rarity: int, a: Action, rng, cache) -> list[Mod]
     return mods
 
 
-def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cache: dict) -> Mod | None:
-    key = (rarity, profile, frozenset(m.id for m in mods))
+def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cache: dict, side: str | None = None, occupied: int = 0) -> Mod | None:
+    key = (rarity, profile, frozenset(m.id for m in mods), side, occupied)
     if key not in cache:
         limit = 1 if rarity == MAGIC else problem.limit
         taken = {g for m in mods for g in m.groups}
@@ -608,7 +716,8 @@ def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cac
             m
             for m in problem.pool
             if weights.get(m.id, 0) > 0
-            and sum(x.side == m.side for x in mods) < limit
+            and (side is None or m.side == side)
+            and sum(x.side == m.side for x in mods) + occupied < limit
             and not set(m.groups) & taken
             and not (m.notable and notables >= problem.notable_cap)
         ]
@@ -618,7 +727,7 @@ def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cac
 
 
 def _lump(problem: Problem, rarity: int, mods: list[Mod]) -> State:
-    status, junk = [MISSING] * len(problem.targets), [0, 0, 0, 0]
+    status, junk = [MISSING] * len(problem.targets), [0] * 6
     for m in mods:
         i, v = problem.classify(m.id)
         if i >= 0:

@@ -120,15 +120,42 @@ def bench_cost(item_class: str, mod_id: str) -> tuple[tuple[str, float], ...] | 
     return None
 
 
-def metamods(item_class: str) -> list[Action]:
-    """Lock one side with a bench metamod, then scour away the other side."""
+def metamods(item_class: str, rerolls: list[Action] = ()) -> list[Action]:
+    """Lock one side with a bench metamod, then scour away the other side, or reroll it.
+
+    `rerolls` are reforges (e.g. Harvest) worth trying on a locked item; a
+    chaos orb is always tried. Each becomes "lock <side>+<reroll>".
+    """
     acts = []
-    for mod_id, kind in ((LOCK_PREFIXES, "keep_prefixes"), (LOCK_SUFFIXES, "keep_suffixes")):
+    for mod_id, side in ((LOCK_PREFIXES, "prefixes"), (LOCK_SUFFIXES, "suffixes")):
         cost = bench_cost(item_class, mod_id)
-        if cost:
-            name = "lock prefixes+scour" if kind == "keep_prefixes" else "lock suffixes+scour"
-            acts.append(Action(name, kind, cost + (("scour", 1),), (RARE,)))
+        if not cost:
+            continue
+        acts.append(Action(f"lock {side}+scour", f"keep_{side}", cost + (("scour", 1),), (RARE,)))
+        acts.append(Action(f"lock {side}+chaos", f"lockreroll_{side}", cost + (("chaos", 1),), (RARE,)))
+        for r in rerolls:
+            acts.append(Action(f"lock {side}+{r.name}", f"lockreroll_{side}", cost + r.cost, (RARE,), profile=r.profile, first_profile=r.first_profile))
     return acts
+
+
+ELDRITCH_CLASSES = {"Helmet", "Body Armour", "Gloves", "Boots"}
+
+
+def eldritch(item_class: str, influences=()) -> list[Action]:
+    """Eldritch Exalted Orb / Orb of Annulment: add or remove a mod on one side only.
+
+    They need eldritch implicits (Exarch/Eater, from embers and ichors) whose
+    dominance picks the side, and don't work on influenced items. Setting up
+    the implicits is cheap next to the orbs and isn't counted.
+    """
+    if item_class not in ELDRITCH_CLASSES or influences:
+        return []
+    return [
+        Action("eldritch exalt (prefix)", "exalt_prefix", (("eldritch-exalted-orb", 1),), (RARE,)),
+        Action("eldritch exalt (suffix)", "exalt_suffix", (("eldritch-exalted-orb", 1),), (RARE,)),
+        Action("eldritch annul (prefix)", "annul_prefix", (("eldritch-orb-of-annulment", 1),), (RARE,)),
+        Action("eldritch annul (suffix)", "annul_suffix", (("eldritch-orb-of-annulment", 1),), (RARE,)),
+    ]
 
 
 def _slug(name: str) -> str:

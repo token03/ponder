@@ -135,7 +135,7 @@ def item_title(e: Estimate, pal: Palette = ANSI) -> Text:
 
 
 def mods_inline(e: Estimate, pal: Palette = ANSI, width: int = 0, sep: str = "\n") -> Text:
-    """Targets prefixes first, with a dim P/S and the tier."""
+    """Targets prefixes first, with a dim P/S and the tier; filler as one "N× any res" entry."""
     out = Text()
     for r in sorted(e.rows, key=lambda r: (r.side != "prefix", r.role != "fractured")):
         if r.role not in ("target", "fractured", "essence"):
@@ -147,6 +147,12 @@ def mods_inline(e: Estimate, pal: Palette = ANSI, width: int = 0, sep: str = "\n
         out.append(text, style=_role_style(r.role, pal))
         if r.tier and r.role == "target":
             out.append(f" {r.tier}", style=_tier_style(r.tier, pal))
+    filler = [r for r in e.rows if r.role == "filler"]
+    if filler:
+        if out:
+            out.append(sep, style="dim")
+        out.append("S ", style="dim")
+        out.append(f"{len(filler)}× {filler[0].tier}", style=pal.share)
     return out
 
 
@@ -180,7 +186,13 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, ro
     parts += [Text(""), _costs(e, prices_source, links, pal)]
     if e.fractures:
         parts += [Text(""), _fractures(e, links, pal)]
-    parts += [Text(""), _recipe(e, rows, pal), Text(""), _currency(e)]
+    pick = suggested_fracture(e)
+    if pick and pick.plan:
+        title = Text.assemble("recipe · starting from a base with ", (f"fractured {pick.target}", pal.fractured))
+        parts += [Text(""), _recipe(pick.problem, pick.plan, title, rows, pal), Text(""), _currency(pick.plan)]
+    else:
+        parts += [Text(""), _recipe(e.problem, e.plan, Text("recipe · what to do in each situation, commonest first"), rows, pal)]
+        parts += [Text(""), _currency(e.plan)]
     return Group(*parts)
 
 
@@ -214,13 +226,15 @@ def _mod_lines(e: Estimate, pal: Palette) -> Table:
     t.add_column(justify="right", style="dim")  # prefix / suffix
     t.add_column()  # mod text
     t.add_column(justify="right")  # tier or role
-    order = {"fractured": 0, "target": 1, "essence": 2, "bench": 3, "skipped": 4}
+    order = {"fractured": 0, "target": 1, "filler": 2, "essence": 3, "bench": 4, "skipped": 5}
     for side in ("prefix", "suffix"):
         rows = sorted((r for r in e.rows if r.side == side), key=lambda r: order.get(r.role, 9))
         for i, r in enumerate(rows):
             label = Text(side if i == 0 else "")
             if r.role == "target":
                 tag = Text(r.tier, style=_tier_style(r.tier, pal))
+            elif r.role == "filler":
+                tag = Text(r.tier, style=pal.share)
             elif r.role == "skipped":
                 tag = Text(f"not crafted ({r.tier})", style=pal.warn)
             else:
@@ -274,6 +288,7 @@ def _fractures(e: Estimate, links: bool, pal: Palette) -> Table:
     t.add_column("total", justify="right")
     t.add_column("vs scratch", justify="right")
     t.add_column("")
+    pick = suggested_fracture(e)
     for f in sorted(e.fractures, key=lambda f: (f.total is None, f.total or 0, f.craft_cost or 0)):
         if f.error:
             t.add_row(Text(f.target, style=pal.fractured), Text("no plan", style="dim"), "", "", "", "")
@@ -284,17 +299,31 @@ def _fractures(e: Estimate, links: bool, pal: Palette) -> Table:
         else:
             vs = Text(("−" if saving > 0 else "+") + money(abs(saving)), style=pal.good if saving > 0 else pal.bad)
         base = money_text(f.base_price[0]) if f.base_price else Text(f.base_error or "?", style="dim")
-        t.add_row(Text(f.target, style=pal.fractured), money_text(f.craft_cost), base, money_text(f.total), vs, link("bases", f.trade_url, links, pal))
+        name = Text(f.target, style=pal.fractured)
+        if f is pick:
+            name.append("  ◀ suggested", style=f"bold {pal.good}")
+        t.add_row(name, money_text(f.craft_cost), base, money_text(f.total), vs, link("bases", f.trade_url, links, pal))
     return t
 
 
-def _recipe(e: Estimate, rows: int, pal: Palette) -> Table:
-    t = Table(title="recipe · what to do in each situation, commonest first", title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+def suggested_fracture(e: Estimate):
+    """The fracture to start from: the cheapest priced route if it beats scratch, else
+    (before any base is priced) the one that leaves the cheapest craft."""
+    if e.best_fracture:
+        return e.best_fracture if e.total is None or e.best_fracture.total < e.total else None
+    solved = [f for f in e.fractures if f.plan]
+    best = min(solved, key=lambda f: f.plan.cost, default=None)
+    return best if best and e.total and best.plan.cost < 0.5 * e.total else None
+
+
+def _recipe(problem: craft.Problem, plan: craft.Plan, title: Text, rows: int, pal: Palette) -> Table:
+    title.stylize("bold")
+    t = Table(title=title, title_justify="left", box=None, pad_edge=False, header_style="dim")
     t.add_column("share", justify="right", style=pal.share)
     t.add_column("situation")
     t.add_column("do", style=f"bold {pal.action}")
-    for state, action, share in e.recipe_states(rows):
-        t.add_row(f"{share:.0%}" if share >= 0.1 else f"{share:.1%}", situation(e.problem, state, pal), Text(action))
+    for state, action, share in craft.recipe_states(plan)[:rows]:
+        t.add_row(f"{share:.0%}" if share >= 0.1 else f"{share:.1%}", situation(problem, state, pal), Text(action))
     return t
 
 
@@ -308,13 +337,14 @@ def situation(problem: craft.Problem, state: craft.State, pal: Palette = ANSI) -
     for i, (text, kind) in enumerate(parts):
         if i:
             out.append(" + ", style="dim")
-        out.append(text, style={"good": pal.good, "blocked": pal.bad, "other": "dim"}[kind])
+        out.append(text, style={"good": pal.good, "blocked": pal.bad, "other": "dim", "filler": pal.share}[kind])
     return out
 
 
-def _currency(e: Estimate) -> Text:
+def _currency(plan: craft.Plan) -> Text:
     out = Text("expected currency  ", style="dim")
-    for i, (a, n) in enumerate(e.usage()):
+    usage = [(a, n) for a, n in sorted(plan.usage.items(), key=lambda x: -x[1]) if n >= 0.05]
+    for i, (a, n) in enumerate(usage):
         if i:
             out.append(" · ", style="dim")
         out.append(f"{n:,.0f}" if n >= 10 else f"{n:,.1f}", style="bold")
