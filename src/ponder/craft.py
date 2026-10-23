@@ -91,6 +91,10 @@ class Action:
     profile: str = "base"  # weight profile for rolled mods
     first_profile: str | None = None  # Harvest: the first mod comes from a tag-filtered pool
     forced: str | None = None  # essence: this mod is always added
+    # Selling a bricked item as a smaller product and starting over: chaos back, and what the item
+    # must have to pass as that product: (target indices, (prefix, suffix, any) filler, targets that count as filler).
+    credit: float = 0.0
+    sale: tuple[frozenset[int], tuple[int, int, int], frozenset[int]] | None = None
 
 
 @dataclass
@@ -197,6 +201,16 @@ class Problem:
             return False
         limit = 1 if s.rarity == MAGIC else self.limit
         return all(self.count(s, side) + n <= limit for side, n in self.reserve.items())
+
+    def sells_as(self, s: State, sale) -> bool:
+        """Whether the item passes as a smaller product: its targets on, and its filler, from the
+        filler slots (4 and 5) and the targets `spare` that count as its filler."""
+        need, (p, q, n), spare = sale
+        if not all(s.status[i] == GOOD for i in need):
+            return False
+        pre = s.junk[4] + sum(1 for i in spare if s.status[i] == GOOD and self.targets[i].side == "prefix")
+        suf = s.junk[5] + sum(1 for i in spare if s.status[i] == GOOD and self.targets[i].side == "suffix")
+        return pre >= p and suf >= q and pre + suf >= n
 
     def keep(self, s: State, side: str) -> list[tuple[float, State]]:
         """Bench "<other side> Cannot Be Changed", then scour: only `side` (and fractured mods) stay.
@@ -368,6 +382,8 @@ class Problem:
     def outcomes(self, s: State, a: Action) -> list[tuple[float, State]]:
         if s.rarity not in a.from_rarity:
             return []
+        if a.kind == "sell":
+            return [(1.0, self.start)] if self.sells_as(s, a.sale) else []
         if a.name in self._rolls:
             return self._rolls[a.name]
         if a.kind == "aug":
@@ -419,7 +435,12 @@ FOSSIL_SECONDS = 2.0  # socketing each fossil into the resonator
 LOCK_SECONDS = 5.0  # a bench metamod, on top of the reroll after it
 
 
+SELL_SECONDS = 90.0  # listing a bricked item and trading it
+
+
 def seconds(a: Action) -> float:
+    if a.kind == "sell":
+        return SELL_SECONDS
     if a.kind in SECONDS:
         return SECONDS[a.kind]
     if a.kind.startswith(("keep_", "lockreroll_")):
@@ -440,8 +461,8 @@ def _reroll_seconds(name: str, cost) -> float:
 
 
 def action_cost(a: Action, prices: dict[str, float]) -> float:
-    """Chaos of currency one use takes."""
-    return sum(prices.get(pid, 0.0) * qty for pid, qty in a.cost)
+    """Chaos of currency one use takes (less what a sale brings back)."""
+    return sum(prices.get(pid, 0.0) * qty for pid, qty in a.cost) - a.credit
 
 
 def step_cost(a: Action, prices: dict[str, float]) -> float:
@@ -467,12 +488,22 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     if (policy < 0).any():
         raise ValueError("no sequence of the available currencies can reach this target")
 
-    for _ in range(max_rounds):
-        value = g.evaluate(policy)
-        better = g.improve(g.q(value), policy)
-        if (better == policy).all():
-            break
-        policy = better
+    try:
+        with np.errstate(all="ignore"):
+            for _ in range(max_rounds):
+                value = g.evaluate(policy)
+                better = g.improve(g.q(value), policy)
+                if (better == policy).all():
+                    break
+                policy = better
+        if not np.isfinite(value).all() or value[g.index[problem.start]] < 0:
+            raise np.linalg.LinAlgError("a sale is worth more than making it again")
+    except np.linalg.LinAlgError:
+        if not any(a.kind == "sell" for a in problem.actions):
+            raise
+        # Selling sub-products would pay for itself (their values are rough): plan without sales.
+        problem.actions = [a for a in problem.actions if a.kind != "sell"]
+        return solve(problem, prices, max_rounds)
 
     visits = g.visits(policy, g.index[problem.start])
     usage = {a.name: 0.0 for a in problem.actions}
@@ -602,40 +633,40 @@ class _Graph:
     """The explored states as flat arrays, so policy iteration is a few numpy calls.
 
     Open (unfinished) states are numbered 0..n-1. Every (state, action) pair is
-    a row; pairs of one state are contiguous, in action order. Each pair's
-    outcomes are entries (pair, next state, probability), with next = -1 for a
-    finished item, whose remaining cost is 0.
+    a row; pairs of one state are contiguous, in action order. A pair's
+    outcomes are a *list* of entries (next state, probability), with next = -1
+    for a finished item, whose remaining cost is 0. Rerolls give every state
+    the same list, so lists are stored once and pairs point at them: a
+    reroll's expected cost to finish is computed once, not once per state.
     """
 
     def __init__(self, problem: Problem, edges: dict[State, dict[str, list]], costs: dict[str, float]):
         self.states = [s for s in edges]  # edges holds exactly the open states
         self.index = {s: i for i, s in enumerate(self.states)}
         self.n = len(self.states)
-        pair_state, self.action, pair_cost = [], [], []
+        pair_state, self.action, pair_cost, pair_list = [], [], [], []
+        lists: dict[int, int] = {}  # id(outcomes) -> list number
         nexts, probs = [], []
-        converted: dict[int, tuple[np.ndarray, np.ndarray]] = {}  # shared reroll lists convert once
         state_ptr = [0]
         for i, s in enumerate(self.states):
             for name, outcomes in edges[s].items():
                 key = id(outcomes)
-                if key not in converted:
-                    converted[key] = (
-                        np.array([self.index.get(n, -1) for _, n in outcomes], dtype=np.int64),
-                        np.array([p for p, _ in outcomes], dtype=float),
-                    )
-                nxt, prob = converted[key]
+                if key not in lists:
+                    lists[key] = len(nexts)
+                    nexts.append(np.array([self.index.get(n, -1) for _, n in outcomes], dtype=np.int64))
+                    probs.append(np.array([p for p, _ in outcomes], dtype=float))
                 pair_state.append(i)
                 self.action.append(name)
                 pair_cost.append(costs[name])
-                nexts.append(nxt)
-                probs.append(prob)
+                pair_list.append(lists[key])
             state_ptr.append(len(pair_state))
         self.pair_state = np.array(pair_state, dtype=np.int64)
         self.pair_cost = np.array(pair_cost, dtype=float)
+        self.pair_list = np.array(pair_list, dtype=np.int64)
         self.state_ptr = np.array(state_ptr, dtype=np.int64)
-        lengths = [len(x) for x in nexts]
-        self.e_pair = np.repeat(np.arange(len(pair_state)), lengths)
-        self.entry_ptr = np.concatenate(([0], np.cumsum(lengths)))[:-1]  # each pair's first entry
+        self.list_len = np.array([len(x) for x in nexts], dtype=np.int64)
+        self.list_ptr = np.concatenate(([0], np.cumsum(self.list_len)))  # list k's entries: list_ptr[k]:list_ptr[k+1]
+        self.e_list = np.repeat(np.arange(len(nexts)), self.list_len)
         self.e_next = np.concatenate(nexts)
         self.e_prob = np.concatenate(probs)
         self.e_open = self.e_next >= 0
@@ -647,7 +678,8 @@ class _Graph:
     def q(self, value: np.ndarray) -> np.ndarray:
         """Expected cost to finish after taking each pair's action."""
         ext = np.append(value, 0.0)  # index -1: finished
-        return self.pair_cost + np.bincount(self.e_pair, self.e_prob * ext[self.e_next], minlength=len(self.pair_cost))
+        expected = np.bincount(self.e_list, self.e_prob * ext[self.e_next], minlength=len(self.list_len))
+        return self.pair_cost + expected[self.pair_list]
 
     def improve(self, q: np.ndarray, policy: np.ndarray) -> np.ndarray:
         """Each state's cheapest pair (first in action order on ties), kept unless clearly better."""
@@ -672,7 +704,7 @@ class _Graph:
         while True:
             d = np.where(self.e_open, dist[self.e_next], 0.0)
             d[~live] = np.inf
-            step = np.minimum.reduceat(d, self.entry_ptr) + 1  # entries of a pair are contiguous
+            step = (np.minimum.reduceat(d, self.list_ptr[:-1]) + 1)[self.pair_list]  # a list's entries are contiguous
             best = np.minimum.reduceat(step, self.state_ptr[:-1])
             improved = best < dist
             if not improved.any():
@@ -683,11 +715,14 @@ class _Graph:
             dist = np.where(improved, best, dist)
 
     def _matrix(self, policy: np.ndarray) -> np.ndarray:
-        chosen = np.zeros(len(self.pair_cost), dtype=bool)
-        chosen[policy] = True
-        m = chosen[self.e_pair] & self.e_open
+        lst = self.pair_list[policy]  # each state's chosen list
+        lengths = self.list_len[lst]
+        rows = np.repeat(np.arange(self.n), lengths)
+        starts = np.repeat(self.list_ptr[lst] - np.concatenate(([0], np.cumsum(lengths)[:-1])), lengths)
+        entries = np.arange(len(rows)) + starts
+        m = self.e_open[entries]
         P = np.zeros((self.n, self.n))
-        np.add.at(P, (self.pair_state[self.e_pair[m]], self.e_next[m]), self.e_prob[m])
+        np.add.at(P, (rows[m], self.e_next[entries[m]]), self.e_prob[entries[m]])
         return np.eye(self.n) - P
 
     def evaluate(self, policy: np.ndarray) -> np.ndarray:
@@ -747,7 +782,7 @@ class Exit:
     chance: float  # per time you reach the step
     to: int | None  # step number; None when the item is done or the branch is too rare to list
     what: str  # e.g. "+Life", "lost Life", "done"
-    kind: str  # "done", "win", "back" (lost a target), "side" (same targets, something else changed), "rare" (unlisted)
+    kind: str  # "done", "win", "back" (lost a target), "side" (same targets, something else changed), "sell" (sold, start over), "rare" (unlisted)
     via: str = ""  # the action that mostly leads here
 
 
@@ -826,6 +861,8 @@ def steps(problem: Problem, plan: Plan, min_reach: float = 0.02) -> list[Step]:
                 rest = [names[i] for i in range(len(names)) if i not in have]
                 what = f"got {', '.join(rest)}" if rest and problem.need == len(names) else "done"
                 exits.append(Exit(chance, None, what, "done", by))
+            elif by_name[by].kind == "sell" and to in number:
+                exits.append(Exit(chance, number[to], f"{by} (+{by_name[by].credit:,.0f}c)", "sell", by))
             elif to in number:
                 gained, lost = to[1] - have, have - to[1]
                 what = ", ".join([f"got {names[i]}" for i in sorted(gained)] + [f"lost {names[i]}" for i in sorted(lost)])
@@ -870,6 +907,8 @@ def simulate(problem: Problem, plan: Plan, prices: dict[str, float], runs: int =
 
 
 def _apply(problem: Problem, a: Action, rarity: int, mods: list[Mod], rng, cache):
+    if a.kind == "sell":
+        return NORMAL, list(problem.fixed)
     if a.kind in ("transmute", "alt", "reroll_magic"):
         return MAGIC, _sim_roll(problem, MAGIC, a, rng, cache)
     if a.kind == "reroll_rare":

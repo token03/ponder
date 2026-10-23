@@ -168,6 +168,24 @@ Everything is cached under `.cache/ladder/<snapshot>`.
   base with one wanted mod fractured; buy such a base below that and it pays. With `--trade` each gets a
   selling price and listing count, and `hole = margin × wearers / (listed + 5)`
   ranks market holes: wanted, thinly supplied, profitable.
+- **the product tree**: the ladder's products overlap. "Life + block" sits
+  under "life + block + recover on block", which sits under the full shield:
+  a product is under another of the same base group (or cluster kind) when
+  every mod it wants is one the other makes at the same tier or better, with
+  fewer wanted mods and no more filler (`pipeline.link_products`). The
+  detail view lists what an item *sells as* (below it) and *leads to*
+  (above it). The tree is how a craft **pivots**: products are solved
+  smallest first, and a bigger craft gets "sell as <smaller product>"
+  actions. Any magic or rare item that passes as one can be sold for 70% of
+  that product's cheapest cost (`pipeline.SALE_SHARE`, less 90 s to list it,
+  and less a new base when the base cost money: a cluster base, a fractured
+  base), and you start over. So bricking a late, expensive step isn't a total
+  loss, and the recipe says when to cash out: `c. 12% sell as Life + Block
+  (+310c) → back to 1`. Values are rough (what the smaller item costs to
+  make, not its trade price); if a sale would pay more than making that item
+  again the solver plans without sales. Ladder runs cost fractures of wanted
+  mods only, not of filler resistances (`ponder SOURCES --fractures` still
+  does both).
 
 ### Recombinators (`recomb.py`)
 

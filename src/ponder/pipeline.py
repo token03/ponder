@@ -130,6 +130,8 @@ class Estimate:
     demand: int = 0  # ladder characters wearing it (ladder runs)
     recomb: object | None = None  # recomb.Step: the cheapest recombinator tree, when costed
     skills: list[str] = field(default_factory=list)  # their most common main skills
+    smaller: list[Estimate] = field(default_factory=list)  # products this one contains (ladder runs): what a brick sells as
+    bigger: list[Estimate] = field(default_factory=list)  # products that contain this one: where it leads
 
     @property
     def craft_cost(self) -> float | None:
@@ -244,6 +246,8 @@ class Estimate:
             "skills": self.skills,
             "hole": self.hole,
             "fracture_worth": {"chaos": w[0], "target": w[1].target} if (w := self.fracture_worth) else None,
+            "smaller_products": [{"title": x.title, "targets": x.targets, "cheapest": x.cheapest} for x in self.smaller],
+            "bigger_products": [{"title": x.title, "targets": x.targets, "cheapest": x.cheapest} for x in self.bigger],
             "error": self.error or self.market_error or self.base_error,
         }
 
@@ -479,7 +483,7 @@ def ladder(
             continue
         est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
         est.used_base = ""
-        add_fractures(est, league, table)  # self-made fractured bases: essence or reroll, then fracture
+        add_fractures(est, league, table, filler=False)  # self-made fractured bases: essence or reroll, then fracture
         estimates[est.key] = est
     n_gear = len(estimates)
     for a in found_cl:
@@ -492,7 +496,14 @@ def ladder(
         add_fractures(est, league)  # fractured bases are most of the cluster market's money
         estimates[est.key] = est
     out = list(estimates.values())
-    solve_all(out + [f for e in out for f in e.fractures], table, workers, say)
+    link_products(out)
+    # Smallest products first: their costs are what a bricked bigger craft sells for.
+    sizes = sorted({len(e.problem.targets) for e in out if e.problem})
+    for n in sizes:
+        wave = [e for e in out if e.problem and len(e.problem.targets) == n]
+        for e in wave:
+            add_sales(e)
+        solve_all(wave + [f for e in wave for f in e.fractures], table, workers, say)
     if recombs:
         add_recombs(out, table, workers, say, db)
     if trade_lookup:
@@ -678,7 +689,7 @@ def add_recombs(estimates: list[Estimate], table: dict[str, float], workers: int
         e.recomb = planner.best()
 
 
-def add_fractures(est: Estimate, league: str, table: dict[str, float] | None = None) -> None:
+def add_fractures(est: Estimate, league: str, table: dict[str, float] | None = None, filler: bool = True) -> None:
     """The same craft starting from a base with one wanted mod already fractured.
 
     One option per target, and one per filler family the item uses (e.g.
@@ -694,7 +705,7 @@ def add_fractures(est: Estimate, league: str, table: dict[str, float] | None = N
         return
     pool = {m.id: m for m in p.pool}
     mods = data.load("mods")
-    for family in est.filler_families:
+    for family in est.filler_families if filler else []:
         ids = [m for m in p.filler if mods[m]["type"] == family and m in pool]
         if not ids:
             continue
@@ -734,6 +745,90 @@ def add_fractures(est: Estimate, league: str, table: dict[str, float] | None = N
         if f.query:
             f.trade_url = trade.search_url(league, f.query)
         est.fractures.append(f)
+
+
+# -- the product tree ------------------------------------------------------------------
+
+SALE_SHARE = 0.7  # what a bricked item sells for, as a share of the cheapest way to make what it passes as
+MIN_SALE = 20.0  # chaos: below this a sale isn't worth listing
+MAX_SALES = 6  # sale actions per craft (the best few)
+
+
+def covers(big: craft.Problem, small: craft.Problem) -> tuple | None:
+    """What an item crafted toward `big` needs to pass as `small`'s product (a `craft.Action.sale`), or None.
+
+    Each of `small`'s targets must be one of `big`'s at the same tier or better
+    (or fractured on the base). `small`'s filler can be `big`'s filler slots or
+    `big`'s other targets that are `small`'s filler (strength on a ring that
+    only asks for "any attribute or res"), side by side.
+    """
+    fixed = {m.id for m in big.fixed}
+    need = set()
+    for t2 in small.targets:
+        if fixed & t2.good:
+            continue
+        i = next((i for i, t in enumerate(big.targets) if t.good <= t2.good and i not in need), None)
+        if i is None:
+            return None
+        need.add(i)
+    if not small.targets:
+        return None
+    spare = frozenset(i for i, t in enumerate(big.targets) if i not in need and t.good <= small.filler)
+    p, q = small.filler_sides or (0, 0)
+    room = {side: sum(big.targets[i].side == side for i in spare) + (big.filler_sides or (0, 0))[k] for k, side in enumerate(("prefix", "suffix"))}
+    if room["prefix"] < p or room["suffix"] < q or sum(room.values()) + (0 if big.filler_sides else big.filler_need) < small.filler_need:
+        return None
+    return frozenset(need), (p, q, small.filler_need), spare
+
+
+def link_products(estimates: list[Estimate]) -> None:
+    """The product tree: `smaller` and `bigger` between products of one base group (or cluster kind).
+
+    Product A is under B when every mod A wants is one B makes at the same
+    tier or better, A has fewer wanted mods, and B has room for A's filler
+    (`covers`).
+    """
+    by_title: dict[str, list[Estimate]] = {}
+    for e in estimates:
+        if e.problem and not e.error:
+            by_title.setdefault(e.title, []).append(e)
+    for group in by_title.values():
+        for big in group:
+            for small in group:
+                if len(small.problem.targets) < len(big.problem.targets) and covers(big.problem, small.problem):
+                    big.smaller.append(small)
+                    small.bigger.append(big)
+
+
+def add_sales(est: Estimate) -> None:
+    """Sell actions for `est` and its fractures: a bricked item that passes as a smaller, already
+    solved product sells for `SALE_SHARE` of that product's cheapest cost, then you start over
+    (buying the base again: a cluster base, or the fractured one)."""
+    for target, restart in [(est, est.base_price[0] if est.base_price else 0.0)] + [(f, f.made.cost if f.made else None) for f in est.fractures]:
+        if target.problem is None or restart is None or target.plan is not None:
+            continue
+        best: dict[frozenset, tuple[float, Estimate, tuple]] = {}
+        for small in est.smaller:
+            if small.cheapest is None:
+                continue
+            sale = covers(target.problem, small.problem)
+            if sale is None:
+                continue
+            credit = SALE_SHARE * small.cheapest - restart
+            if credit >= MIN_SALE and (sale not in best or credit > best[sale][0]):
+                best[sale] = (credit, small, sale)
+        acts = []
+        for credit, small, sale in sorted(best.values(), key=lambda x: -x[0])[:MAX_SALES]:
+            name = f"sell as {' + '.join(_short_name(t) for t in small.targets)}"
+            while any(a.name == name for a in acts):
+                name += "'"
+            acts.append(craft.Action(name, "sell", (), (craft.MAGIC, craft.RARE), credit=float(f"{credit:.3g}"), sale=sale))  # 3 figures: the plan cache key holds it
+        target.problem.actions = [a for a in target.problem.actions if a.kind != "sell"] + acts
+
+
+def _short_name(name: str, width: int = 22) -> str:
+    name = name.split(" (T")[0]
+    return name if len(name) <= width else name[: width - 1] + "…"
 
 
 # -- solving ---------------------------------------------------------------------------

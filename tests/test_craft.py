@@ -3,7 +3,19 @@
 import pytest
 
 from ponder import actions, craft, data
-from ponder.craft import GOOD, MAGIC, MISSING, NORMAL, RARE, Action, Mod, Problem, State, Target, solve
+from ponder.craft import (
+    GOOD,
+    MAGIC,
+    MISSING,
+    NORMAL,
+    RARE,
+    Action,
+    Mod,
+    Problem,
+    State,
+    Target,
+    solve,
+)
 
 PRICES = {
     "transmute": 0.1, "alt": 1.0, "aug": 0.2, "regal": 3.0, "exalted": 50.0, "annul": 20.0,
@@ -271,3 +283,17 @@ def test_steps_follow_the_policy_flow():
         assert all(x.to in numbers for x in st.exits if x.kind != "done")
     assert sum(st.uses for st in steps) == pytest.approx(sum(plan.usage.values()))
     assert any(x.kind == "done" for st in steps for x in st.exits)
+
+
+def test_selling_a_brick_as_a_smaller_product_lowers_the_cost():
+    """With A alone sellable for a share of what it costs, misses on B are cheaper; a sale worth
+    more than making the item again would loop for profit, so the solver plans without it."""
+    plain = solve(toy(), PRICES)
+    only_a = solve(toy(targets=("A",)), PRICES)
+    sale = Action("sell as A", "sell", (), (MAGIC, RARE), credit=0.7 * only_a.cost, sale=(frozenset({0}), (0, 0, 0), frozenset()))
+    problem = toy(extra_actions=[sale])
+    selling = solve(problem, PRICES)
+    assert selling.cost < plain.cost and selling.usage["sell as A"] > 0
+    assert craft.simulate(problem, selling, PRICES, runs=3000) == pytest.approx(selling.cost, rel=0.1)
+    greedy = Action("sell as A", "sell", (), (MAGIC, RARE), credit=100 * only_a.cost, sale=(frozenset({0}), (0, 0, 0), frozenset()))
+    assert solve(toy(extra_actions=[greedy]), PRICES).cost == pytest.approx(plain.cost)

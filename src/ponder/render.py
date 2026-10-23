@@ -262,6 +262,8 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, pa
         parts += [Text(""), _fractures(e, links, pal)]
     if e.recomb is not None and e.recomb.cost is not None:
         parts += [Text(""), recomb_steps(e, pal)]
+    if e.smaller or e.bigger:
+        parts += [Text(""), product_tree(e, pal)]
     pick = suggested_fracture(e)
     if pick and pick.plan:
         how = "making" if pick.self_made else "buying"
@@ -417,6 +419,25 @@ def suggested_fracture(e: Estimate):
     return best if best and e.total and best.plan.cost < 0.5 * e.total else None
 
 
+def product_tree(e: Estimate, pal: Palette = ANSI, rows: int = 5) -> Text:
+    """Where this product sits among the others of its base group: what a brick sells as, what it leads to."""
+    out = Text("product tree", style="bold")
+
+    def line(x: Estimate, arrow: str) -> None:
+        out.append(f"\n  {arrow} ", style="dim")
+        out.append(" + ".join(x.targets) or "-")
+        if x.problem and x.problem.filler_need:
+            out.append(f" + {x.problem.filler_need} filler", style=pal.share)
+        out.append(f"  {money(x.cheapest)}" if x.cheapest is not None else "  -", style="dim")
+        out.append(f"  {x.demand} wear it", style="dim")
+
+    for x in sorted(e.smaller, key=lambda x: -(x.cheapest or 0))[:rows]:
+        line(x, "⊂ sells as")
+    for x in sorted(e.bigger, key=lambda x: -x.demand)[:rows]:
+        line(x, "⊃ leads to")
+    return out
+
+
 def steps_text(problem: craft.Problem, plan: craft.Plan, title: Text, pal: Palette = ANSI, made: craft.SelfFracture | None = None) -> Text:
     """The plan as numbered steps: what to spam, and where each outcome sends you.
 
@@ -468,6 +489,10 @@ def steps_text(problem: craft.Problem, plan: craft.Plan, title: Text, pal: Palet
                 continue
             if x.kind == "rare":
                 out.append(f"{x.what}: start over", style="dim")
+                continue
+            if x.kind == "sell":
+                out.append(x.what, style=f"bold {pal.good}")
+                out.append(f"  → back to {x.to}", style="bold")
                 continue
             if x.via != main:
                 out.append(f"{x.via}: ", style=pal.action)
