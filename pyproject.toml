@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Mine Path of Exile builds for profitable crafting candidates."
 requires-python = ">=3.11"
 dependencies = [
+    "keyring>=25.7.0",
     "numpy>=1.26",
     "rich>=15.0.0",
 ]

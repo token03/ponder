@@ -19,10 +19,14 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import DataTable, Footer, Header, Input, Static, TabbedContent, TabPane
+from collections.abc import Callable
 
-from . import pipeline, prices, render
+from rich.markup import escape
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Static, TabbedContent, TabPane
+
+from . import auth, pipeline, prices, render
 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ponder" / "tui.json"
 DEFAULT_THEME = "ansi-dark"  # the terminal's own colours
@@ -53,6 +57,7 @@ class PonderApp(App):
         Binding("f", "cycle_filter", "Filter"),
         Binding("s", "cycle_sort", "Sort"),
         Binding("n", "new_sources", "New builds"),
+        Binding("l", "login", "POESESSID"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -96,6 +101,7 @@ class PonderApp(App):
         box = self.query_one("#sources", Input)
         if self.sources:
             box.value = " ".join(self.sources)
+            self.query_one("#crafts", DataTable).focus()  # so the keys work straight away
             self.analyze(self.sources)
         else:
             box.focus()
@@ -112,12 +118,14 @@ class PonderApp(App):
     def analyze(self, sources: list[str]) -> None:
         self.call_from_thread(self.set_status, "starting…")
         try:
-            report = pipeline.run(sources, trade_lookup=self.trade_on_load, progress=lambda m: self.call_from_thread(self.set_status, m))
+            report = pipeline.run(sources, progress=lambda m: self.call_from_thread(self.set_status, m))
         except Exception as e:  # show it rather than crash the app
-            self.call_from_thread(self.set_status, f"[red]failed: {e}[/red]")
+            self.call_from_thread(self.set_status, f"[red]failed: {escape(str(e))}[/red]")
             return
         self.table = prices.load()[0]
         self.call_from_thread(self.show_report, report)
+        if self.trade_on_load:  # trade after the report, so the cookie dialog can show first
+            self.call_from_thread(self.action_trade_all)
 
     def set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
@@ -195,13 +203,33 @@ class PonderApp(App):
 
     def action_trade(self) -> None:
         if self.current and self.current.query:
-            self.lookup([self.current])
+            current = self.current
+            self.with_cookie(lambda: self.lookup([current]))
         else:
             self.notify("only cluster jewels have a trade search yet", severity="warning")
 
     def action_trade_all(self) -> None:
         if self.report:
-            self.lookup([e for e in self.report.estimates if e.query and not e.market])
+            todo = [e for e in self.report.estimates if e.query and not e.market]
+            self.with_cookie(lambda: self.lookup(todo))
+
+    def with_cookie(self, then: Callable[[], None]) -> None:
+        """Run `then` once there is a POESESSID, asking for it first if needed."""
+        if auth.get():
+            then()
+            return
+
+        def done(value: str | None) -> None:
+            if value:
+                then()
+            else:
+                self.notify("no POESESSID; trade lookups may be refused (the links still work)", severity="warning")
+                then()
+
+        self.push_screen(CookieScreen(), done)
+
+    def action_login(self) -> None:
+        self.push_screen(CookieScreen(), lambda v: self.notify(f"POESESSID: {auth.source()}", timeout=3))
 
     @work(thread=True, exclusive=True, group="trade")
     def lookup(self, estimates: list[pipeline.Estimate]) -> None:
@@ -281,6 +309,66 @@ class PonderApp(App):
             action=pick("warning", "yellow"),
             share=pick("primary", "cyan"),
         )
+
+
+class CookieScreen(ModalScreen[str | None]):
+    """Asks for the session cookie with a password field; keeps it in memory unless told to save."""
+
+    DEFAULT_CSS = """
+    CookieScreen { align: center middle; }
+    #dialog { width: 76; height: auto; padding: 1 2; border: thick $primary; background: $surface; }
+    #dialog Static { margin-bottom: 1; }
+    #dialog Input { margin-bottom: 1; }
+    #buttons { height: auto; align-horizontal: right; }
+    #buttons Button { margin-left: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        has_keychain = auth.keychain_available()
+        with Vertical(id="dialog"):
+            yield Static("[b]Trade lookups need your pathofexile.com session cookie (POESESSID).[/b]")
+            yield Static(f"It's a login token, so treat it like a password. How to find it:\n{auth.HELP_URL}")
+            yield Input(placeholder="paste POESESSID", password=True, id="cookie")
+            if has_keychain:
+                yield Checkbox("Save in my system keychain for next time", value=False, id="save")
+                yield Static("[dim]Unticked, it lives in memory only and is gone when you quit.[/dim]")
+            else:
+                yield Static("[dim]No system keychain found (usual on WSL), so it lives in memory only and is gone when you quit.[/dim]")
+            with Horizontal(id="buttons"):
+                yield Button("Open guide", id="guide")
+                yield Button("Cancel", id="cancel")
+                yield Button("Use it", variant="primary", id="ok")
+
+    def on_mount(self) -> None:
+        self.query_one("#cookie", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "ok":
+            self.submit()
+        elif event.button.id == "guide":
+            try:
+                self.app.open_url(auth.HELP_URL)
+            except Exception:
+                webbrowser.open(auth.HELP_URL)
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def submit(self) -> None:
+        value = self.query_one("#cookie", Input).value.strip()
+        if not value:
+            self.dismiss(None)
+            return
+        boxes = self.query("#save")
+        saved = auth.remember(value, save=bool(boxes) and boxes.first(Checkbox).value)
+        self.app.notify("saved in your system keychain" if saved else "using it until you quit; not saved", timeout=3)
+        self.dismiss(value)
 
 
 def _load_config() -> dict:

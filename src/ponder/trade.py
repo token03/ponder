@@ -1,20 +1,19 @@
 """Path of Exile trade site: build searches, and run them when allowed.
 
 The site's API (the one Awakened PoE Trade uses) refuses some networks and
-may want a logged-in session; set POESESSID to your pathofexile.com session
-cookie if searches come back 403. `search_url` always works in a browser.
+may want a logged-in session; the session cookie comes from `auth` (env
+variable, typed in, or system keychain). `search_url` always works in a browser.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import time
 import urllib.parse
 import urllib.request
 
-from . import data
+from . import auth, data
 
 SITE = "https://www.pathofexile.com"
 USER_AGENT = "ponder/0.1 (crafting cost research)"
@@ -77,8 +76,8 @@ def _currency_id(trade_currency: str) -> str:
 
 def _call(url: str, body: dict | None = None) -> dict:
     headers = {"User-Agent": USER_AGENT, "Content-Type": "application/json"}
-    if os.environ.get("POESESSID"):
-        headers["Cookie"] = f"POESESSID={os.environ['POESESSID']}"
+    if cookie := auth.get():
+        headers["Cookie"] = f"POESESSID={cookie}"
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body else None, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)

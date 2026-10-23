@@ -14,12 +14,12 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from . import cluster, data, gear, pipeline, pob, prices, render
+from . import auth, cluster, data, gear, pipeline, pob, prices, render
 from .item import parse_item
 from .mine import mine
 from .mods import ModDB
 
-COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui"}
+COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui", "login", "logout"}
 SOURCES_HELP = "pobb.in/pastebin URL, file, PoB code, or .txt list of links"
 
 # Piped output (files, scripts, LLMs) never wraps, so long trade links stay whole.
@@ -56,6 +56,10 @@ def parser() -> argparse.ArgumentParser:
     tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
     tui.add_argument("sources", nargs="*", help=SOURCES_HELP)
     tui.add_argument("--trade", action="store_true")
+
+    login = sub.add_parser("login", help="enter your POESESSID for trade lookups (hidden; optionally saved to the system keychain)")
+    login.add_argument("--status", action="store_true", help="only say where the cookie comes from")
+    sub.add_parser("logout", help="remove a POESESSID saved in the system keychain")
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -118,7 +122,15 @@ def _print_estimates(rows, title: str) -> None:
                 console.print(f"  #{i} trade: {e.trade_url}", markup=False, highlight=False)
 
 
+def _ensure_cookie() -> None:
+    """Before trade lookups: ask once (hidden) if there's no cookie and someone is at the keyboard."""
+    if not auth.get():
+        auth.prompt()
+
+
 def _run(args) -> int:
+    if args.trade:
+        _ensure_cookie()
     if args.json:
         report = pipeline.run(
             args.sources, settle=args.settle, max_targets=args.max_targets, min_builds=args.min_builds, trade_lookup=args.trade, workers=args.workers
@@ -162,6 +174,29 @@ def _tui(args) -> int:
         console.print("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
         return 1
     return run_tui(args.sources, trade=args.trade)
+
+
+def _login(args) -> int:
+    has_keychain = auth.keychain_available()
+    if not args.status and has_keychain:
+        auth.prompt()
+    console.print(f"POESESSID: {auth.source()}", markup=False, highlight=False)
+    if not has_keychain:
+        console.print(
+            "No system keychain here (usual on WSL), so there is nothing to log in to: "
+            "`--trade` and the TUI ask for the cookie when they need it and keep it in memory only. "
+            "To skip that prompt, export POESESSID in your shell or keep it in a git-ignored .env.",
+            style="dim",
+            markup=False,
+            highlight=False,
+        )
+    return 0
+
+
+def _logout(args) -> int:
+    auth.forget()
+    console.print(f"removed any saved POESESSID; now: {auth.source()}", markup=False, highlight=False)
+    return 0
 
 
 def _data(args) -> int:
@@ -288,6 +323,7 @@ def _cluster(args) -> int:
             passives=args.passives, item_level=args.ilvl, need=args.need, fractured=args.fractured,
         )  # fmt: skip
     if args.trade and est.query:
+        _ensure_cookie()
         with console.status("asking the trade site"):
             pipeline.lookup_market(est, table, league)
     console.print(render.estimate_detail(est, source, _links()))
@@ -297,6 +333,8 @@ def _cluster(args) -> int:
 COMMAND_FUNCS = {
     "run": _run,
     "tui": _tui,
+    "login": _login,
+    "logout": _logout,
     "data": _data,
     "prices": _prices,
     "items": _items,

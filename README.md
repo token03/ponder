@@ -170,9 +170,24 @@ Kept as constants so they're easy to correct:
 base prices under `.cache/ninja`; without it a built-in snapshot is used.
 The trade API (the one Awakened PoE Trade uses) refuses some networks; set
 `POESESSID` to your pathofexile.com session cookie if `--trade` gets a 403.
-The printed search link always works in a browser. To keep the cookie in a
-git-ignored `.env` (`POESESSID=...`), run `uv run --env-file .env ponder ...`
-or set `UV_ENV_FILE=.env`.
+The printed search link always works in a browser.
+
+The cookie is a login token for your account, so ponder treats it like a
+password (`auth.py`). It uses, in order:
+
+1. the `POESESSID` environment variable;
+2. a cookie you typed in this run (hidden input; kept in memory only);
+3. the system keychain (Windows Credential Manager, macOS Keychain, Linux
+   Secret Service) via [keyring](https://pypi.org/project/keyring/), only if
+   you chose to save it there.
+
+When none is set, `--trade` asks on the terminal and the TUI shows a password
+dialog (or press `l`), both linking to the
+[poedb guide](https://poedb.tw/us/POESESSID). `ponder login` saves it to the
+keychain, `ponder login --status` says where it comes from, and
+`ponder logout` removes it. WSL usually has no keychain, so there it is never
+written anywhere and you're asked once per run; to skip that, export it in
+your shell or keep it in a git-ignored `.env` (`uv run --env-file .env ...`).
 
 ## Layout
 
@@ -198,6 +213,7 @@ src/ponder/
   gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods)
   prices.py poe.ninja prices
   trade.py  trade-site queries
+  auth.py   the POESESSID cookie: env, memory or system keychain
   cli.py    the `ponder` command
 builds/     lists of build links per league
 tests/      unit tests; the mod tests run once data is fetched

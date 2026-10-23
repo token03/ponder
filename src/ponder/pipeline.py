@@ -391,7 +391,8 @@ def lookup_market(est: Estimate, table: dict[str, float], league: str) -> None:
     try:
         found = trade.price(league, est.query, table)
     except urllib.error.HTTPError as e:
-        est.market_error = f"trade lookup failed ({e.code}); set POESESSID or use the link"
+        hint = "check your POESESSID (`ponder login`)" if e.code in (401, 403) else "try again later"
+        est.market_error = f"trade lookup failed ({e.code}); {hint}, or use the link"
         return
     except (urllib.error.URLError, OSError) as e:
         est.market_error = f"trade lookup failed ({e})"
