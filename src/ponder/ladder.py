@@ -7,7 +7,8 @@ no text matching, just ids into the mod database.
 
 `sample()` takes the top characters of every main skill with enough players,
 so many classes, skills and weapon types are covered, and caches each
-character under .cache/ladder/<snapshot>/.
+character's main skill, class and rare items and jewels (nothing else)
+under .cache/ladder/<snapshot>/.
 """
 
 from __future__ import annotations
@@ -94,17 +95,27 @@ def dictionary(hash_: str) -> list[str]:
 
 
 def character(snap: Snapshot, row: Row) -> dict | None:
-    """One character's JSON (items with mod ids, PoB export...), cached per snapshot."""
-    path = CACHE / snap.version / _safe(row.account) / f"{_safe(row.name)}.json"
-    if path.is_file():
-        return json.loads(path.read_text())
+    """One character as a `lite` dict (main skill, class, rare items and jewels by mod id), cached per snapshot.
+
+    Only the lite copy is kept: the full document (passive tree, PoB export,
+    uniques, gems) is ~100x bigger and nothing reads it.
+    """
+    stem = CACHE / snap.version / _safe(row.account) / _safe(row.name)
+    small = stem.with_suffix(".lite")
+    if small.is_file():
+        try:
+            data = json.loads(small.read_text())
+            if data.get("v") == LITE_VERSION:
+                return data
+        except ValueError:
+            pass
     query = urllib.parse.urlencode({"account": row.account, "name": row.name, "overview": snap.overview, "type": "exp"})
     try:
-        data = _get_json(f"{API}/builds/{snap.version}/character?{query}")
+        data = lite(_get_json(f"{API}/builds/{snap.version}/character?{query}"))
     except Exception:
         return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    small.parent.mkdir(parents=True, exist_ok=True)
+    small.write_text(json.dumps(data))
     return data
 
 
@@ -143,8 +154,7 @@ def sample(
 def cached(snap: Snapshot | None = None) -> Iterator[dict]:
     """Characters already downloaded (for `snap`, else the newest snapshot on disk), as `lite` dicts; no network.
 
-    Full documents are big (PoB export, passive tree); the first read writes a
-    small `.lite` copy next to each, which later reads use.
+    Full documents left by older versions are turned into `.lite` copies and deleted.
     """
     if snap is None:
         dirs = sorted(p for p in CACHE.iterdir() if p.is_dir() and p.name != "dictionaries") if CACHE.is_dir() else []
@@ -153,7 +163,6 @@ def cached(snap: Snapshot | None = None) -> Iterator[dict]:
         root = dirs[-1]
     else:
         root = CACHE / snap.version
-    # A snapshot unpacked from a zip of `.lite` files has no full documents: read those alone.
     stems = sorted({p.with_suffix("") for p in root.glob("*/*.json")} | {p.with_suffix("") for p in root.glob("*/*.lite")})
     for stem in stems:
         path, small = stem.with_suffix(".json"), stem.with_suffix(".lite")
@@ -161,19 +170,21 @@ def cached(snap: Snapshot | None = None) -> Iterator[dict]:
             if small.is_file():
                 data = json.loads(small.read_text())
                 if data.get("v") == LITE_VERSION:
+                    path.unlink(missing_ok=True)
                     yield data
                     continue
             if not path.is_file():
-                continue  # an outdated lite copy with nothing to rebuild it from
+                continue  # an outdated lite copy with nothing to rebuild it from (`sample` fetches it again)
             data = lite(json.loads(path.read_text()))
         except ValueError:
             continue
         small.write_text(json.dumps(data))
+        path.unlink()
         yield data
 
 
 def lite(data: dict) -> dict:
-    """What crafting analysis needs from a character: who, main skill, and rare items by mod id."""
+    """What crafting analysis needs from a character: who, class, main skill, and rare items and jewels by mod id."""
     from .demand import main_skill
 
     return {

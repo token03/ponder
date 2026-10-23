@@ -100,7 +100,7 @@ costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
 them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
 `/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
 builds, hole, demand, recomb saving), `R` cost a recombinator tree, `t` price the selected item on trade, `F` price the two most promising fractured bases
-of every item shown, `o`/`y` open or copy its trade search, `b` other
+of every item shown, `S` search trade for half-done items of the selected craft, `o`/`y` open or copy its trade search, `b` other
 builds, `q` quit.
 
 Colour means something: fractured mods gold, bench crafts light blue, essence
@@ -119,13 +119,18 @@ ponder ladder tiers --group "Gloves (ES)"   # how often each mod is worn, and ho
 ponder ladder prices --group Bow --top 3    # fit what each tier is worth from trade listings
 ponder ladder crafts                     # cost what the ladder wears (gear + cluster notables), rank market holes
 ponder ladder crafts --trade --recomb    # ... priced on trade, with recombinator trees
+ponder ladder crafts --starts 10         # ... and half-done items for sale for the top 10
+ponder ladder finish item.txt            # what an item you have can become, and the recipe from it
 ponder tui --ladder                      # the same, interactively (R costs a recomb tree, s sorts by hole/demand)
 ```
 
 `fetch` reads poe.ninja's builds data: for every main skill with at least 40
 players the top 10 characters, and the top 20 of every ascendancy (about 3,000
 characters). Their items come with exact mod ids, so nothing is text-matched.
-Everything is cached under `.cache/ladder/<snapshot>`.
+Only what crafting reads is cached, under `.cache/ladder/<snapshot>`: each
+character's class, main skill and rare items and jewels by mod id (about 15 KB
+a character; the full documents with passive trees and PoB exports were ~15x
+that and are converted and deleted on the next read).
 
 - **archetypes**: per base group, the mod combinations shared by the most
   characters. Mods count by main stat, so a hybrid "%phys / accuracy" merges
@@ -186,6 +191,24 @@ Everything is cached under `.cache/ladder/<snapshot>`.
   again the solver plans without sales. Ladder runs cost fractures of wanted
   mods only, not of filler resistances (`ponder SOURCES --fractures` still
   does both).
+- **finishing a real item**: the solver doesn't care where an item comes
+  from. Its state is just the mods on it, and a plan already knows the
+  expected cost to finish from every state it reaches (`craft.Plan.values`;
+  any other state is solved from where it is, `Problem.begin`). So
+  `ponder ladder finish item.txt` takes an item you dropped or half-crafted
+  (copied in game with Ctrl+C or Ctrl+Alt+C, or PoB text), lists every
+  ladder product of its base group it can become with what finishing costs,
+  what the product is worth and what that saves, and prints the recipe from
+  the item's own state. Crafted mods are ignored (the bench removes them),
+  fractured ones fix the craft, corrupted items and mods it can't read are
+  refused. **Half-done items for sale** work the same way: `--starts N` (or
+  `S` in the TUI) searches trade for rares of a craft's bases carrying any of
+  its wanted mods, finishes each listing from its own mods, and lists the
+  cheapest price + finish totals beside crafting it (`pipeline.find_starts`).
+  On the current ladder a Bone Ring with T1 life, T2 ES and a fire
+  resistance already passes as "ES + life + 1 filler" (a 1c bench craft
+  away, worth 2.8d), and finishes into "life + 3 filler" for 1.6d against
+  2.1d from scratch.
 
 ### Recombinators (`recomb.py`)
 
@@ -349,6 +372,14 @@ Awakener, veiled mods, and Harvest's newer crafts (recombinators: see below). `p
 try to make (veiled, legacy-crafted and special mods).
 
 ### Assumptions not in the game data
+
+The solver (`craft.py`) itself only knows game mechanics, the two sampled
+roll counts below, and the clicking-time charge. Everything that decides
+*what* to craft is an input made elsewhere and can be swapped for your own:
+which mods a product wants and how much filler it needs (`demand.py`: the
+`*_SHARE` constants, `MAX_KEYS`), what a brick sells for (`pipeline.SALE_SHARE`,
+`MIN_SALE`), resistances as interchangeable filler (`gear.FILLER_*`). A
+`craft.Problem` built by hand (targets, pool, actions) solves the same way.
 
 Kept as constants so they're easy to correct:
 

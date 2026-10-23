@@ -113,6 +113,7 @@ class Problem:
     filler_need: int = 0  # how many filler mods the finished item needs, on top of the targets
     filler_sides: tuple[int, int] | None = None  # (prefix, suffix) filler each side needs; None: any mix of filler_need
     junk_cap: tuple[int, int] | None = None  # most other mods allowed (prefix, suffix): recombinator donors want clean items
+    begin: State | None = None  # where crafting starts when not a fresh base: a bought or dropped item (`state_of`)
 
     @cached_property
     def mods(self) -> dict[str, Mod]:
@@ -128,19 +129,39 @@ class Problem:
 
     @property
     def start(self) -> State:
+        """A fresh base (with its fractured mods): where a sale starts over."""
         return State(NORMAL, self.base.status, self.base.junk)
+
+    @property
+    def origin(self) -> State:
+        """Where this craft starts: `begin`, else a fresh base."""
+        return self.begin or self.start
 
     def classify(self, mod_id: str) -> tuple[int, int]:
         """(target index, GOOD or BLOCKED), or (-1, junk slot)."""
-        mod = self.mods[mod_id]
+        return self.classify_mod(self.mods[mod_id])
+
+    def classify_mod(self, mod: Mod) -> tuple[int, int]:
+        """`classify` for any mod, also one outside the pool (a crafted or influence mod on a bought item)."""
         for i, t in enumerate(self.targets):
-            if mod_id in t.good:
+            if mod.id in t.good:
                 return i, GOOD
             if set(mod.groups) & t.groups:
                 return i, BLOCKED
-        if mod_id in self.filler:
+        if mod.id in self.filler:
             return -1, 4 if mod.side == "prefix" else 5
         return -1, (0 if mod.side == "prefix" else 2) + (0 if mod.notable else 1)
+
+    def state_of(self, rarity: int, mods: list[Mod]) -> State:
+        """The state of a real item with these mods (fractured ones included, as in `fixed`)."""
+        status, junk = [MISSING] * len(self.targets), [0] * 6
+        for m in mods:
+            i, v = self.classify_mod(m)
+            if i >= 0:
+                status[i] = status[i] or v
+            else:
+                junk[v] += 1
+        return State(rarity, tuple(status), tuple(junk))
 
     @cached_property
     def base(self) -> State:
@@ -410,13 +431,18 @@ class Problem:
 
 @dataclass
 class Plan:
-    cost: float  # expected chaos from a normal base, excluding the base itself, clicking time included
+    cost: float  # expected chaos from the problem's origin (a fresh base unless `begin`), excluding the base itself, clicking time included
     policy: dict[State, str]
     usage: dict[str, float]  # expected uses of each action
     visits: dict[State, float]  # expected times each state is acted on
     states: int
     unpriced: list[str] = field(default_factory=list)  # actions left out for lack of a price
     hours: float = 0.0  # expected time spent clicking
+    values: dict[State, float] = field(default_factory=dict)  # expected chaos to finish from every state the plan reaches
+
+    def to_finish(self, problem: Problem, s: State) -> float | None:
+        """Expected chaos to finish an item in state `s` under this plan; None if the plan never meets it."""
+        return 0.0 if problem.done(s) else self.values.get(s)
 
     @property
     def currency(self) -> float:
@@ -480,7 +506,7 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     problem.__dict__.pop("_rolls", None)
     problem.__dict__.pop("_lock_cache", None)
     costs = {a.name: step_cost(a, prices) for a in problem.actions}
-    if problem.done(problem.start):
+    if problem.done(problem.origin):
         return Plan(0.0, {}, {}, {}, 1, unpriced)
     states, edges = _explore(problem)
     g = _Graph(problem, edges, costs)
@@ -496,7 +522,7 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
                 if (better == policy).all():
                     break
                 policy = better
-        if not np.isfinite(value).all() or value[g.index[problem.start]] < 0:
+        if not np.isfinite(value).all() or value[g.index[problem.origin]] < 0:
             raise np.linalg.LinAlgError("a sale is worth more than making it again")
     except np.linalg.LinAlgError:
         if not any(a.kind == "sell" for a in problem.actions):
@@ -505,19 +531,20 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
         problem.actions = [a for a in problem.actions if a.kind != "sell"]
         return solve(problem, prices, max_rounds)
 
-    visits = g.visits(policy, g.index[problem.start])
+    visits = g.visits(policy, g.index[problem.origin])
     usage = {a.name: 0.0 for a in problem.actions}
     for i, n in enumerate(visits):
         usage[g.action[policy[i]]] += float(n)
     hours = sum(n * seconds(a) for a in problem.actions if (n := usage[a.name])) / 3600
     return Plan(
-        float(value[g.index[problem.start]]),
+        float(value[g.index[problem.origin]]),
         {s: g.action[policy[i]] for i, s in enumerate(g.states)},
         usage,
         {s: float(visits[i]) for i, s in enumerate(g.states)},
         len(states),
         unpriced,
         hours,
+        {s: float(value[i]) for i, s in enumerate(g.states)},
     )
 
 
@@ -598,16 +625,16 @@ def _cheapest_of_equals(acts: list[Action], problem: Problem, prices: dict[str, 
 
 
 def evaluate(problem: Problem, policy: dict[State, str], prices: dict[str, float]) -> float:
-    """Exact expected cost of following `policy` (state -> action name) from the start."""
+    """Exact expected cost of following `policy` (state -> action name) from the origin."""
     costs = {a.name: step_cost(a, prices) for a in problem.actions}
     g = _Graph(problem, _explore(problem)[1], costs)
     chosen = np.array([g.pair_of(i, policy[s]) for i, s in enumerate(g.states)])
-    return float(g.evaluate(chosen)[g.index[problem.start]])
+    return float(g.evaluate(chosen)[g.index[problem.origin]])
 
 
 def _explore(problem: Problem):
-    """Every state reachable from the normal base, with each action's outcomes."""
-    frontier, seen = [problem.start], {problem.start}
+    """Every state reachable from the origin, with each action's outcomes."""
+    frontier, seen = [problem.origin], {problem.origin}
     edges: dict[State, dict[str, list]] = {}
     checked: set[int] = set()  # rerolls share one outcome list across many states
     while frontier:
@@ -822,8 +849,8 @@ def steps(problem: Problem, plan: Plan, min_reach: float = 0.02) -> list[Step]:
     for st in open_visits:
         groups.setdefault(key(st), []).append(st)
     reached = {k: 0.0 for k in groups}
-    if key(problem.start) in reached:
-        reached[key(problem.start)] += 1.0
+    if key(problem.origin) in reached:
+        reached[key(problem.origin)] += 1.0
     flow: dict[tuple, dict] = {k: {} for k in groups}  # group -> next group (or "done") -> expected moves
     via: dict[tuple, dict] = {}  # (group, next) -> action -> expected moves
     for st, v in open_visits.items():
@@ -838,7 +865,8 @@ def steps(problem: Problem, plan: Plan, min_reach: float = 0.02) -> list[Step]:
             by[a] = by.get(a, 0.0) + v * p
             if to != "done" and to in reached:
                 reached[to] += v * p
-    kept = sorted((k for k in groups if reached[k] >= min_reach or k == key(problem.start)), key=lambda k: (len(k[1]), k[0], -reached[k]))
+    first = key(problem.origin)  # step 1 is where the item starts, even a half-done one
+    kept = sorted((k for k in groups if reached[k] >= min_reach or k == first), key=lambda k: (k != first, len(k[1]), k[0], -reached[k]))
     number = {k: i + 1 for i, k in enumerate(kept)}
     names = [t.name for t in problem.targets]
     out = []
@@ -859,7 +887,9 @@ def steps(problem: Problem, plan: Plan, min_reach: float = 0.02) -> list[Step]:
             by = max(via[(k, to)].items(), key=lambda x: x[1])[0]
             if to == "done":
                 rest = [names[i] for i in range(len(names)) if i not in have]
-                what = f"got {', '.join(rest)}" if rest and problem.need == len(names) else "done"
+                got = [", ".join(rest)] if rest and problem.need == len(names) else []
+                got += ["filler"] if problem.filler_need else []
+                what = f"got {' + '.join(got)}" if got else "done"
                 exits.append(Exit(chance, None, what, "done", by))
             elif by_name[by].kind == "sell" and to in number:
                 exits.append(Exit(chance, number[to], f"{by} (+{by_name[by].credit:,.0f}c)", "sell", by))
@@ -985,11 +1015,4 @@ def _draw(problem: Problem, rarity: int, mods: list[Mod], profile: str, rng, cac
 
 
 def _lump(problem: Problem, rarity: int, mods: list[Mod]) -> State:
-    status, junk = [MISSING] * len(problem.targets), [0] * 6
-    for m in mods:
-        i, v = problem.classify(m.id)
-        if i >= 0:
-            status[i] = status[i] or v
-        else:
-            junk[v] += 1
-    return State(rarity, tuple(status), tuple(junk))
+    return problem.state_of(rarity, mods)

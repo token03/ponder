@@ -67,3 +67,12 @@ def test_money_switches_to_divines(monkeypatch):
     assert render.money(300) == "1.5d"
     assert render.money(-500) == "-2.5d"
     assert render.money(5) == "5.0c"
+
+
+def test_listing_item_marks_fractured_and_crafted_lines():
+    listing = {"item": {"rarity": "Rare", "name": "Gale Loop", "baseType": "Bone Ring", "ilvl": 84, "influences": {"shaper": True},
+                        "fracturedMods": ["+40 to maximum Energy Shield"], "explicitMods": ["+105 to maximum Life"], "craftedMods": ["+12 to Dexterity"]}}
+    item = trade.listing_item(listing)
+    assert (item.rarity, item.base, item.item_level, item.influences) == ("RARE", "Bone Ring", 84, {"shaper"})
+    assert [(m.text, m.fractured, m.crafted) for m in item.explicits] == [
+        ("+40 to maximum Energy Shield", True, False), ("+105 to maximum Life", False, False), ("+12 to Dexterity", False, True)]

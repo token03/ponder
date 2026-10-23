@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import data
+from .item import Item, ModLine
 
 SITE = "https://www.pathofexile.com"
 USER_AGENT = "ponder/0.1 (crafting cost research)"
@@ -77,12 +78,14 @@ def item_query(
     fractured_only: bool = False,
     extra: list[dict] = (),
     count: tuple[int, list[tuple[str, float | None]]] | None = None,
+    rarity: str = "nonunique",
+    corrupted: bool | None = None,
 ) -> dict:
     """A search for non-unique items with all of `stats` (trade stat id, minimum value),
     and, with `count=(n, stats)`, at least n of those other stats."""
     filters = [_stat_filter(sid, low) for sid, low in stats]
     filters += list(extra)
-    type_filters: dict = {"rarity": {"option": "nonunique"}}
+    type_filters: dict = {"rarity": {"option": rarity}}
     if category:
         type_filters["category"] = {"option": category}
     query: dict = {
@@ -99,6 +102,8 @@ def item_query(
         misc["ilvl"] = {"min": item_level}
     if fractured_only:
         misc["fractured_item"] = {"option": "true"}
+    if corrupted is not None:
+        misc["corrupted"] = {"option": str(corrupted).lower()}
     if misc:
         query["filters"]["misc_filters"] = {"filters": misc}
     return {"query": query, "sort": {"price": "asc"}}
@@ -195,6 +200,20 @@ def _priced(asks, total: int, rates: dict[str, float]) -> tuple[float, int] | No
     """Asks are cached in their own currency, so a divine-rate change reprices them."""
     chaos = [amount * rates[_currency_id(cur)] for amount, cur in asks if _currency_id(cur) in rates]
     return (statistics.median(chaos), total) if chaos else None
+
+
+def listing_item(listing: dict) -> Item:
+    """A trade listing's item as an `Item` (its mod lines marked fractured or crafted), for `ModDB.match`."""
+    it = listing.get("item") or {}
+    rarity = (it.get("rarity") or {0: "NORMAL", 1: "MAGIC", 2: "RARE", 3: "UNIQUE"}.get(it.get("frameType"), "")).upper()
+    item = Item(rarity, it.get("name", ""), it.get("baseType") or it.get("typeLine", ""), it.get("ilvl"), influences=set(it.get("influences") or {}))
+    for key, flag in (("corrupted", "corrupted"), ("fractured", "fractured"), ("mirrored", "mirrored"), ("split", "split")):
+        if it.get(key):
+            item.flags.add(flag)
+    item.implicits = [ModLine(t) for t in it.get("implicitMods") or []]
+    for key, markers in (("fracturedMods", {"fractured": ""}), ("explicitMods", {}), ("craftedMods", {"crafted": ""})):
+        item.explicits += [ModLine(t, dict(markers)) for t in it.get(key) or []]
+    return item
 
 
 def _currency_id(trade_currency: str) -> str:

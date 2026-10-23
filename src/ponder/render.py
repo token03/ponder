@@ -21,7 +21,7 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
-from . import craft
+from . import craft, pipeline
 from .mods import ItemMatch
 from .pipeline import Estimate, Report, Shared
 
@@ -264,6 +264,8 @@ def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, pa
         parts += [Text(""), recomb_steps(e, pal)]
     if e.smaller or e.bigger:
         parts += [Text(""), product_tree(e, pal)]
+    if e.starts or e.starts_url:
+        parts += [Text(""), starts_table(e, links, pal)]
     pick = suggested_fracture(e)
     if pick and pick.plan:
         how = "making" if pick.self_made else "buying"
@@ -409,6 +411,55 @@ def _fractures(e: Estimate, links: bool, pal: Palette) -> Table:
     return t
 
 
+def starts_table(e: Estimate, links: bool = True, pal: Palette = ANSI) -> RenderableType:
+    """Half-done items for sale (`pipeline.find_starts`): price, what's on them, the cost to finish."""
+    t = Table(title="or buy a half-done one", title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+    t.add_column("price", justify="right")
+    t.add_column("has")
+    t.add_column("finish", justify="right")
+    t.add_column("total", justify="right")
+    t.add_column("vs cheapest", justify="right")
+    t.add_column("seller", style="dim")
+    for f in e.starts:
+        saves = f.saves
+        vs = Text("-", style="dim") if saves is None else Text(("−" if saves > 0 else "+") + money(abs(saves)), style=pal.good if saves > 0 else pal.bad)
+        seller = (((f.listing or {}).get("listing") or {}).get("account") or {}).get("name", "")
+        t.add_row(money_text(f.price), situation(f.problem, f.state, pal), money_text(f.craft_cost), money_text(f.total), vs, seller)
+    if not e.starts:
+        t.add_row(Text("none listed beat crafting it", style="dim"), "", "", "", "", "")
+    return Group(t, link("  listings", e.starts_url, links, pal)) if e.starts_url else t
+
+
+def finishes_view(item: str, found, pal: Palette = ANSI) -> RenderableType:
+    """What one real item can become (`pipeline.finishes`), and the recipe for the best."""
+    t = Table(title=f"finishing {item}", title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+    t.add_column("product")
+    t.add_column("has", style=pal.good)
+    t.add_column("finish", justify="right")
+    t.add_column("worth", justify="right")
+    t.add_column("saves", justify="right")
+    t.add_column("wear it", justify="right", style="dim")
+    short = pipeline._short_name
+    for f in found:
+        e = f.estimate
+        name = " + ".join(short(x) for x in e.targets)
+        if e.problem and e.problem.filler_need:
+            name += f" + {e.problem.filler_need} filler"
+        cost = money_text(f.craft_cost)
+        if f.plan is not None and not f.plan.policy:  # nothing left but bench crafts
+            cost = Text("ready", style=f"bold {pal.good}") + (Text(f" +{money(f.craft_cost)} bench", style="dim") if e.bench else Text(""))
+        t.add_row(name, ", ".join(short(x) for x in f.have) or "-", cost, money_text(f.worth), money_text(f.saves), str(e.demand))
+    parts: list[RenderableType] = [t]
+    best = next((f for f in found if f.plan and f.plan.policy), None)
+    if best:
+        filler = best.estimate.problem.filler_need if best.estimate.problem else 0
+        title = Text.assemble("recipe · into ", (" + ".join(short(x) for x in best.estimate.targets) + (f" + {filler} filler" if filler else ""), pal.good))
+        parts += [Text(""), steps_text(best.problem, best.plan, title, pal), Text(""), _currency(best.plan)]
+    elif not found:
+        parts.append(Text("no ladder product of this base fits it", style="dim"))
+    return Group(*parts)
+
+
 def suggested_fracture(e: Estimate):
     """The fracture to start from: the cheapest priced route if it beats scratch, else
     (before any base is priced) the one that leaves the cheapest craft."""
@@ -469,7 +520,7 @@ def steps_text(problem: craft.Problem, plan: craft.Plan, title: Text, pal: Palet
         out.append(": ")
         for i, (a, when, n) in enumerate(st.actions[:3]):
             if i:
-                out.append(f"; if {when}: ", style="dim")
+                out.append(f"\n      · if {when}: ", style="dim")
             out.append(f"spam {a}" if n >= 3 else a, style=f"bold {pal.action}")
             if n >= 1.5:
                 out.append(f" ~{n:,.0f}×" if n >= 10 else f" ~{n:.1f}×", style="dim")

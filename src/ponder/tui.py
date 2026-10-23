@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
 import webbrowser
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane
 
 from . import pipeline, prices, render, trade
+from .mods import ModDB
 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ponder" / "tui.json"
 DEFAULT_THEME = "ansi-dark"  # the terminal's own colours
@@ -55,8 +57,8 @@ KEYS = [
     ("s", "sort: margin · craft · cheapest · fracture saving · builds (ladder: hole · demand · recomb saving)"),
     ("R", "cost a recombinator tree for the selected item (clean donors, NNN pads)"),
     ("t", "price the selected item on trade (item, fractured bases)"),
-    ("T", "price everything shown, within the trade budget"),
     ("F", "price the 2 most promising fractured bases of every item shown"),
+    ("S", "search trade for half-done items of the selected craft, finished from their own mods"),
     ("o / y", "open / copy the trade search"),
     ("b", "load other builds"),
     ("ctrl+p", "command palette (themes live here)"),
@@ -94,6 +96,7 @@ class PonderApp(App):
     BINDINGS = [
         Binding("t", "trade", "price"),
         Binding("F", "fracture_prices", "fracture bases"),
+        Binding("S", "starts", "half-done"),
         Binding("R", "recomb", "recomb"),
         Binding("o", "open_link", "open"),
         Binding("y", "copy_link", "copy link", show=False),
@@ -307,6 +310,22 @@ class PonderApp(App):
         pipeline.add_recombs(estimates, self.table, progress=lambda m: self.call_from_thread(self.set_status, escape(m)))
         self.call_from_thread(self.after_lookup, estimates, 0)
         self.call_from_thread(self.set_status, "recombinator tree costed" if estimates[0].recomb else "no recombinator plan for this item")
+
+    def action_starts(self) -> None:
+        if self.current and self.current.kind == "gear" and self.current.plan:
+            self.find_starts(self.current)
+
+    @work(thread=True, exclusive=True, group="trade")
+    def find_starts(self, est: pipeline.Estimate) -> None:
+        league = self.report.league if self.report else pipeline.current_league()
+        self.call_from_thread(self.set_status, "searching trade for half-done items…")
+        before = trade.searches
+        try:
+            self._db = getattr(self, "_db", None) or ModDB()
+            pipeline.find_starts(self._db, est, self.table, league)
+        except (urllib.error.URLError, OSError) as e:
+            self.call_from_thread(self.notify, f"trade failed: {e}", severity="warning")
+        self.call_from_thread(self.after_lookup, [est], trade.searches - before)
 
     def action_fracture_prices(self) -> None:
         if self.report:

@@ -68,6 +68,9 @@ class Item:
 
 
 def parse_item(text: str) -> Item:
+    """A PoB item, or an item copied in game (Ctrl+C, or Ctrl+Alt+C with mod tiers)."""
+    if _SEPARATOR in text:
+        return _parse_copied(text)
     lines = [_COLOR.sub("", line).strip() for line in text.strip().splitlines()]
     lines = [line for line in lines if line]
     if not lines or not lines[0].startswith("Rarity:"):
@@ -114,6 +117,56 @@ def parse_item(text: str) -> Item:
     n = implicit_count or 0
     item.implicits = _mod_lines(body[:n], variant)
     item.explicits = _mod_lines(body[n:], variant)
+    return item
+
+
+_SEPARATOR = "--------"
+_COPIED_MARKER = re.compile(r"\s*\((implicit|crafted|fractured|enchant|scourge|crucible)\)$")
+_COPIED_RANGE = re.compile(r"(\d+(?:\.\d+)?)\(-?\d+(?:\.\d+)?-\d+(?:\.\d+)?\)")  # advanced copy: "105(100-109)"
+_COPIED_SKIP = ("Requirements:", "Sockets:", "Item Level:", "Quality", "Note:", "Level:", "Str:", "Dex:", "Int:")
+
+
+def _parse_copied(text: str) -> Item:
+    """The game's copy format: sections between "--------" lines.
+
+    The first section names the item; a section of "Key: value" lines is
+    properties or requirements; mod lines carry "(implicit)", "(crafted)" or
+    "(fractured)"; advanced copies (Ctrl+Alt+C) add "{ Prefix Modifier ... }"
+    headers and roll ranges, which are dropped.
+    """
+    sections = [[line.strip() for line in part.strip().splitlines() if line.strip()] for part in text.strip().split(_SEPARATOR)]
+    head = [line for line in sections[0] if not line.startswith("Item Class:")]
+    if not head or not head[0].startswith("Rarity:"):
+        raise ValueError(f"not a copied item: {head[:1]}")
+    rarity = head[0].split(":", 1)[1].strip().upper()
+    names = head[1:]
+    name, base = (names[0], names[-1]) if names else ("", "")
+    item = Item(rarity=rarity, name=name, base=base)
+    for section in sections[1:]:
+        for line in section:
+            if line.startswith("Item Level:"):
+                item.item_level = _int(line.split(":", 1)[1].strip())
+            elif line.startswith("Quality:"):
+                item.quality = _int(re.sub(r"\D", "", line.split(":", 1)[1].split("(")[0])) or 0
+        if all(":" in line for line in section) or section[0].startswith(_COPIED_SKIP):
+            continue  # properties, requirements, sockets, item level, notes
+        for line in section:
+            if line in INFLUENCES:
+                item.influences.add(INFLUENCES[line])
+            elif line in _FLAGS:
+                item.flags.add(_FLAGS[line])
+            elif line.startswith("{"):
+                continue  # advanced copy: { Prefix Modifier "Virile" (Tier: 1) — Life }
+            else:
+                found = _COPIED_MARKER.search(line)
+                kind = found.group(1) if found else ""
+                line = _COPIED_RANGE.sub(r"\1", _COPIED_MARKER.sub("", line)).split(" — ")[0]
+                if kind == "implicit":
+                    item.implicits.append(ModLine(line))
+                elif kind in ("", "crafted", "fractured"):
+                    item.explicits.append(ModLine(line, {kind: ""} if kind else {}))
+    if any(m.fractured for m in item.explicits):
+        item.flags.add("fractured")
     return item
 
 

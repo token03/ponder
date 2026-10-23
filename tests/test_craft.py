@@ -297,3 +297,27 @@ def test_selling_a_brick_as_a_smaller_product_lowers_the_cost():
     assert craft.simulate(problem, selling, PRICES, runs=3000) == pytest.approx(selling.cost, rel=0.1)
     greedy = Action("sell as A", "sell", (), (MAGIC, RARE), credit=100 * only_a.cost, sale=(frozenset({0}), (0, 0, 0), frozenset()))
     assert solve(toy(extra_actions=[greedy]), PRICES).cost == pytest.approx(plain.cost)
+
+
+def test_finishing_a_half_done_item():
+    """An item with A already on starts part way: the from-scratch plan already prices its state,
+    and solving from it gives the same number; a junk-filled one is never worse than scouring it."""
+    problem = toy()
+    plan = solve(problem, PRICES)
+    a, y = (next(m for m in POOL if m.id == x) for x in ("A", "y"))
+    half = problem.state_of(RARE, [a, y])
+    assert half.status == (GOOD, MISSING) and half.junk[3] == 1
+    p2 = toy()
+    p2.begin = half
+    begun = solve(p2, PRICES)
+    assert begun.cost <= plan.cost + PRICES["scour"] + 1e-9
+    if half in plan.values:
+        assert plan.to_finish(problem, half) == pytest.approx(begun.cost)
+    cheap = {**PRICES, "exalted": 0.5}  # so a clean rare with A is worth exalting, not scouring
+    p3 = toy()
+    p3.begin = problem.state_of(RARE, [a])
+    clean = solve(p3, cheap)
+    assert clean.cost < solve(toy(), cheap).cost
+    assert craft.steps(p3, clean)[0].have == ("A",)  # the recipe starts where the item is
+    crafted = Mod("bench", "suffix", 0, ("B",), False, "crafted B-group")  # outside the pool: blocks B
+    assert problem.state_of(RARE, [crafted]).status == (MISSING, craft.BLOCKED)

@@ -190,3 +190,20 @@ def test_archetypes_become_finished_items():
     assert gp.bench and p.reserve  # one open suffix is a bench resistance
     assert any(db.mods[x]["type"] == "Strength" for t in p.targets for x in t.good)  # on 2 of 3: wanted
     assert any(db.mods[x]["type"] == "ColdResistance" for x in p.filler)
+
+
+def test_cache_keeps_only_the_lite_character(monkeypatch, tmp_path):
+    """Fetched characters are stored as their lite record only; full documents left on disk become lite."""
+    monkeypatch.setattr(ladder, "CACHE", tmp_path)
+    full = {"account": "a", "name": "n", "class": "Witch", "skills": [], "passives": list(range(1000)),
+            "items": [{"itemData": {"frameType": 2, "baseType": "Bone Ring", "mods": {"explicit": [{"id": "IncreasedLife7"}]}}}]}
+    monkeypatch.setattr(ladder, "_get_json", lambda url: full)
+    snap = ladder.Snapshot("L", "l", "v1")
+    got = ladder.character(snap, ladder.Row("a", "n"))
+    assert got["rares"][0]["baseType"] == "Bone Ring" and "passives" not in got
+    assert [p.suffix for p in (tmp_path / "v1").rglob("*.*")] == [".lite"]
+    old = tmp_path / "v1" / "b" / "m.json"
+    old.parent.mkdir()
+    old.write_text(__import__("json").dumps({**full, "name": "m"}))
+    assert sorted(c["name"] for c in ladder.cached(snap)) == ["m", "n"]
+    assert not old.exists() and old.with_suffix(".lite").is_file()

@@ -22,6 +22,7 @@ import hashlib
 import multiprocessing
 import os
 import pickle
+import re
 import sys
 import urllib.error
 import zlib
@@ -132,6 +133,8 @@ class Estimate:
     skills: list[str] = field(default_factory=list)  # their most common main skills
     smaller: list[Estimate] = field(default_factory=list)  # products this one contains (ladder runs): what a brick sells as
     bigger: list[Estimate] = field(default_factory=list)  # products that contain this one: where it leads
+    starts: list[Finish] = field(default_factory=list)  # half-done items for sale worth finishing (`find_starts`)
+    starts_url: str | None = None
 
     @property
     def craft_cost(self) -> float | None:
@@ -248,6 +251,7 @@ class Estimate:
             "fracture_worth": {"chaos": w[0], "target": w[1].target} if (w := self.fracture_worth) else None,
             "smaller_products": [{"title": x.title, "targets": x.targets, "cheapest": x.cheapest} for x in self.smaller],
             "bigger_products": [{"title": x.title, "targets": x.targets, "cheapest": x.cheapest} for x in self.bigger],
+            "half_done_for_sale": [f.to_dict() for f in self.starts],
             "error": self.error or self.market_error or self.base_error,
         }
 
@@ -826,9 +830,193 @@ def add_sales(est: Estimate) -> None:
         target.problem.actions = [a for a in target.problem.actions if a.kind != "sell"] + acts
 
 
-def _short_name(name: str, width: int = 22) -> str:
-    name = name.split(" (T")[0]
-    return name if len(name) <= width else name[: width - 1] + "…"
+def _short_name(name: str, width: int = 26) -> str:
+    """A target's name without its numbers: "+(100-114) to maximum Life (T1)" -> "Life T1"."""
+    tier = re.search(r"\((T\d+\+?)\)\s*$", name)
+    text = re.sub(r"\s*\(T\d+\+?\)\s*$", "", name)
+    text = re.sub(r"^[+-]?\(?[\d.]+(?:-[\d.]+)?\)?%?\s+(?:to\s+|increased\s+|additional\s+)?(?:maximum\s+)?", "", text)
+    text = re.sub(r"\([\d.]+-[\d.]+\)", "#", text)
+    text = text if len(text) <= width else text[: width - 1] + "…"
+    return f"{text} {tier.group(1)}" if tier else text
+
+
+# -- finishing a given item -----------------------------------------------------------
+
+
+@dataclass
+class Finish:
+    """Finishing one real item (dropped, bought or half-crafted) into an Estimate's product.
+
+    The solver doesn't care where an item comes from: the item's mods are a
+    state, and the plan already knows the cost to finish from every state it
+    reaches (`craft.Plan.values`). An item the plan never meets is solved
+    from its own state.
+    """
+
+    estimate: Estimate
+    have: list[str]  # its targets already on, at a good tier
+    problem: craft.Problem | None = None  # the estimate's problem (or a fracture's), starting at the item
+    state: craft.State | None = None
+    plan: craft.Plan | None = None
+    craft_cost: float | None = None  # expected chaos to finish, bench crafts included
+    price: float | None = None  # what the item costs, when bought
+    listing: dict | None = None  # the trade listing, when bought
+    error: str | None = None
+
+    @property
+    def total(self) -> float | None:
+        return None if self.craft_cost is None else self.craft_cost + (self.price or 0.0)
+
+    @property
+    def worth(self) -> float | None:
+        """What the finished item is worth: its market price, else the cheapest way to make it."""
+        e = self.estimate
+        return e.market[0] if e.market else e.cheapest
+
+    @property
+    def saves(self) -> float | None:
+        """Chaos saved against making the product the cheapest other way."""
+        e = self.estimate
+        return None if self.total is None or e.cheapest is None else e.cheapest - self.total
+
+    def steps(self) -> list[craft.Step]:
+        return craft.steps(self.problem, self.plan) if self.plan and self.problem else []
+
+    def to_dict(self) -> dict:
+        lst = (self.listing or {}).get("listing") or {}
+        return {
+            "product": self.estimate.title,
+            "targets": self.estimate.targets,
+            "have": self.have,
+            "state": craft.describe(self.problem, self.state) if self.problem and self.state else None,
+            "craft_cost": self.craft_cost,
+            "price": self.price,
+            "total": self.total,
+            "saves": self.saves,
+            "seller": (lst.get("account") or {}).get("name"),
+            "whisper": lst.get("whisper"),
+            "steps": [dataclasses.asdict(st) for st in self.steps()],
+            "error": self.error,
+        }
+
+
+def finish(db: ModDB, est: Estimate, match: ItemMatch, table: dict[str, float], solve: bool = True) -> Finish:
+    """The cheapest way to finish `match` (a real item) into `est`'s product.
+
+    Its crafted mods are left out (the bench removes them), fractured ones fix
+    the problem (a fracture of `est` when one matches). With `solve`, an item
+    the plan never meets is solved from its own state, and so is every item
+    whose recipe will be shown (`plan` is then the plan from the item).
+    """
+    item = match.item
+    f = Finish(est, [])
+    if est.problem is None or est.plan is None:
+        f.error = est.error or "not solved"
+        return f
+    if item.flags & {"corrupted", "mirrored", "split"}:
+        f.error = "corrupted or mirrored: can't be crafted"
+        return f
+    if match.base_id is None or gear.group(db, match).label != est.title:
+        f.error = f"{item.base} isn't a {est.title}"
+        return f
+    unread = [line.text for line in match.unmatched if not line.crafted]
+    if unread:
+        f.error = f"can't read {unread[0]!r}: the item's state would be wrong"
+        return f
+    mods_db = data.load("mods")
+    on, fractured = [], set()
+    for m in match.mods:
+        if m.source in ("crafted", "legacy-crafted") or m.mod_id not in mods_db:
+            continue
+        on.append(est.problem.mods.get(m.mod_id) or gear._mod(m.mod_id, mods_db[m.mod_id], 0))
+        if m.fractured:
+            fractured.add(m.mod_id)
+    ilvl = item.item_level or est.item_level
+    for t in est.problem.targets:
+        if not any(mods_db[m]["required_level"] <= ilvl for m in t.good if m in mods_db) and not any(m.id in t.good for m in on):
+            f.error = f"item level {ilvl} can't roll {t.name}"
+            return f
+    problem, plan = _fixed_problem(est, fractured | set(est.fixed_ids), on)
+    if problem is None:
+        f.error = "its fractured mods aren't ones this product can keep"
+        return f
+    rarity = {"NORMAL": craft.NORMAL, "MAGIC": craft.MAGIC}.get(item.rarity, craft.RARE)
+    if rarity == craft.RARE and not on:
+        rarity = craft.NORMAL  # every mod would be scoured anyway
+    state = problem.state_of(rarity, on)
+    f.problem, f.state = problem, state
+    f.have = [t.name for t, v in zip(problem.targets, state.status) if v == craft.GOOD] + [m.label for m in problem.fixed if m.id in fractured]
+    cost = plan.to_finish(problem, state) if plan else None
+    if solve or cost is None:
+        begun = dataclasses.replace(problem, begin=state, actions=list(problem.actions))
+        if plan is None or fractured - set(est.fixed_ids):
+            begun.actions = [a for a in begun.actions if a.kind != "sell"]  # sold, it can't be bought again
+        holder = Finish(est, [], begun)
+        solve_one(holder, table)
+        if holder.plan is None:
+            f.error = holder.error or "can't finish it"
+            return f
+        f.problem, f.plan, cost = begun, holder.plan, holder.plan.cost
+    f.craft_cost = cost + est.bench_cost
+    return f
+
+
+def _fixed_problem(est: Estimate, fixed: set[str], on: list[craft.Mod]) -> tuple[craft.Problem | None, craft.Plan | None]:
+    """`est`'s problem with these mods fractured (and its plan, when `est` or a fracture of it has one)."""
+    for x in [est] + est.fractures:
+        if x.problem is not None and {m.id for m in x.problem.fixed} == fixed:
+            return x.problem, x.plan
+    p = est.problem
+    extra = [dataclasses.replace(m, weight=0) for m in on if m.id in fixed and m.id not in {x.id for x in p.fixed}]
+    targets = [t for t in p.targets if not any(m.id in t.good for m in extra)]
+    if any(set(m.groups) & t.groups and m.id not in t.good for m in extra for t in targets):
+        return None, None  # a fractured mod blocks a target for good
+    return dataclasses.replace(p, targets=targets, need=p.need - (len(p.targets) - len(targets)), fixed=p.fixed + extra, actions=list(p.actions)), None
+
+
+def finishes(db: ModDB, match: ItemMatch, estimates: list[Estimate], table: dict[str, float], top: int = 5) -> list[Finish]:
+    """What `match` can become: every product of its base group it can be finished into,
+    the most chaos saved (against making that product another way) first; the `top` few get a plan."""
+    found = [f for e in estimates if e.kind == "gear" and (f := finish(db, e, match, table, solve=False)).craft_cost is not None]
+    found.sort(key=lambda f: -(f.saves if f.saves is not None else -f.total))
+    return [finish(db, f.estimate, match, table) for f in found[:top]]
+
+
+def find_starts(
+    db: ModDB, est: Estimate, table: dict[str, float], league: str, listings: int = 20, keep: int = 5
+) -> list[Finish]:
+    """Half-done items for sale that save grinding: rares of `est`'s bases with any of its targets.
+
+    One search (plus a fetch per 10 listings); each listing is finished from
+    its own mods, and the cheapest totals (price + finishing) are kept, best
+    first, in `est.starts`.
+    """
+    if est.kind != "gear" or est.problem is None or est.plan is None:
+        return []
+    stats = [(sid, trade.stat_min(t.good)) for t in est.problem.targets if (sid := trade.stat_id(next(iter(t.good))))]
+    if not stats:
+        return []
+    fixed = [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
+    query = trade.item_query(**est.search, stats=fixed, count=(1, stats), item_level=None, rarity="rare", corrupted=False)
+    est.starts_url = trade.search_url(league, query)
+    out = []
+    for listing in trade.listings(league, query, listings):
+        price = trade.chaos_price(listing, table)
+        if price is None:
+            continue
+        f = finish(db, est, db.match(trade.listing_item(listing)), table, solve=False)
+        if f.craft_cost is None:
+            continue
+        f.price, f.listing = price, listing
+        out.append(f)
+    out.sort(key=lambda f: f.total)
+    best = []
+    for f in out[:keep]:
+        g = finish(db, est, db.match(trade.listing_item(f.listing)), table)
+        g.price, g.listing = f.price, f.listing
+        best.append(g if g.craft_cost is not None else f)
+    est.starts = sorted(best, key=lambda f: f.total)
+    return est.starts
 
 
 # -- solving ---------------------------------------------------------------------------
@@ -848,7 +1036,7 @@ def plan_key(problem: craft.Problem, table: dict[str, float]) -> str:
     return hashlib.sha1(repr((_canon(problem), rounded, craft.CHAOS_PER_HOUR, PLAN_VERSION)).encode()).hexdigest()
 
 
-PLAN_VERSION = 2  # bump when the solver's answers change, to drop cached plans
+PLAN_VERSION = 3  # bump when the solver's answers change, to drop cached plans
 
 
 def _canon(x):

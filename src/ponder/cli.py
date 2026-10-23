@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.error
+from pathlib import Path
 
 from rich.console import Console
 from rich.markup import escape
@@ -107,6 +109,11 @@ def parser() -> argparse.ArgumentParser:
     lad_crafts.add_argument("--detail", type=int, default=0, help="show the full recipe for this many top rows")
     lad_crafts.add_argument("--workers", type=int)
     lad_crafts.add_argument("--json", action="store_true")
+    lad_crafts.add_argument("--starts", type=int, default=0, help="search trade for half-done items for this many top rows (POESESSID in .env)")
+    lad_finish = lad_sub.add_parser("finish", help="what a real item (dropped, bought, half-crafted) can be finished into, and how")
+    lad_finish.add_argument("item", help="file with the item text (copied in game with Ctrl+C or Ctrl+Alt+C, or from PoB); - reads stdin")
+    lad_finish.add_argument("--top", type=int, default=5)
+    lad_finish.add_argument("--json", action="store_true")
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -232,6 +239,8 @@ def _ladder(args) -> int:
         return 0
     if args.ladder_command == "crafts":
         return _ladder_crafts(args)
+    if args.ladder_command == "finish":
+        return _ladder_finish(args)
     db = ModDB()
     with console.status("reading cached characters"):
         chars = list(ladder.cached())
@@ -277,9 +286,47 @@ def _ladder_crafts(args) -> int:
         return 0
     out(render.ladder_summary(r))
     ranked = r.ranked()
+    if args.starts:
+        db, (table, _) = ModDB(), prices.load()
+        with console.status("trade") as status:
+            for e in [e for e in ranked if e.plan and e.kind == "gear"][: args.starts]:
+                status.update(f"half-done items: {e.title}")
+                try:
+                    pipeline.find_starts(db, e, table, r.league)
+                except (urllib.error.URLError, OSError) as err:
+                    out(f"{e.title}: trade failed ({err})", style="red", markup=False)
+                    break
     out(render.ladder_table(ranked[: args.top], _links(), title="Ladder crafts: market holes first, then most worn"))
-    for e in [e for e in ranked if e.plan][: args.detail]:
+    for e in [e for e in ranked if e.plan][: max(args.detail, args.starts)]:
         out(render.estimate_detail(e, r.prices_source, _links()))
+    return 0
+
+
+def _ladder_finish(args) -> int:
+    from . import ladder
+
+    text = sys.stdin.read() if args.item == "-" else Path(args.item).read_text()
+    db = ModDB()
+    try:
+        match = db.match(parse_item(text))
+    except ValueError as e:
+        out(f"can't read the item: {e}", style="red", markup=False)
+        return 1
+    if match.base_id is None:
+        out(f"unknown base {match.item.base!r}", style="red", markup=False)
+        return 1
+    if not any(ladder.cached()):
+        out("no ladder data yet: run `ponder ladder fetch`", style="red", markup=False)
+        return 1
+    label = gear.group(db, match).label
+    table, _ = prices.load()
+    with console.status(f"ladder products for {label}") as status:
+        r = pipeline.ladder(group=label, progress=status.update)
+        found = pipeline.finishes(db, match, [e for e in r.estimates if e.title == label], table, top=args.top)
+    if args.json:
+        print(json.dumps([f.to_dict() for f in found], indent=1, default=str))
+        return 0
+    out(render.finishes_view(f"{match.item.name or match.item.base} ({match.item.base})", found))
     return 0
 
 

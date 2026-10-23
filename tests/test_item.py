@@ -56,3 +56,37 @@ def test_magic_item_has_single_name_line():
 def test_pob_crafter_affix_ids():
     item = parse_item("Rarity: RARE\nX\nOnyx Amulet\nPrefix: {range:0.5}IncreasedLife7\nSuffix: None\nImplicits: 0\n")
     assert item.pob_affixes == [("prefix", "IncreasedLife7")]
+
+
+COPIED = """\
+Item Class: Rings
+Rarity: Rare
+Gale Loop
+Bone Ring
+--------
+Requirements:
+Level: 75
+--------
+Item Level: 84
+--------
++15 to maximum Energy Shield (implicit)
+--------
+{ Prefix Modifier "Virile" (Tier: 1) — Life }
++105(100-114) to maximum Life
++40 to maximum Energy Shield (fractured)
++42% to Fire Resistance
++12 to Dexterity (crafted)
+--------
+Shaper Item
+--------
+Corrupted
+"""
+
+
+def test_item_copied_in_game():
+    item = parse_item(COPIED)
+    assert (item.rarity, item.name, item.base, item.item_level) == ("RARE", "Gale Loop", "Bone Ring", 84)
+    assert [m.text for m in item.implicits] == ["+15 to maximum Energy Shield"]
+    assert [m.text for m in item.explicits] == ["+105 to maximum Life", "+40 to maximum Energy Shield", "+42% to Fire Resistance", "+12 to Dexterity"]
+    assert item.explicits[1].fractured and item.explicits[3].crafted
+    assert item.influences == {"shaper"} and {"corrupted", "fractured"} <= item.flags

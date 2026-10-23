@@ -63,3 +63,34 @@ def test_fractures_and_best_base():
     # Starting with one target already on the item can only make the rest cheaper.
     assert all(f.craft_cost <= est.craft_cost + 1e-6 for f in est.fractures)
     assert all("fractured.stat_" in f.trade_url and "fractured_item" in f.trade_url for f in est.fractures)
+
+
+@needs_data
+def test_finish_a_real_item_and_find_half_done_ones(monkeypatch, tmp_path):
+    """A ring with the wanted life already on finishes for less than a fresh one; a listed one is
+    priced as its price plus finishing it from its own mods."""
+    from ponder import prices, trade
+    from ponder.item import parse_item
+    from ponder.mods import ModDB
+
+    monkeypatch.setattr(pipeline, "PLAN_CACHE", tmp_path)
+    db = ModDB()
+    table, _ = prices.load()
+    product = db.match_ids("Bone Ring", {"explicit": [{"id": "IncreasedLife7"}, {"id": "IncreasedEnergyShield10"}]}, item_level=84)
+    est = pipeline.estimate_gear(db, product, table, exact=True)
+    assert est.plan, est.error
+    have = parse_item("Rarity: RARE\nGale Loop\nBone Ring\nItem Level: 84\nImplicits: 0\n+105 to maximum Life\n+30% to Fire Resistance")
+    f = pipeline.finish(db, est, db.match(have), table)
+    assert f.error is None and f.have == [t for t in est.targets if "Life" in t]
+    assert f.craft_cost <= est.craft_cost + table["scour"] + 1e-6  # never worse than scouring it
+    assert "Life" in " ".join(f.steps()[0].have)  # the recipe starts from the item
+    both = parse_item("Rarity: RARE\nX\nBone Ring\nItem Level: 84\nImplicits: 0\n+105 to maximum Life\n+40 to maximum Energy Shield")
+    assert pipeline.finish(db, est, db.match(both), table).craft_cost == pytest.approx(est.bench_cost)  # already done
+    corrupted = parse_item("Rarity: RARE\nX\nBone Ring\nImplicits: 0\n+105 to maximum Life\nCorrupted")
+    assert pipeline.finish(db, est, db.match(corrupted), table).error
+    listing = {"item": {"rarity": "Rare", "baseType": "Bone Ring", "ilvl": 84, "explicitMods": ["+105 to maximum Life"]},
+               "listing": {"price": {"amount": 10, "currency": "chaos"}, "account": {"name": "seller"}}}
+    monkeypatch.setattr(trade, "listings", lambda league, query, count: [listing])
+    starts = pipeline.find_starts(db, est, table, "Standard")
+    assert starts and starts[0].price == 10 and starts[0].total == pytest.approx(10 + starts[0].craft_cost)
+    assert est.starts == starts and est.starts_url
