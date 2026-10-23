@@ -24,6 +24,8 @@ from functools import cached_property
 
 import numpy as np
 
+from . import data
+
 # Assumptions not in the game data; adjust here if testing shows otherwise.
 MAGIC_TWO_MOD_CHANCE = 0.5  # transmute/alteration roll 1 or 2 mods
 # Mod count when an item becomes rare (alchemy, chaos, essence, fossil, Harvest).
@@ -389,16 +391,59 @@ class Problem:
 
 @dataclass
 class Plan:
-    cost: float  # expected chaos from a normal base, excluding the base itself
+    cost: float  # expected chaos from a normal base, excluding the base itself, clicking time included
     policy: dict[State, str]
     usage: dict[str, float]  # expected uses of each action
     visits: dict[State, float]  # expected times each state is acted on
     states: int
     unpriced: list[str] = field(default_factory=list)  # actions left out for lack of a price
+    hours: float = 0.0  # expected time spent clicking
+
+    @property
+    def currency(self) -> float:
+        """Chaos spent on currency alone (`cost` less the clicking time)."""
+        return self.cost - self.hours * CHAOS_PER_HOUR
+
+
+# What an hour of clicking is worth, in chaos. Charging for time stops plans
+# that spam a cheap orb ten thousand times for a long shot.
+CHAOS_PER_HOUR = float(data.env("PONDER_CHAOS_PER_HOUR") or 1500)
+
+# Seconds per use, including reading the result.
+SECONDS = {"transmute": 1.0, "alt": 1.0, "aug": 1.0, "regal": 2.0, "exalt": 2.0, "annul": 2.0, "reroll_magic": 3.0}
+HARVEST_SECONDS = 8.0
+FOSSIL_SECONDS = 2.0  # socketing each fossil into the resonator
+LOCK_SECONDS = 5.0  # a bench metamod, on top of the reroll after it
+
+
+def seconds(a: Action) -> float:
+    if a.kind in SECONDS:
+        return SECONDS[a.kind]
+    if a.kind.startswith(("keep_", "lockreroll_")):
+        reroll = a.name.split("+", 1)[1]
+        return LOCK_SECONDS + (1.0 if reroll == "scour" else _reroll_seconds(reroll, a.cost))
+    if a.kind == "reroll_rare":
+        return _reroll_seconds(a.name, a.cost)
+    return 2.0  # eldritch currency
+
+
+def _reroll_seconds(name: str, cost) -> float:
+    if name.startswith("harvest"):
+        return HARVEST_SECONDS
+    t = 2.0 + (1.0 if name.startswith("scour+") else 0.0)
+    if "fossil" in name:
+        t += FOSSIL_SECONDS * sum(1 for pid, _ in cost if pid.endswith("-fossil"))
+    return t
 
 
 def action_cost(a: Action, prices: dict[str, float]) -> float:
+    """Chaos of currency one use takes."""
     return sum(prices.get(pid, 0.0) * qty for pid, qty in a.cost)
+
+
+def step_cost(a: Action, prices: dict[str, float]) -> float:
+    """Currency plus the clicking time, in chaos: what the solver minimises."""
+    return action_cost(a, prices) + seconds(a) * CHAOS_PER_HOUR / 3600
 
 
 def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> Plan:
@@ -410,7 +455,7 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     problem.actions = _cheapest_of_equals([a for a in problem.actions if a.name not in unpriced], problem, prices)
     problem.__dict__.pop("_rolls", None)
     problem.__dict__.pop("_lock_cache", None)
-    costs = {a.name: action_cost(a, prices) for a in problem.actions}
+    costs = {a.name: step_cost(a, prices) for a in problem.actions}
     if problem.done(problem.start):
         return Plan(0.0, {}, {}, {}, 1, unpriced)
     states, edges = _explore(problem)
@@ -430,6 +475,7 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
     usage = {a.name: 0.0 for a in problem.actions}
     for i, n in enumerate(visits):
         usage[g.action[policy[i]]] += float(n)
+    hours = sum(n * seconds(a) for a in problem.actions if (n := usage[a.name])) / 3600
     return Plan(
         float(value[g.index[problem.start]]),
         {s: g.action[policy[i]] for i, s in enumerate(g.states)},
@@ -437,6 +483,7 @@ def solve(problem: Problem, prices: dict[str, float], max_rounds: int = 60) -> P
         {s: float(visits[i]) for i, s in enumerate(g.states)},
         len(states),
         unpriced,
+        hours,
     )
 
 
@@ -450,14 +497,14 @@ def _cheapest_of_equals(acts: list[Action], problem: Problem, prices: dict[str, 
             out.append(a)
             continue
         key = (key, a.from_rarity)
-        if key not in best or action_cost(a, prices) < action_cost(best[key], prices):
+        if key not in best or step_cost(a, prices) < step_cost(best[key], prices):
             best[key] = a
     return out + [a for a in acts if problem.roll_key(a) is not None and best[(problem.roll_key(a), a.from_rarity)] is a]
 
 
 def evaluate(problem: Problem, policy: dict[State, str], prices: dict[str, float]) -> float:
     """Exact expected cost of following `policy` (state -> action name) from the start."""
-    costs = {a.name: action_cost(a, prices) for a in problem.actions}
+    costs = {a.name: step_cost(a, prices) for a in problem.actions}
     g = _Graph(problem, _explore(problem)[1], costs)
     chosen = np.array([g.pair_of(i, policy[s]) for i, s in enumerate(g.states)])
     return float(g.evaluate(chosen)[g.index[problem.start]])
@@ -638,7 +685,7 @@ def simulate(problem: Problem, plan: Plan, prices: dict[str, float], runs: int =
     """Average chaos spent replaying `plan` with real mods and exact group exclusion."""
     rng = random.Random(seed)
     by_name = {a.name: a for a in problem.actions}
-    costs = {a.name: action_cost(a, prices) for a in problem.actions}
+    costs = {a.name: step_cost(a, prices) for a in problem.actions}
     cache: dict = {}
     total = 0.0
     for _ in range(runs):

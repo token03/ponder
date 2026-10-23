@@ -7,7 +7,7 @@ from itertools import combinations
 
 import numpy as np
 
-from . import data
+from . import craft, data
 from .craft import MAGIC, NORMAL, RARE, Action, Mod
 
 BASIC = [
@@ -180,7 +180,8 @@ def fossil_combos(
         totals = weights @ side.T  # (combos, 2)
         share = np.divide(weights @ hit.T, totals[:, want_side], out=np.zeros((len(idx), len(wants))), where=totals[:, want_side] > 0)
         p = 1 - (1 - np.clip(share, 0, 1)) ** mods_per_side  # (combos, wants)
-        cost = fossil_price[idx].sum(axis=1) + prices[RESONATORS[k]]
+        clicks = (2 + craft.FOSSIL_SECONDS * k) * craft.CHAOS_PER_HOUR / 3600
+        cost = fossil_price[idx].sum(axis=1) + prices[RESONATORS[k]] + clicks
         combos.append(idx)
         scores.append((cost, p))
     picked: list[tuple[int, ...]] = []

@@ -235,3 +235,13 @@ def test_fossil_combos_pair_up_fossils_that_each_help_one_wanted_mod(monkeypatch
     assert dict(acts[0].cost)[actions.RESONATORS[2]] == 1  # two fossils take a potent resonator
     assert profiles["fossil:hot+icy"]["x"] == 1000.0 and profiles["fossil:hot+icy"]["p0"] == 1000.0
     assert {a.name for a in acts} >= {"hot fossil", "icy fossil"}  # each want alone: its own fossil
+
+
+def test_clicking_time_is_charged(monkeypatch):
+    """Charging for time makes plans dearer, and `currency` is what's left once the time is taken out."""
+    free = solve(toy(), PRICES)
+    assert free.hours > 0 and abs(free.currency - free.cost) < 1e-9
+    monkeypatch.setattr(craft, "CHAOS_PER_HOUR", 3600.0)
+    paid = solve(toy(), PRICES)
+    assert paid.cost > free.cost
+    assert abs(paid.cost - paid.currency - paid.hours * 3600) < 1e-6

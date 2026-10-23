@@ -442,7 +442,14 @@ def _currency(plan: craft.Plan) -> Text:
             out.append(" · ", style="dim")
         out.append(f"{n:,.0f}" if n >= 10 else f"{n:,.1f}", style="bold")
         out.append(f" {a}")
+    if plan.hours:
+        out.append(f"  ·  ~{_hours(plan.hours)} clicking", style="dim")
+        out.append(f" (charged {plan.cost - plan.currency:,.0f}c at {craft.CHAOS_PER_HOUR:,.0f}c/h)", style="dim")
     return out
+
+
+def _hours(h: float) -> str:
+    return f"{h * 60:.0f} min" if h < 1 else f"{h:,.1f} h"
 
 
 def report_summary(r: Report) -> Text:

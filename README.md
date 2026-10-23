@@ -92,8 +92,7 @@ crafts beside the selected one's detail: prefixes and suffixes with tiers,
 costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
 them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
 `/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
-builds, hole, demand, recomb saving), `R` cost a recombinator tree, `t` price the selected item on trade, `T` price everything shown
-within the search budget, `F` price the two most promising fractured bases
+builds, hole, demand, recomb saving), `R` cost a recombinator tree, `t` price the selected item on trade, `F` price the two most promising fractured bases
 of every item shown, `o`/`y` open or copy its trade search, `b` other
 builds, `q` quit.
 
@@ -313,6 +312,13 @@ Kept as constants so they're easy to correct:
   ones and the metamod included
 - Harvest reforge costs: fire, cold and lightning are sourced; the other tags
   are guesses priced at the dearest lifeforce (`actions.HARVEST`)
+- clicking time is charged at `PONDER_CHAOS_PER_HOUR` (default 1500, set it in
+  the environment or `.env`; 0 turns it off): about 1 s per alteration or
+  augment, 2 s per regal, exalt, annul, chaos or essence (+1 s with a scour),
+  2 s + 2 s per fossil for a resonator, 8 s per Harvest reforge, 5 s more for
+  a bench metamod, 15 s per recombination (`craft.SECONDS` and friends). The
+  solver minimises currency plus time, so it stops planning ten thousand
+  alterations for a long shot; plans show the hours and what they were charged
 - recombinator odds by pool size (`recomb.SIDE_COUNTS`), a 50/50 base, NNN
   mods counted then dropped; failed attempts are worth nothing
 

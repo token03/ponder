@@ -215,6 +215,8 @@ class Estimate:
             "listed": self.market[1] if self.market else None,
             "margin": self.margin,
             "currency": dict(self.usage()),
+            "clicking_hours": self.plan.hours if self.plan else None,
+            "currency_chaos": self.plan.currency if self.plan else None,
             "recipe": [{"state": s, "action": a, "share": share} for s, a, share in self.recipe()],
             "fractures": [f.to_dict() for f in self.fractures],
             "not_crafted": self.skipped,
@@ -724,10 +726,10 @@ def plan_key(problem: craft.Problem, table: dict[str, float]) -> str:
     """
     used = sorted({pid for a in problem.actions for pid, _ in a.cost})
     rounded = [(pid, float(f"{table[pid]:.3g}")) for pid in used if pid in table]
-    return hashlib.sha1(repr((_canon(problem), rounded, PLAN_VERSION)).encode()).hexdigest()
+    return hashlib.sha1(repr((_canon(problem), rounded, craft.CHAOS_PER_HOUR, PLAN_VERSION)).encode()).hexdigest()
 
 
-PLAN_VERSION = 1  # bump when the solver's answers change, to drop cached plans
+PLAN_VERSION = 2  # bump when the solver's answers change, to drop cached plans
 
 
 def _canon(x):

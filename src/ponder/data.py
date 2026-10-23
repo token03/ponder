@@ -27,6 +27,19 @@ FILES = [
 ]
 
 
+def env(name: str) -> str | None:
+    """A setting from the environment, else from `.env` in the working directory."""
+    if os.environ.get(name):
+        return os.environ[name]
+    path = Path(".env")
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            key, _, value = line.strip().removeprefix("export ").partition("=")
+            if key.strip() == name and value.strip():
+                return value.strip().strip("'\"")
+    return None
+
+
 def data_dir() -> Path:
     return Path(os.environ.get("PONDER_DATA", Path.cwd() / ".cache" / "repoe"))
 

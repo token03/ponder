@@ -33,7 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import combinations, product
 
-from . import gear
+from . import craft, gear
 from .craft import Plan, Problem, Target
 from .mods import ModDB
 
@@ -61,6 +61,7 @@ DOUBLING = True
 MAX_SIDE_PADS = 2  # NNN pads per side on one donor
 MAX_LEAF_MODS = 4  # wanted + pads on one donor
 RECOMB_FEE = 0.0  # chaos per recombination, on top of the donors
+RECOMB_SECONDS = 15.0  # loading the recombinator and checking the result, charged at craft.CHAOS_PER_HOUR
 SIDES = ("prefix", "suffix")
 
 
@@ -277,7 +278,7 @@ class Step:
     def cost(self) -> float | None:
         if self.a.cost is None or self.b.cost is None or self.chance <= 0:
             return None
-        return (self.a.cost * (1 - self.back_a) + self.b.cost * (1 - self.back_b) + RECOMB_FEE) / self.chance
+        return (self.a.cost * (1 - self.back_a) + self.b.cost * (1 - self.back_b) + RECOMB_FEE + RECOMB_SECONDS * craft.CHAOS_PER_HOUR / 3600) / self.chance
 
     def counts(self, side: str, wants: dict[str, str]) -> tuple[int, int]:
         return sum(1 for n in self.carries if wants[n] == side), 0

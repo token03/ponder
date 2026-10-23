@@ -93,7 +93,6 @@ class PonderApp(App):
     """
     BINDINGS = [
         Binding("t", "trade", "price"),
-        Binding("T", "trade_all", "price all"),
         Binding("F", "fracture_prices", "fracture bases"),
         Binding("R", "recomb", "recomb"),
         Binding("o", "open_link", "open"),
@@ -192,7 +191,7 @@ class PonderApp(App):
             return
         self.call_from_thread(self.show_report, report)
         if self.trade_on_load:
-            self.call_from_thread(self.action_trade_all)
+            self.call_from_thread(self.trade_shown)
 
     @work(thread=True, exclusive=True)
     def analyze_ladder(self) -> None:
@@ -294,7 +293,8 @@ class PonderApp(App):
         if self.current:
             self.lookup([self.current], budget=10_000)
 
-    def action_trade_all(self) -> None:
+    def trade_shown(self) -> None:
+        """`--trade`: price what's shown on load, within the search budget."""
         if self.report:
             self.lookup(self.rows(), budget=40)
 

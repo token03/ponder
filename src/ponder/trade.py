@@ -203,15 +203,7 @@ def _currency_id(trade_currency: str) -> str:
 
 def cookie() -> str | None:
     """POESESSID from the environment, else from `.env` in the working directory."""
-    if os.environ.get("POESESSID"):
-        return os.environ["POESESSID"]
-    path = Path(".env")
-    if path.is_file():
-        for line in path.read_text().splitlines():
-            key, _, value = line.strip().removeprefix("export ").partition("=")
-            if key.strip() == "POESESSID" and value.strip():
-                return value.strip().strip("'\"")
-    return None
+    return data.env("POESESSID")
 
 
 # -- rate limits ------------------------------------------------------------------
