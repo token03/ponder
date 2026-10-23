@@ -91,6 +91,19 @@ def parser() -> argparse.ArgumentParser:
     lad_price.add_argument("--top", type=int, default=5, help="archetypes to price (one search + 5 fetches each)")
     lad_price.add_argument("--listings", type=int, default=50)
 
+    lad_crafts = lad_sub.add_parser("crafts", help="cost what the ladder wears (gear archetypes + cluster notables); rank market holes")
+    lad_crafts.add_argument("--group", help="only base groups / cluster enchants containing this text")
+    lad_crafts.add_argument("--min-characters", type=int, default=5, help="rarer combinations are skipped (lower finds more niche ones)")
+    lad_crafts.add_argument("--gear", type=int, default=80, help="gear archetypes to cost, most worn first")
+    lad_crafts.add_argument("--per-group", type=int, default=3, help="also cost the top few of every base group (niche groups)")
+    lad_crafts.add_argument("--clusters", type=int, default=80, help="cluster notable combos to cost")
+    lad_crafts.add_argument("--trade", action="store_true", help="price finished items on trade: market, listings, hole score (POESESSID in .env)")
+    lad_crafts.add_argument("--trade-budget", type=int, default=40)
+    lad_crafts.add_argument("--top", type=int, default=50)
+    lad_crafts.add_argument("--detail", type=int, default=0, help="show the full recipe for this many top rows")
+    lad_crafts.add_argument("--workers", type=int)
+    lad_crafts.add_argument("--json", action="store_true")
+
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
 
@@ -212,6 +225,8 @@ def _ladder(args) -> int:
             n = sum(1 for _ in ladder.sample(snap, args.per_skill, args.min_players, args.per_class, progress=status.update))
         out(f"{n} characters from {snap.league} ({snap.version}) cached in {ladder.CACHE}", markup=False)
         return 0
+    if args.ladder_command == "crafts":
+        return _ladder_crafts(args)
     db = ModDB()
     with console.status("reading cached characters"):
         chars = list(ladder.cached())
@@ -228,6 +243,36 @@ def _ladder(args) -> int:
     else:
         found = [a for a in demand.archetypes(worn, args.min_characters) if not args.group or args.group.lower() in a.group.lower()]
         out(render.archetype_table(found[: args.top], db))
+    return 0
+
+
+def _ladder_crafts(args) -> int:
+    from . import ladder
+
+    if not any(ladder.cached()):
+        out("no ladder data yet: run `ponder ladder fetch`", style="red", markup=False)
+        return 1
+    with console.status("ladder") as status:
+        trade.on_wait = lambda secs: status.update(f"waiting {secs:.0f}s for the trade site's rate limit")
+        r = pipeline.ladder(
+            gear_top=args.gear,
+            per_group=args.per_group,
+            cluster_top=args.clusters,
+            min_characters=args.min_characters,
+            group=args.group,
+            trade_lookup=args.trade,
+            trade_budget=args.trade_budget,
+            workers=args.workers,
+            progress=status.update,
+        )
+    if args.json:
+        print(json.dumps(r.to_dict(), indent=1, default=str))
+        return 0
+    out(render.ladder_summary(r))
+    ranked = r.ranked()
+    out(render.ladder_table(ranked[: args.top], _links(), title="Ladder crafts: market holes first, then most worn"))
+    for e in [e for e in ranked if e.plan][: args.detail]:
+        out(render.estimate_detail(e, r.prices_source, _links()))
     return 0
 
 

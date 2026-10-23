@@ -26,6 +26,7 @@ from pathlib import Path
 API = "https://poe.ninja/poe1/api"
 USER_AGENT = "ponder/0.1 (crafting research; caches everything)"
 CACHE = Path(".cache/ladder")
+LITE_VERSION = 2  # bump when `lite` keeps more fields; older .lite copies are rebuilt
 
 
 @dataclass(frozen=True)
@@ -156,8 +157,10 @@ def cached(snap: Snapshot | None = None) -> Iterator[dict]:
         small = path.with_suffix(".lite")
         try:
             if small.is_file():
-                yield json.loads(small.read_text())
-                continue
+                data = json.loads(small.read_text())
+                if data.get("v") == LITE_VERSION:
+                    yield data
+                    continue
             data = lite(json.loads(path.read_text()))
         except ValueError:
             continue
@@ -170,12 +173,13 @@ def lite(data: dict) -> dict:
     from .demand import main_skill
 
     return {
+        "v": LITE_VERSION,
         "account": data.get("account"),
         "name": data.get("name"),
         "class": data.get("class"),
         "skill": main_skill(data),
         "rares": [
-            {k: item.get(k) for k in ("baseType", "ilvl", "influences", "mods", "inventoryId")}
+            {k: item.get(k) for k in ("baseType", "ilvl", "influences", "mods", "inventoryId", "enchantMods") if k in item}
             for item in rare_items(data)
         ],
     }

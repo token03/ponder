@@ -56,7 +56,8 @@ def find_enchant(size: str, name: str) -> Enchant:
 
 
 def is_notable(mod: dict) -> bool:
-    return mod["text"].startswith(_NOTABLE_PREFIX) and "Jewel Socket" not in mod["text"]
+    text = mod.get("text") or ""
+    return text.startswith(_NOTABLE_PREFIX) and "Jewel Socket" not in text
 
 
 def notable_name(mod: dict) -> str:

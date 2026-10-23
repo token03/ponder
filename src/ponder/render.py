@@ -130,6 +130,48 @@ def estimates_table(estimates: list[Estimate], links: bool = True, title: str | 
     return t
 
 
+def ladder_table(estimates: list[Estimate], links: bool = True, title: str | None = None, pal: Palette = ANSI) -> Table:
+    """Ladder crafting candidates: demand (characters wearing it), cost, market, and the hole score."""
+    t = Table(title=title, title_justify="left", title_style="bold", header_style="bold", pad_edge=False, box=None)
+    t.add_column("#", justify="right", style="dim")
+    t.add_column("item")
+    t.add_column("mods", overflow="fold")
+    t.add_column("chars", justify="right", style=pal.share)
+    t.add_column("craft", justify="right")
+    t.add_column("market", justify="right")
+    t.add_column("listed", justify="right", style="dim")
+    t.add_column("margin", justify="right")
+    t.add_column("hole", justify="right")
+    t.add_column("worn by", style="dim", max_width=28, overflow="ellipsis", no_wrap=True)
+    if links:
+        t.add_column("trade")
+    for i, e in enumerate(estimates, 1):
+        hole = Text("-", style="dim") if e.hole is None else Text(f"{e.hole:,.0f}", style=f"bold {pal.good}" if e.hole > 0 else pal.bad)
+        t.add_row(
+            str(i),
+            item_title(e, pal),
+            mods_inline(e, pal),
+            str(e.demand),
+            total_text(e, pal),
+            market_text(e),
+            str(e.market[1]) if e.market else "",
+            margin_text(e.margin, pal),
+            hole,
+            ", ".join(e.skills),
+            *([link("search", e.trade_url, pal=pal)] if links else []),
+        )
+    return t
+
+
+def ladder_summary(r) -> Text:
+    """One line on where the ladder candidates came from (`pipeline.LadderReport`)."""
+    return Text(
+        f"{r.characters:,} characters · {r.items:,} rare items → {r.archetypes:,} gear archetypes · "
+        f"{r.clusters:,} cluster jewels → {r.cluster_archetypes:,} notable combos · {len(r.estimates)} costed · prices: {r.prices_source}",
+        style="dim",
+    )
+
+
 def item_title(e: Estimate, pal: Palette = ANSI) -> Text:
     return Text(e.title, style=pal.accent if e.kind == "cluster" else "")
 

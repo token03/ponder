@@ -18,10 +18,14 @@ Nothing here prints; the CLI and TUI render the `Report`, and
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import multiprocessing
 import os
+import pickle
 import sys
 import urllib.error
+import zlib
+from collections import Counter
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -111,6 +115,8 @@ class Estimate:
     filler_families: list[str] = field(default_factory=list)  # e.g. ["ColdResistance", "FireResistance"]
     search: dict = field(default_factory=dict)  # how to search its bases: cluster size/enchant/passives, or gear base/category
     error: str | None = None  # why there is no plan
+    demand: int = 0  # ladder characters wearing it (ladder runs)
+    skills: list[str] = field(default_factory=list)  # their most common main skills
 
     @property
     def craft_cost(self) -> float | None:
@@ -136,6 +142,17 @@ class Estimate:
         if not self.market or self.total is None or self.needs_base_price:
             return None
         return self.market[0] - self.cheapest
+
+    @property
+    def hole(self) -> float | None:
+        """How much of a market hole this is: margin times ladder wearers per listing.
+
+        Many wearers, few listings and a fat margin rank first; a crowded market
+        (hundreds listed) shrinks even a good margin.
+        """
+        if self.margin is None or not self.demand:
+            return None
+        return self.margin * self.demand / (self.market[1] + 5)
 
     @property
     def best_fracture(self) -> Fracture | None:
@@ -185,6 +202,9 @@ class Estimate:
             "fractures": [f.to_dict() for f in self.fractures],
             "not_crafted": self.skipped,
             "trade_url": self.trade_url,
+            "demand": self.demand,
+            "skills": self.skills,
+            "hole": self.hole,
             "error": self.error or self.market_error or self.base_error,
         }
 
@@ -316,6 +336,109 @@ def run(
     return Report(infos, estimates, shared, prices_source, league, errors, table.get("divine", 0.0))
 
 
+# -- the ladder: what invested characters wear ------------------------------------------
+
+
+@dataclass
+class LadderReport:
+    characters: int
+    items: int  # rare gear and jewels read
+    clusters: int  # rare cluster jewels read
+    estimates: list[Estimate]
+    archetypes: int  # gear combinations found, before costing
+    cluster_archetypes: int
+    prices_source: str
+    league: str
+    divine: float = 0.0
+
+    def ranked(self) -> list[Estimate]:
+        """Market holes first (margin x wearers per listing), then unpriced ones by ladder demand."""
+        return sorted(self.estimates, key=lambda e: (e.hole is None, -(e.hole or 0), -e.demand))
+
+    def to_dict(self) -> dict:
+        return {
+            "league": self.league,
+            "prices": self.prices_source,
+            "chaos_per_divine": self.divine,
+            "characters": self.characters,
+            "items": self.items,
+            "clusters": self.clusters,
+            "archetypes": self.archetypes,
+            "cluster_archetypes": self.cluster_archetypes,
+            "estimates": [e.to_dict() for e in self.ranked()],
+        }
+
+
+def ladder(
+    characters: list[dict] | None = None,
+    *,
+    gear_top: int = 80,
+    per_group: int = 3,
+    cluster_top: int = 80,
+    min_characters: int = 5,
+    group: str | None = None,
+    trade_lookup: bool = False,
+    trade_budget: int = 40,
+    workers: int | None = None,
+    progress: Progress | None = None,
+) -> LadderReport:
+    """Crafting candidates from ladder characters (default: the cached poe.ninja sample).
+
+    Gear archetypes are costed at the tier most of their wearers reach, with
+    their usual number of resistances as filler; clusters by enchant, usual
+    passive count and notables. Trade lookups (in demand order) give the
+    selling price and how many are listed, which `Estimate.hole` turns into a
+    market-hole score.
+    """
+    from . import demand
+    from . import ladder as lad
+
+    say = progress or (lambda _msg: None)
+    table, prices_source = prices.load()
+    league = current_league()
+    db = ModDB()
+    if characters is None:
+        say("reading cached ladder characters")
+        characters = list(lad.cached())
+    say("matching ladder items")
+    worn = demand.wear(db, characters)
+    clusters = demand.wear_clusters(characters)
+    found = [a for a in demand.archetypes(worn, min_characters) if not group or group.lower() in a.group.lower()]
+    found_cl = [a for a in demand.cluster_archetypes(clusters, min_characters) if not group or group.lower() in a.title.lower()]
+    estimates: dict[tuple, Estimate] = {}
+    # The most worn overall, plus the top few of every base group, so niche
+    # groups (quivers, claws, shields...) get costed too, not just rings and boots.
+    picked, per = [], Counter()
+    for a in found:
+        if len(picked) < gear_top or per[a.group] < per_group:
+            picked.append(a)
+            per[a.group] += 1
+    for a in picked:
+        m = demand.archetype_match(db, a)
+        if m is None:
+            continue
+        est = estimate_gear(db, m, table, league, solve=False)
+        if est.error or est.key in estimates:
+            continue
+        est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
+        est.used_base = ""
+        estimates[est.key] = est
+    n_gear = len(estimates)
+    for a in found_cl:
+        if len(estimates) - n_gear >= cluster_top:
+            break
+        est = estimate_cluster(a.size, a.tag, list(a.notables), table, league, passives=a.usual_passives, solve=False)
+        if est.error or est.key in estimates:
+            continue
+        est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
+        estimates[est.key] = est
+    out = list(estimates.values())
+    solve_all(out, table, workers, say)
+    if trade_lookup:
+        price_on_trade(sorted(out, key=lambda e: -e.demand), table, league, budget=trade_budget, progress=say)
+    return LadderReport(len(characters), len(worn), len(clusters), out, len(found), len(found_cl), prices_source, league, table.get("divine", 0.0))
+
+
 # -- estimates -------------------------------------------------------------------------
 
 
@@ -364,7 +487,7 @@ def estimate_cluster(
         return Estimate("cluster", f"{size} cluster, {enchant}", list(notables), error=str(e))
     est = Estimate(
         "cluster",
-        f"{size.title()} cluster · {ench.short} · {passives}p",
+        f"{size.title()} cluster · {ench.short if len(ench.short) <= 48 else ench.name} · {passives}p",
         list(notables),
         key=("cluster", size, ench.tag, tuple(sorted(notables)), str(passives), tuple(sorted(fractured))),
         base=f"{size.title()} Cluster Jewel",
@@ -526,12 +649,66 @@ def add_fractures(est: Estimate, league: str) -> None:
 # -- solving ---------------------------------------------------------------------------
 
 
-def solve_one(est, table: dict[str, float]) -> None:
-    """Solve an Estimate or Fracture in place."""
+PLAN_CACHE = Path(".cache/plans")
+
+
+def plan_key(problem: craft.Problem, table: dict[str, float]) -> str:
+    """A stable hash of a problem and the prices its actions use (to 3 significant figures).
+
+    Sets are sorted so the key is the same across processes (string hashing is
+    randomised per process, so pickles of frozensets are not).
+    """
+    used = sorted({pid for a in problem.actions for pid, _ in a.cost})
+    rounded = [(pid, float(f"{table[pid]:.3g}")) for pid in used if pid in table]
+    return hashlib.sha1(repr((_canon(problem), rounded, PLAN_VERSION)).encode()).hexdigest()
+
+
+PLAN_VERSION = 1  # bump when the solver's answers change, to drop cached plans
+
+
+def _canon(x):
+    if dataclasses.is_dataclass(x):
+        return (type(x).__name__, tuple(_canon(getattr(x, f.name)) for f in dataclasses.fields(x)))
+    if isinstance(x, (set, frozenset)):
+        return ("set", tuple(sorted((_canon(v) for v in x), key=repr)))
+    if isinstance(x, dict):
+        return ("dict", tuple(sorted(((_canon(k), _canon(v)) for k, v in x.items()), key=repr)))
+    if isinstance(x, (list, tuple)):
+        return tuple(_canon(v) for v in x)
+    return x
+
+
+def cached_plan(key: str) -> craft.Plan | None:
+    path = PLAN_CACHE / f"{key}.pkl.z"
     try:
-        _attach(est, craft.solve(est.problem, table))
+        return pickle.loads(zlib.decompress(path.read_bytes()))
+    except (OSError, ValueError, pickle.UnpicklingError, zlib.error, EOFError, AttributeError):
+        return None
+
+
+def save_plan(key: str, plan: craft.Plan) -> None:
+    try:
+        PLAN_CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = PLAN_CACHE / f"{key}.{os.getpid()}.tmp"
+        tmp.write_bytes(zlib.compress(pickle.dumps(plan)))
+        tmp.replace(PLAN_CACHE / f"{key}.pkl.z")
+    except OSError:
+        pass  # a read-only or full disk only costs the cache
+
+
+def solve_one(est, table: dict[str, float]) -> None:
+    """Solve an Estimate or Fracture in place (from the plan cache when it has it)."""
+    key = plan_key(est.problem, table)
+    if plan := cached_plan(key):
+        _attach(est, plan)
+        return
+    try:
+        plan = craft.solve(est.problem, table)
     except (ValueError, ArithmeticError, np.linalg.LinAlgError) as e:
         est.error = str(e)
+        return
+    save_plan(key, plan)
+    _attach(est, plan)
 
 
 def solve_all(items: list, table: dict[str, float], workers: int | None = None, progress: Progress | None = None) -> None:
@@ -541,7 +718,15 @@ def solve_all(items: list, table: dict[str, float], workers: int | None = None, 
     threads) scale with cores. Biggest problems go first so no core idles at the end.
     """
     say = progress or (lambda _msg: None)
-    todo = [e for e in items if e.problem is not None and e.plan is None and e.error is None]
+    todo = []
+    for e in items:
+        if e.problem is None or e.plan is not None or e.error is not None:
+            continue
+        e._plan_key = plan_key(e.problem, table)
+        if plan := cached_plan(e._plan_key):
+            _attach(e, plan)
+        else:
+            todo.append(e)
     todo.sort(key=lambda e: -len(e.problem.targets))
     workers = workers or os.cpu_count() or 1
     if workers == 1 or len(todo) < 4:
@@ -556,9 +741,12 @@ def solve_all(items: list, table: dict[str, float], workers: int | None = None, 
                 e = futures[done]
                 say(f"solved {i}/{len(todo)}")
                 try:
-                    _attach(e, done.result())
+                    plan = done.result()
                 except (ValueError, ArithmeticError, np.linalg.LinAlgError) as err:
                     e.error = str(err)
+                    continue
+                save_plan(e._plan_key, plan)
+                _attach(e, plan)
     except (BrokenProcessPool, OSError, RuntimeError):
         # Workers can't start where the main module can't be re-imported (a REPL,
         # stdin, a notebook, or a script without `if __name__ == "__main__"`).
