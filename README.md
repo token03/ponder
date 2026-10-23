@@ -159,17 +159,22 @@ model:
 
 - the output takes either input's base, 50/50;
 - per side, how many mods the output keeps depends only on that side's pool
-  size across both inputs (`recomb.SIDE_COUNTS`; community-measured rows 1-4,
-  5-6 extrapolated: edit it when a patch changes the odds);
+  size across both inputs (`recomb.SIDE_COUNTS`, the poewiki / u/Butsicles
+  table: edit it when a patch changes the odds);
 - kept mods are drawn from the pool *after* removing those that can't roll
   on the output base. That is **NNN padding**: a partner base's native mods
-  (an evasion donor's "+% Evasion" for an ES target) or an essence-forced
-  named mod the target base can't roll inflate the pool size, so the output
-  keeps more, without ever displacing a wanted mod.
+  (an evasion donor's "+% Evasion" for an ES target) inflate the pool size,
+  so the output keeps more, without ever displacing a wanted mod;
+- once a mod is picked its mod group is blocked, so a wanted mod on *both*
+  donors (**doubling**) pads the pool too, with no base coin flip;
+- tierless essence mods are exclusive and 3.26 cut the mod count for inputs
+  carrying mods the item can't normally roll, so essence pads are off
+  (`recomb.ESSENCE_PADS`).
 
-Leaves carry 1-2 wanted mods, on the target base (optionally with one essence
-pad) or on a partner base with up to 2 NNN pads per side (4 mods per donor at
-most). Resistance filler is split into distinct families per slot (fire,
+Leaves carry 1-2 wanted mods, on the target base or on a partner base with up
+to 2 NNN pads per side (4 mods per donor at most). Only Unpredictable
+Recombination is modelled: Predictable mode's displayed odds have no published
+formula yet. Resistance filler is split into distinct families per slot (fire,
 cold, ...), so two donors never both bring the same resistance. A failure that
 keeps exactly one input's mods on the target base is a clean copy of that input
 and is reused on the next attempt; the plan shows it as "#1 back 24%". Other

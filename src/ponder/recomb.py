@@ -38,18 +38,28 @@ from .craft import Plan, Problem, Target
 from .mods import ModDB
 
 # Chance the output keeps k mods on a side, by that side's pool size (both inputs).
-# Rows 1-4 are community measurements (3.19 guides, 3.26 re-tests); 5 and 6 are
-# extrapolated. Edit here when a patch changes them: everything else derives.
+# The poewiki "Estimated modifier count distribution" (from u/Butsicles' guide;
+# page as of Aug 2026). Pools over 6 are unmeasured and use row 6. Edit here
+# when a patch changes them: everything else derives.
 SIDE_COUNTS: dict[int, dict[int, float]] = {
     0: {0: 1.0},
     1: {0: 0.41, 1: 0.59},
     2: {1: 0.67, 2: 0.33},
     3: {1: 0.40, 2: 0.50, 3: 0.10},
     4: {1: 0.10, 2: 0.60, 3: 0.30},
-    5: {2: 0.50, 3: 0.50},
+    5: {2: 0.43, 3: 0.57},
     6: {2: 0.30, 3: 0.70},
 }
-TABLE_VERSION = "3.25 community (rows 5-6 extrapolated)"
+TABLE_VERSION = "poewiki / Butsicles (Aug 2026)"
+# Tierless essence mods are "exclusive", and 3.26 cut the output's mod count
+# when inputs carry mods that can't normally roll on the item: essence-forced
+# NNN pads no longer pay, so they're off unless a test shows otherwise.
+ESSENCE_PADS = False
+# A wanted mod on both inputs counts twice in the pool, but once one copy is
+# picked its mod group blocks the other: free padding on the target base.
+DOUBLING = True
+MAX_SIDE_PADS = 2  # NNN pads per side on one donor
+MAX_LEAF_MODS = 4  # wanted + pads on one donor
 RECOMB_FEE = 0.0  # chaos per recombination, on top of the donors
 SIDES = ("prefix", "suffix")
 
@@ -248,7 +258,12 @@ class Step:
 
     @property
     def carries(self) -> tuple[str, ...]:
-        return self.a.carries + self.b.carries
+        return self.a.carries + tuple(n for n in self.b.carries if n not in self.a.carries)
+
+    @property
+    def doubled(self) -> tuple[str, ...]:
+        """Wanted mods on both inputs: the copy inflates the pool, and its mod group blocks it from a second slot."""
+        return tuple(n for n in self.b.carries if n in self.a.carries)
 
     @property
     def padding(self) -> dict[str, int]:
@@ -284,8 +299,9 @@ class Step:
             else:
                 out.append(("craft", x.describe(), x.cost))
                 refs.append(len(out))
-        back = ", ".join(f"#{r} back {q:.0%}" for r, q in zip(refs, (self.back_a, self.back_b)) if q >= 0.005)
-        out.append(("recombine", f"#{refs[0]} + #{refs[1]} → " + " + ".join(self.carries) + f"  ({self.chance:.0%}" + (f"; {back}" if back else "") + ")", self.cost))
+        notes = [f"#{r} back {q:.0%}" for r, q in zip(refs, (self.back_a, self.back_b)) if q >= 0.005]
+        notes += [f"{n} doubled" for n in self.doubled]
+        out.append(("recombine", f"#{refs[0]} + #{refs[1]} → " + " + ".join(self.carries) + f"  ({'; '.join([f'{self.chance:.0%}', *notes])})", self.cost))
         return len(out)
 
     def to_dict(self) -> dict:
@@ -341,12 +357,14 @@ class Planner:
                     continue
                 key = frozenset(w.name for w in carried)
                 opts = [self._donor(self.base_id, carried, {})]
-                for s in SIDES:  # one essence pad on the target base
+                for s in SIDES if ESSENCE_PADS else ():  # one essence pad on the target base
                     if room(carried, s) > 0 and (ids := free(ess[s], carried)):
                         opts.append(self._donor(self.base_id, carried, {s: [ids]}))
-                for bid, nnn in parts:  # partner bases, 0 / 1 / every free slot padded per side
-                    choices = [sorted({0, min(1, room(carried, s)), room(carried, s)}) if free(nnn[s], carried) else [0] for s in SIDES]
+                for bid, nnn in parts:  # partner bases, 0-2 NNN pads per side
+                    choices = [sorted({0, min(1, room(carried, s)), min(MAX_SIDE_PADS, room(carried, s))}) if free(nnn[s], carried) else [0] for s in SIDES]
                     for counts in product(*choices):
+                        if size + sum(counts) > MAX_LEAF_MODS:
+                            continue  # big padded donors cost far more than they add
                         pads = {s: _bins(db, free(nnn[s], carried), n) for s, n in zip(SIDES, counts) if n}
                         if pads:
                             opts.append(self._donor(bid, carried, pads, on_target=False))
@@ -375,6 +393,12 @@ class Planner:
             self._keys[key] = Donor(db.bases[bid]["name"], bid, tuple(w.name for w in carried), padding, p, _on_target=on_target)
         return self._keys[key]
 
+    def _counts(self, item, side: str, dup) -> tuple[int, int]:
+        """(new wanted mods, pads) on `side` for the second input; its doubled mods count as pads."""
+        wanted, pads = item.counts(side, self.side)
+        extra = sum(1 for n in dup if self.side[n] == side)
+        return wanted - extra, pads + extra
+
     def best(self) -> Step | None:
         """The cheapest tree that yields every wanted mod, once the leaves are solved."""
         if not self.ok:
@@ -394,17 +418,24 @@ class Planner:
                     for left in combinations(members, r):
                         s1 = frozenset(left)
                         s2 = full - s1
-                        for x in options.get(s1, []):
-                            if not x.on_target:
-                                continue  # the first input sits on the target base
-                            for y in options.get(s2, []):
-                                cx, cy = {s: x.counts(s, self.side) for s in SIDES}, {s: y.counts(s, self.side) for s in SIDES}
-                                c = chance(cx, cy, y.on_target)
-                                if c <= 0:
-                                    continue
-                                step = Step(x, y, c, salvage(cx, cy, y.on_target), salvage(cy, cx, True) if y.on_target else 0.0)
-                                if top is None or step.cost < top.cost:
-                                    top = step
+                        xs = [x for x in options.get(s1, []) if x.on_target]  # the first input sits on the target base
+                        if not xs:
+                            continue
+                        # The second input carries the rest, plus optionally copies of some of s1 (doubling).
+                        for d in range(len(s1) + 1 if DOUBLING else 1):
+                            for dup in combinations(sorted(s1), d):
+                                for y in options.get(s2 | frozenset(dup), []):
+                                    cy = {s: self._counts(y, s, dup) for s in SIDES}
+                                    for x in xs:
+                                        cx = {s: x.counts(s, self.side) for s in SIDES}
+                                        c = chance(cx, cy, y.on_target)
+                                        if c <= 0:
+                                            continue
+                                        # Doubled mods aren't uniform picks, so the exact-salvage odds don't hold: no credit.
+                                        back = (salvage(cx, cy, y.on_target), salvage(cy, cx, True) if y.on_target else 0.0) if not dup else (0.0, 0.0)
+                                        step = Step(x, y, c, *back)
+                                        if top is None or step.cost < top.cost:
+                                            top = step
                 if top is not None:
                     best_step[full] = top
                     options.setdefault(full, []).append(top)

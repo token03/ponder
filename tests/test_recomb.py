@@ -121,3 +121,25 @@ def test_salvage_matches_a_simulation():
         hits += kept == {"life", "es", "res"}
     exact = recomb.salvage({"prefix": (2, 0), "suffix": (1, 0)}, {"prefix": (0, 1), "suffix": (1, 1)}, same_base=False)
     assert hits / trials == pytest.approx(exact, abs=0.01)
+
+
+def test_doubling_a_wanted_mod_pads_the_pool_on_the_target_base():
+    from ponder.craft import Target
+
+    # Two prefixes wanted (life, es). Plain: pool 2 keeps both 33%. With life on both
+    # donors the pool is 3: two picks always get both (life's group blocks its copy).
+    life = Target("life", "prefix", frozenset({"l"}), frozenset({"L"}))
+    es = Target("es", "prefix", frozenset({"e"}), frozenset({"E"}))
+    planner = recomb.Planner.__new__(recomb.Planner)
+    planner.ok, planner.want = True, [recomb.Want("life", "prefix", life), recomb.Want("es", "prefix", es)]
+    planner.side = {"life": "prefix", "es": "prefix"}
+    one = lambda *names: recomb.Donor("T", "t", names)
+    leaves = {frozenset({"life"}): [one("life")], frozenset({"es"}): [one("es")], frozenset({"life", "es"}): [one("es", "life")]}
+    for k, ds in leaves.items():
+        for d in ds:
+            d.plan = type("P", (), {"cost": 10.0 if len(k) == 1 else 12.0})()
+    planner._leaves = leaves
+    best = planner.best()
+    assert len(best.doubled) == 1  # either mod, doubled, does it
+    assert best.chance == pytest.approx(0.60)  # pool 3 keeps 2+ 60%
+    assert best.cost == pytest.approx((10 + 12) / 0.60)  # beats (10 + 10) / 0.33 without doubling
