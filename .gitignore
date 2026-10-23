@@ -7,3 +7,5 @@ dist/
 
 # Downloaded game data (see `ponder data fetch`)
 .cache/
+
+.env
