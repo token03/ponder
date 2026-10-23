@@ -194,7 +194,7 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         for m, text in filler_mods:
             rows.append(Row("filler", m.kind, text, f"any res T{worst}+"))
     harvest, h_profiles = actions.harvest(mods)
-    fossil, f_profiles = actions.fossils(mods)
+    fossil, f_profiles = _fossils(mods, targets, filler, len(filler_mods), item_class)
     essence, forced = actions.essences(item_class, ilvl)
     for mod_id in forced.values():
         extra.setdefault(mod_id, _mod(mod_id, db.mods[mod_id], 0))
@@ -230,7 +230,7 @@ def problem_on(
     tags = db.item_tags(base_id, set(influences))
     mods = pool(db, base_id, tags, item_level)
     harvest, h_profiles = actions.harvest(mods)
-    fossil, f_profiles = actions.fossils(mods)
+    fossil, f_profiles = _fossils(mods, targets, frozenset(), 0, item_class)
     essence, forced = actions.essences(item_class, item_level)
     extra = {m: _mod(m, db.mods[m], 0) for m in forced.values()}
     return Problem(
@@ -244,6 +244,24 @@ def problem_on(
         extra_mods=extra,
         junk_cap=junk_cap,
     )
+
+
+FOSSIL_COMBOS = True  # 1-4 fossil resonators, pre-scored (actions.fossil_combos); False: single fossils only
+
+
+@cache
+def _prices() -> dict[str, float]:
+    from . import prices
+
+    return prices.load()[0]
+
+
+def _fossils(mods: list[Mod], targets: list[Target], filler: frozenset[str], filler_need: int, item_class: str):
+    if not FOSSIL_COMBOS:
+        return actions.fossils(mods)
+    wants = [t.good for t in targets] + [filler] * filler_need
+    per_side = 1.6 if item_class in JEWEL_CLASSES else 2.3  # half the mods a rare rolls
+    return actions.fossil_combos(mods, wants, _prices(), mods_per_side=per_side)
 
 
 def _lock_rerolls(harvest: list, profiles: dict, targets: list[Target], filler: frozenset[str]) -> list:

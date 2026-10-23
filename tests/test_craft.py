@@ -215,3 +215,23 @@ def test_lock_and_reroll_keeps_one_side_and_matches_simulation():
             plan.policy[st] = lock.name
     exact = craft.evaluate(problem, plan.policy, GEAR_PRICES)
     assert craft.simulate(problem, plan, GEAR_PRICES, runs=4000, seed=7) == pytest.approx(exact, rel=0.08)
+
+
+def test_fossil_combos_pair_up_fossils_that_each_help_one_wanted_mod(monkeypatch):
+    import numpy as np
+
+    pool = [Mod("x", "prefix", 100, ("X",), False, "x", ("fire",)), Mod("y", "suffix", 100, ("Y",), False, "y", ("cold",))]
+    pool += [Mod(f"p{i}", "prefix", 1000, (f"P{i}",), False, "junk", ()) for i in range(3)]
+    pool += [Mod(f"s{i}", "suffix", 1000, (f"S{i}",), False, "junk", ()) for i in range(3)]
+    rows = [
+        ("hot", "hot-fossil", np.array([10.0 if "fire" in m.tags else 1.0 for m in pool])),
+        ("icy", "icy-fossil", np.array([10.0 if "cold" in m.tags else 1.0 for m in pool])),
+        ("dud", "dud-fossil", np.array([1.0 if m.tags else 0.5 for m in pool])),
+    ]
+    monkeypatch.setattr(actions, "_fossil_rows", lambda _pool: rows)
+    prices = {"hot-fossil": 1.0, "icy-fossil": 1.0, "dud-fossil": 50.0, **{r: 0.5 for r in actions.RESONATORS.values()}}
+    acts, profiles = actions.fossil_combos(pool, [frozenset({"x"}), frozenset({"y"})], prices)
+    assert acts[0].name == "hot+icy fossils"  # both wants: the pair, cheapest per hit
+    assert dict(acts[0].cost)[actions.RESONATORS[2]] == 1  # two fossils take a potent resonator
+    assert profiles["fossil:hot+icy"]["x"] == 1000.0 and profiles["fossil:hot+icy"]["p0"] == 1000.0
+    assert {a.name for a in acts} >= {"hot fossil", "icy fossil"}  # each want alone: its own fossil

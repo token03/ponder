@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+from itertools import combinations
+
+import numpy as np
 
 from . import data
 from .craft import MAGIC, NORMAL, RARE, Action, Mod
@@ -38,6 +41,9 @@ HARVEST = {
     "critical": ("critical", "vivid-lifeforce", 50),
 }
 RESONATOR = "primitive-chaotic-resonator"
+# Chaotic resonators by socket count: a reroll with 1-4 fossils.
+RESONATORS = {1: RESONATOR, 2: "potent-chaotic-resonator", 3: "powerful-chaotic-resonator", 4: "prime-chaotic-resonator"}
+FOSSIL_COMBOS_KEPT = 10  # combo profiles handed to the solver
 
 # Crafting bench costs are game metadata ids; these are their poe.ninja price ids.
 BENCH_CURRENCY = {
@@ -109,6 +115,93 @@ def fossils(pool: list[Mod]) -> tuple[list[Action], dict[str, dict[str, float]]]
         profiles[f"fossil:{name}"] = weights
         pid = _slug(fossil["name"])
         acts.append(Action(f"{name} fossil", "reroll_rare", ((pid, 1), (RESONATOR, 1)), (NORMAL, RARE), profile=f"fossil:{name}"))
+    return acts, profiles
+
+
+def _fossil_rows(pool: list[Mod]) -> list[tuple[str, str, np.ndarray]]:
+    """(name, price id, per-mod weight multiplier) for every weight-changing fossil.
+
+    A mod's multiplier is the product over its tags of the fossil's modifiers
+    for them; fossils in one resonator multiply together.
+    """
+    rows = []
+    for fossil in data.load("fossils").values():
+        if not fossil["name"] or fossil["added_mods"] or fossil["forced_mods"] or fossil["mirrors"] or fossil["rolls_lucky"] or fossil["changes_quality"]:
+            continue
+        mult = {w["tag"]: w["weight"] / 100 for w in fossil["positive_mod_weights"] + fossil["negative_mod_weights"]}
+        if not mult:
+            continue
+        row = np.array([float(np.prod([mult[t] for t in m.tags if t in mult])) for m in pool])
+        if np.allclose(row, 1.0):
+            continue  # changes nothing here
+        rows.append((fossil["name"].replace(" Fossil", "").lower(), _slug(fossil["name"]), row))
+    return rows
+
+
+def fossil_combos(
+    pool: list[Mod],
+    wants: list[frozenset[str]],
+    prices: dict[str, float],
+    *,
+    mods_per_side: float = 2.3,
+    max_fossils: int = 4,
+    keep: int = FOSSIL_COMBOS_KEPT,
+) -> tuple[list[Action], dict[str, dict[str, float]]]:
+    """The fossil combinations (1-4 in a chaotic resonator) worth giving the solver.
+
+    Every combination is scored at once in numpy: for each wanted mod (a set
+    of acceptable ids), the chance a reroll hits it is about
+    1 - (1 - its share of its side's weight) ** mods_per_side, and a set of
+    wants is hit with the product. For every subset of the wants, the
+    combination with the lowest price per hit is kept (a reroll that lands
+    two prefixes is worth having even when exalts finish the item), largest
+    subsets first, up to `keep`. The solver then values them exactly.
+    """
+    rows = [(n, pid, r) for n, pid, r in _fossil_rows(pool) if pid in prices]
+    wants = [w for w in wants if w]
+    if not rows or not wants:
+        return [], {}
+    base = np.array([float(m.weight) for m in pool])
+    index = {m.id: i for i, m in enumerate(pool)}
+    hit = np.zeros((len(wants), len(pool)))
+    for i, w in enumerate(wants):
+        hit[i, [index[m] for m in w if m in index]] = 1.0
+    side = np.array([[m.side == s for m in pool] for s in ("prefix", "suffix")], dtype=float)
+    want_side = np.array([0 if pool[int(np.argmax(h))].side == "prefix" else 1 for h in hit])
+    mult = np.array([r for _, _, r in rows])
+    fossil_price = np.array([prices[pid] for _, pid, _ in rows])
+    combos, scores = [], []
+    subsets = [s for k in range(len(wants), 0, -1) for s in combinations(range(len(wants)), k)]
+    for k in range(1, min(max_fossils, len(rows)) + 1):
+        if RESONATORS[k] not in prices:
+            continue
+        idx = np.array(list(combinations(range(len(rows)), k)))
+        weights = base * mult[idx].prod(axis=1)  # (combos, mods)
+        totals = weights @ side.T  # (combos, 2)
+        share = np.divide(weights @ hit.T, totals[:, want_side], out=np.zeros((len(idx), len(wants))), where=totals[:, want_side] > 0)
+        p = 1 - (1 - np.clip(share, 0, 1)) ** mods_per_side  # (combos, wants)
+        cost = fossil_price[idx].sum(axis=1) + prices[RESONATORS[k]]
+        combos.append(idx)
+        scores.append((cost, p))
+    picked: list[tuple[int, ...]] = []
+    for subset in subsets:
+        best, best_score = None, np.inf
+        for idx, (cost, p) in zip(combos, scores):
+            per_hit = cost / np.maximum(p[:, list(subset)].prod(axis=1), 1e-12)
+            i = int(np.argmin(per_hit))
+            if per_hit[i] < best_score:
+                best, best_score = tuple(int(x) for x in idx[i]), per_hit[i]
+        if best is not None and best_score < 1e11 and best not in picked:
+            picked.append(best)
+        if len(picked) >= keep:
+            break
+    acts, profiles = [], {}
+    for combo in picked:
+        name = "+".join(rows[i][0] for i in combo)
+        weights = base * np.prod([rows[i][2] for i in combo], axis=0)
+        profiles[f"fossil:{name}"] = {m.id: float(w) for m, w in zip(pool, weights)}
+        cost = tuple((rows[i][1], 1) for i in combo) + ((RESONATORS[len(combo)], 1),)
+        acts.append(Action(f"{name} fossil{'s' if len(combo) > 1 else ''}", "reroll_rare", cost, (NORMAL, RARE), profile=f"fossil:{name}"))
     return acts, profiles
 
 

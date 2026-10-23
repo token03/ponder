@@ -260,7 +260,15 @@ Actions, built from repoe data and costed in poe.ninja prices:
 - alchemy, chaos, scour + alchemy, scour + transmute
 - Harvest "reforge with a <tag> modifier" for every tag the pool has
 - essences (Shrieking and Deafening) for the item class, with a scour on rares
-- single fossils with a Primitive Chaotic Resonator (gear only)
+- fossil rerolls of 1-4 fossils in the matching chaotic resonator (gear
+  only). All 3,000-odd combinations are scored at once in numpy (a hit
+  chance per wanted mod from its weight share on its side); for every
+  subset of the wanted mods the combo with the lowest price per hit is kept,
+  and the solver values those ~10 exactly (`actions.fossil_combos`). Fossils
+  multiply per tag, and fossils in one resonator multiply together. At
+  current prices they pay on tag-skewed crafts (+1 gem wands, curse bodies,
+  crit-multi jewels: 14-94% cheaper than single fossils on 10 of 338 ladder
+  items) and lose to alt/alch spam on most others
 - metamods: "Prefixes/Suffixes Cannot Be Changed", then either scour (keeps
   one side, clears the other) or a reroll of the other side: chaos, or a
   Harvest reforge whose tag can hit a wanted mod there (gear only; the
@@ -286,7 +294,8 @@ prices its actions use (to 3 significant figures), so reruns, the TUI and
 recombinator donors shared between items don't solve twice.
 
 Not modelled yet: bench crafts used mid-craft (e.g. to block a mod group
-before an exalt), "Cannot roll Attack/Caster Modifiers", multi-fossil combos,
+before an exalt), "Cannot roll Attack/Caster Modifiers", fossils that add mods (Glyphic,
+Tangled, Hollow, Sanctified...),
 Eldritch Chaos Orbs and eldritch implicits as targets, influence orbs,
 Awakener, veiled mods, and Harvest's newer crafts (recombinators: see below). `ponder craft` lists the mods on an item it doesn't
 try to make (veiled, legacy-crafted and special mods).
