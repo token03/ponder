@@ -3,12 +3,20 @@
 A cluster jewel's enchant ("Added Small Passive Skills grant: 12% increased
 Fire Damage") adds a tag such as `affliction_fire_damage`, and that tag sets
 which notables and other mods can roll, and how often. The number of added
-passives is fixed on the base, so crafting only changes the notables.
+passives is fixed on the base, so crafting only changes the mods.
+
+A craft wants notables (by name) and/or tiered small-passive mods, written
+"Group@tier": "HaveIncreasedEffect@1" is 35% increased Effect, and
+"GrantAttributes@2" is +3 to All Attributes or better. "Passive point" jewels
+(a 12-passive large with Effect and three "also grant" mods, no notables) are
+crafts of those.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
+from functools import cache
 
 from . import actions, data
 from .craft import Mod, Plan, Problem, Target, solve
@@ -24,6 +32,7 @@ NOTABLE_CAP = {"small": 1, "medium": 2, "large": 3}
 DEFAULT_PASSIVES = {"small": 2, "medium": 4, "large": 8}
 _ENCHANT_PREFIX = "Added Small Passive Skills grant: "
 _NOTABLE_PREFIX = "1 Added Passive Skill is "
+GROUP_PREFIX = "AfflictionJewelSmallPassives"
 
 
 @dataclass
@@ -47,7 +56,7 @@ def enchants(size: str) -> list[Enchant]:
 def find_enchant(size: str, name: str) -> Enchant:
     options = enchants(size)
     wanted = name.lower()
-    exact = [e for e in options if e.name.lower() == wanted or e.tag == wanted]
+    exact = [e for e in options if e.name.lower() == wanted or e.short.lower() == wanted] or [e for e in options if e.tag == wanted]
     hits = exact or [e for e in options if wanted in e.name.lower() or any(wanted in t.lower() for t in e.text)]
     if len(hits) != 1:
         names = ", ".join(e.name for e in (hits or options))
@@ -80,6 +89,86 @@ def pool(size: str, enchant: Enchant, item_level: int = 84) -> list[Mod]:
         out.append(
             Mod(mod_id, mod["generation_type"], weight, tuple(mod["groups"]), is_notable(mod), label, tuple(mod["implicit_tags"]))
         )
+    return out
+
+
+def tiers(mods: list[Mod]) -> dict[str, int]:
+    """Tier of each non-notable mod in a pool: 1 is its group's highest-level roll."""
+    levels = data.load("mods")
+    by_group: dict[str, list[Mod]] = defaultdict(list)
+    for m in mods:
+        if not m.notable and m.groups:
+            by_group[m.groups[0]].append(m)
+    out = {}
+    for group in by_group.values():
+        ranks = sorted({levels[m.id]["required_level"] for m in group}, reverse=True)
+        out.update({m.id: ranks.index(levels[m.id]["required_level"]) + 1 for m in group})
+    return out
+
+
+@cache
+def mod_tiers(size: str, tag: str) -> dict[str, int]:
+    return tiers(pool(size, Enchant(tag, tag, tag, [])))  # the pool depends only on the tag
+
+
+def feature(mod_id: str, tier: int) -> str:
+    """A tiered small-passive mod as a craft names it, e.g. "HaveIncreasedEffect@1"."""
+    return f"{data.load('mods')[mod_id]['groups'][0].removeprefix(GROUP_PREFIX)}@{tier}"
+
+
+def is_feature(name: str) -> bool:
+    return "@" in name
+
+
+def _parse(name: str) -> tuple[str, int]:
+    group, tier = name.rsplit("@", 1)
+    return GROUP_PREFIX + group, int(tier)
+
+
+def feature_label(name: str, mods: list[Mod] | None = None) -> str:
+    """ "HaveIncreasedEffect@1" -> "35% increased Effect"; tiers past 1 read "(T2+)"."""
+    if not is_feature(name):
+        return name
+    group, tier = _parse(name)
+    texts = data.load("mods")
+    hits = [m for m in mods or [] if m.groups and m.groups[0] == group]
+    ranked = tiers(hits) if hits else {}
+    mod_id = next((m for m, t in ranked.items() if t == tier), None) or next((m for m, mod in texts.items() if group in mod["groups"]), None)
+    text = (texts[mod_id]["text"] or group) if mod_id else group
+    text = text.replace("Added Small Passive Skills also grant: ", "").replace("Added Small Passive Skills have ", "").replace("\n", " / ")
+    return text + (f" (T{tier}+)" if tier > 1 else "")
+
+
+def resolve(mods: list[Mod], names: list[str]) -> list[Target]:
+    """Targets for notable names and "Group@tier" small-passive mods."""
+    ranked = tiers(mods)
+    out = []
+    for name in names:
+        if not is_feature(name):
+            m = resolve_notables(mods, [name])[0]
+            out.append(Target(m.label, m.side, frozenset({m.id}), frozenset(m.groups), True))
+            continue
+        group, tier = _parse(name)
+        good = [m for m in mods if m.groups and m.groups[0] == group and ranked.get(m.id, 99) <= tier]
+        if not good:
+            raise ValueError(f"{name!r} can't roll here")
+        out.append(Target(feature_label(name, mods), good[0].side, frozenset(m.id for m in good), frozenset(g for m in good for g in m.groups)))
+    return out
+
+
+def resolve_fixed(mods: list[Mod], names: list[str]) -> list[Mod]:
+    """Fractured mods: notables by name, small-passive mods at exactly their tier."""
+    ranked = tiers(mods)
+    out = []
+    for name in names:
+        if not is_feature(name):
+            out += resolve_notables(mods, [name])
+            continue
+        group, tier = _parse(name)
+        hit = next((m for m in mods if m.groups and m.groups[0] == group and ranked.get(m.id) == tier), None)
+        if hit is None:
+            raise ValueError(f"{name!r} can't roll here")
+        out.append(hit)
     return out
 
 
@@ -121,15 +210,15 @@ def problem(
 ) -> Problem:
     """The crafting problem `cost` solves, for solving elsewhere (e.g. in a process pool)."""
     mods = pool(size, find_enchant(size, enchant), item_level)
-    wanted = resolve_notables(mods, notables)
-    fixed = resolve_notables(mods, list(fractured))
-    need = need or len(wanted)
-    if need > NOTABLE_CAP[size]:
+    targets = resolve(mods, notables)
+    fixed = resolve_fixed(mods, list(fractured))
+    need = need or len(targets)
+    if sum(t.notable for t in targets) > NOTABLE_CAP[size]:
         raise ValueError(f"a {size} cluster holds at most {NOTABLE_CAP[size]} notables")
     harvest, profiles = actions.harvest(mods)
     return Problem(
         pool=mods,
-        targets=[Target(m.label, m.side, frozenset({m.id}), frozenset(m.groups), True) for m in wanted],
+        targets=targets,
         need=need,
         actions=actions.BASIC + harvest,
         kind="jewel",

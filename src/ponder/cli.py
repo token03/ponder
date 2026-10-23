@@ -93,7 +93,7 @@ def parser() -> argparse.ArgumentParser:
     lad_price.add_argument("--top", type=int, default=5, help="archetypes to price (one search + 5 fetches each)")
     lad_price.add_argument("--listings", type=int, default=50)
 
-    lad_crafts = lad_sub.add_parser("crafts", help="cost what the ladder wears (gear archetypes + cluster notables); rank market holes")
+    lad_crafts = lad_sub.add_parser("crafts", help="cost what the ladder wears (gear archetypes + cluster jewels); rank market holes")
     lad_crafts.add_argument("--group", help="only base groups / cluster enchants containing this text")
     lad_crafts.add_argument("--min-characters", type=int, default=5, help="rarer combinations are skipped (lower finds more niche ones)")
     lad_crafts.add_argument("--gear", type=int, default=80, help="gear archetypes to cost, most worn first")
@@ -139,14 +139,14 @@ def parser() -> argparse.ArgumentParser:
     cl_not.add_argument("size", choices=list(cluster.SIZES))
     cl_not.add_argument("enchant", help='enchant name or tag, e.g. "cold damage"')
     cl_not.add_argument("--ilvl", type=int, default=84)
-    cl_cost = cl_sub.add_parser("cost", help="expected cost, recipe and margin for notables")
+    cl_cost = cl_sub.add_parser("cost", help="expected cost, recipe and margin for notables and Group@tier small-passive mods")
     cl_cost.add_argument("size", choices=list(cluster.SIZES))
     cl_cost.add_argument("enchant")
     cl_cost.add_argument("notables", nargs="+")
     cl_cost.add_argument("--need", type=int, help="how many of the notables are required (default all)")
     cl_cost.add_argument("--ilvl", type=int, default=84)
     cl_cost.add_argument("--passives", type=int, help="added passives on the base (default fewest)")
-    cl_cost.add_argument("--fractured", nargs="*", default=[], help="notables already fractured on the base")
+    cl_cost.add_argument("--fractured", nargs="*", default=[], help="notables (or Group@tier mods) already fractured on the base")
     cl_cost.add_argument("--trade", action="store_true", help="look up selling prices on the trade site")
     return p
 
@@ -419,13 +419,22 @@ def _cluster(args) -> int:
             for m in sorted((m for m in mods if m.side == side and m.notable), key=lambda m: -m.weight):
                 t.add_row(str(m.weight), f"{m.weight / side_total:.1%}", m.label)
             out(t)
+        tiers = cluster.tiers(mods)
+        t = Table(title="small-passive mods (name them as shown, e.g. HaveIncreasedEffect@1)", title_justify="left", box=None)
+        t.add_column("craft name")
+        t.add_column("side")
+        t.add_column("weight", justify="right")
+        t.add_column("mod")
+        for m in sorted((m for m in mods if not m.notable and m.id in tiers), key=lambda m: (m.side, m.groups[0], tiers[m.id])):
+            t.add_row(cluster.feature(m.id, tiers[m.id]), m.side, str(m.weight), cluster.feature_label(cluster.feature(m.id, tiers[m.id]), mods))
+        out(t)
         return 0
 
     table, source = prices.load()
     league = pipeline.current_league()
     with console.status("solving"):
         est = pipeline.estimate_cluster(
-            args.size, enchant.tag, args.notables, table, league,
+            args.size, enchant.name, args.notables, table, league,
             passives=args.passives, item_level=args.ilvl, need=args.need, fractured=args.fractured,
         )  # fmt: skip
     if args.trade and est.query:

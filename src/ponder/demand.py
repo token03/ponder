@@ -281,7 +281,8 @@ class WornCluster:
     passives: int
     item_level: int
     notables: tuple[str, ...]  # notable names, sorted
-    fractured: tuple[str, ...] = ()  # fractured notables among them
+    fractured: tuple[str, ...] = ()  # fractured notables and small-passive mods ("Group@tier") among them
+    mods: tuple[str, ...] = ()  # small-passive mods as "Group@tier", sorted
 
 
 @dataclass
@@ -296,10 +297,16 @@ class ClusterArchetype:
     passives: Counter = field(default_factory=Counter)  # passive counts worn
     item_levels: Counter = field(default_factory=Counter)
     full: int = 0  # items carrying exactly these notables and no other
+    tiers: dict[str, Counter] = field(default_factory=dict)  # passive jewels: group -> tiers worn
 
     @property
     def title(self) -> str:
         return f"{self.size.title()} · {self.enchant}"
+
+    @property
+    def passive(self) -> bool:
+        """A "passive point" jewel: small-passive mods, no notables."""
+        return bool(self.notables) and all("@" in n for n in self.notables)
 
     @property
     def usual_passives(self) -> int:
@@ -328,16 +335,23 @@ def wear_clusters(characters, skill_of=None) -> list[WornCluster]:
                 continue
             got = it.get("mods") or {}
             passives = next((m["stats"].get("local_jewel_expansion_passive_node_count") for m in got.get("enchant", []) if "stats" in m), None)
-            notables, fractured = [], []
+            notables, fractured, small = [], [], []
+            tiers = cluster.mod_tiers(size, ench.tag)
             for source in ("explicit", "fractured"):
                 for m in got.get(source, []):
                     mod = mods.get(m.get("id"))
                     if mod and cluster.is_notable(mod):
                         notables.append(cluster.notable_name(mod))
-                        if source == "fractured":
-                            fractured.append(notables[-1])
-            if notables and passives:
-                out.append(WornCluster(who, skill, size, ench.short, ench.tag, int(passives), it.get("ilvl") or 0, tuple(sorted(notables)), tuple(sorted(fractured))))
+                    elif mod and m["id"] in tiers:
+                        small.append(cluster.feature(m["id"], tiers[m["id"]]))
+                    else:
+                        continue
+                    if source == "fractured":
+                        fractured.append((notables if mod and cluster.is_notable(mod) else small)[-1])
+            if (notables or small) and passives:
+                out.append(
+                    WornCluster(who, skill, size, ench.short, ench.tag, int(passives), it.get("ilvl") or 0, tuple(sorted(notables)), tuple(sorted(fractured)), tuple(sorted(small)))
+                )
     return out
 
 
@@ -354,6 +368,8 @@ def cluster_archetypes(worn: list[WornCluster], min_characters: int = 5, implied
     who: dict[tuple, set[str]] = defaultdict(set)
     rec: dict[tuple, ClusterArchetype] = {}
     for w in worn:
+        if not w.notables:
+            continue
         for size in range(max(1, NOTABLE_CAP[w.size] - 1), len(w.notables) + 1):
             for combo in combinations(w.notables, size):
                 key = (w.size, w.tag, combo)
@@ -366,6 +382,12 @@ def cluster_archetypes(worn: list[WornCluster], min_characters: int = 5, implied
                 a.skills[w.skill] += 1
                 a.passives[w.passives] += 1
                 a.item_levels[w.item_level] += 1
+    out = _keep(who, rec, min_characters, implied)
+    return sorted(out + passive_archetypes(worn, min_characters, implied), key=lambda a: (-a.characters, -len(a.notables)))
+
+
+def _keep(who: dict[tuple, set[str]], rec: dict, min_characters: int, implied: float) -> list:
+    """Combos worn by enough characters, minus those a bigger combo covers `implied` of."""
     keys = [k for k, v in who.items() if len(v) >= min_characters]
     bigger: dict[tuple, list] = defaultdict(list)
     for k in keys:
@@ -378,7 +400,53 @@ def cluster_archetypes(worn: list[WornCluster], min_characters: int = 5, implied
         a = rec[k]
         a.characters = n
         out.append(a)
-    return sorted(out, key=lambda a: (-a.characters, -len(a.notables)))
+    return out
+
+
+PASSIVE_MIN_MODS = 2  # a passive jewel craft wants at least this many small-passive mods
+
+
+def passive_archetypes(worn: list[WornCluster], min_characters: int = 5, implied: float = 0.8) -> list[ClusterArchetype]:
+    """"Passive point" jewels: no notables, valued for Effect and "also grant" mods.
+
+    Mods combine by group (any tier); each archetype then asks for the tier at
+    least half its wearers have, so "GrantAttributes" worn at T1 by most
+    becomes "GrantAttributes@1".
+    """
+    who: dict[tuple, set[str]] = defaultdict(set)
+    rec: dict[tuple, ClusterArchetype] = {}
+    for w in worn:
+        if w.notables or len(w.mods) < PASSIVE_MIN_MODS:
+            continue
+        by_group = {m.rsplit("@", 1)[0]: int(m.rsplit("@", 1)[1]) for m in w.mods}
+        for size in range(PASSIVE_MIN_MODS, len(by_group) + 1):
+            for combo in combinations(sorted(by_group), size):
+                key = (w.size, w.tag, combo)
+                a = rec.get(key)
+                if a is None:
+                    a = rec[key] = ClusterArchetype(w.size, w.enchant, w.tag, combo, 0, 0)
+                who[key].add(w.character)
+                a.items += 1
+                a.full += size == len(by_group)
+                a.skills[w.skill] += 1
+                a.passives[w.passives] += 1
+                a.item_levels[w.item_level] += 1
+                for g in combo:
+                    a.tiers.setdefault(g, Counter())[by_group[g]] += 1
+    out = _keep(who, rec, min_characters, implied)
+    for a in out:
+        a.notables = tuple(f"{g}@{_usual(a.tiers[g])}" for g in a.notables)
+    return out
+
+
+def _usual(tiers: Counter, share: float = 0.5) -> int:
+    """The worst tier that at least `share` of wearers have or beat."""
+    total, seen = sum(tiers.values()), 0
+    for tier in sorted(tiers):
+        seen += tiers[tier]
+        if seen >= share * total:
+            return tier
+    return max(tiers)
 
 
 def archetype_match(db: ModDB, a: Archetype) -> ItemMatch | None:

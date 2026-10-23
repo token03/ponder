@@ -112,16 +112,18 @@ def cluster_query(
     size: str,
     enchant_option: str | None,
     passives: int | None,
-    notable_ids: list[str],
+    notable_ids: list,
     item_level: int | None = None,
     fractured_ids: list[str] = (),
 ) -> dict:
+    """`notable_ids`: mod ids, or (mod id, minimum roll) for tiered small-passive mods."""
     extra = []
     if enchant_option:
         extra.append({"id": ENCHANT_STAT, "value": {"option": enchant_option}, "disabled": False})
     if passives:
         extra.append({"id": PASSIVES_STAT, "value": {"min": passives, "max": passives}, "disabled": False})
-    stats = [(stat_id(m) or m, None) for m in notable_ids] + [(stat_id(m, "fractured") or m, None) for m in fractured_ids]
+    wanted = [m if isinstance(m, tuple) else (m, None) for m in notable_ids]
+    stats = [(stat_id(m) or m, low) for m, low in wanted] + [(stat_id(m, "fractured") or m, None) for m in fractured_ids]
     return item_query(
         base=f"{size.title()} Cluster Jewel", stats=stats, item_level=item_level, fractured_only=bool(fractured_ids), extra=extra
     )

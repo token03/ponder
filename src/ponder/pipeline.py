@@ -161,6 +161,15 @@ class Estimate:
         return min(priced, key=lambda f: f.total) if priced else None
 
     @property
+    def fracture_worth(self) -> tuple[float, Fracture] | None:
+        """The most a fractured base is worth: crafting from a plain base (base included) less the cheapest finish from a fractured one."""
+        done = [f for f in self.fractures if f.plan]
+        if self.total is None or not done:
+            return None
+        f = min(done, key=lambda f: f.plan.cost)
+        return self.total - f.plan.cost, f
+
+    @property
     def recomb_total(self) -> float | None:
         """Recombining clean donors instead of crafting in one go (then the same bench crafts)."""
         if self.recomb is None or self.recomb.cost is None:
@@ -215,6 +224,7 @@ class Estimate:
             "demand": self.demand,
             "skills": self.skills,
             "hole": self.hole,
+            "fracture_worth": {"chaos": w[0], "target": w[1].target} if (w := self.fracture_worth) else None,
             "error": self.error or self.market_error or self.base_error,
         }
 
@@ -455,13 +465,14 @@ def ladder(
     for a in found_cl:
         if len(estimates) - n_gear >= cluster_top:
             break
-        est = estimate_cluster(a.size, a.tag, list(a.notables), table, league, passives=a.usual_passives, solve=False)
+        est = estimate_cluster(a.size, a.enchant, list(a.notables), table, league, passives=a.usual_passives, solve=False)  # two enchants can share a tag
         if est.error or est.key in estimates:
             continue
         est.demand, est.skills = a.characters, [s for s, _ in a.skills.most_common(3)]
+        add_fractures(est, league)  # fractured bases are most of the cluster market's money
         estimates[est.key] = est
     out = list(estimates.values())
-    solve_all(out, table, workers, say)
+    solve_all(out + [f for e in out for f in e.fractures], table, workers, say)
     if recombs:
         add_recombs(out, table, workers, say, db)
     if trade_lookup:
@@ -525,7 +536,7 @@ def estimate_cluster(
         fixed=list(fractured),
     )
     try:
-        est.problem = cluster.problem(size, ench.tag, list(notables), need, item_level, fractured)
+        est.problem = cluster.problem(size, ench.name, list(notables), need, item_level, fractured)
     except ValueError as e:
         est.error = str(e)
         return est
@@ -535,7 +546,7 @@ def estimate_cluster(
     est.fixed_ids = [m.id for m in est.problem.fixed]
     option = prices.enchant_option(ench.short)
     est.search = {"size": size, "enchant": option, "passives": passives}
-    wanted = [m.id for m in cluster.resolve_notables(est.problem.pool, list(notables))]
+    wanted = [(min(t.good), None if t.notable else trade.stat_min(t.good)) for t in est.problem.targets]
     est.query = trade.cluster_query(size, option, passives, wanted, item_level)
     est.trade_url = trade.search_url(league, est.query)
     if fractured:

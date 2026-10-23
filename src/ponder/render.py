@@ -103,6 +103,15 @@ def fracture_text(e: Estimate, pal: Palette = ANSI) -> Text:
     return Text("")
 
 
+def fracture_worth_text(e: Estimate, pal: Palette = ANSI) -> Text:
+    """ "≤ 140d: Effect" — buy a base with that mod fractured for less than this and it pays."""
+    w = e.fracture_worth
+    if w is None or w[0] <= 0:
+        return Text("")
+    worth, f = w
+    return Text.assemble((f"≤ {money(worth)}", pal.good if worth >= 0.25 * (e.total or 1) else ""), (f" {f.target}", pal.fractured))
+
+
 def recomb_text(e: Estimate, pal: Palette = ANSI) -> Text:
     """The recombinator route against crafting in one go, for tables."""
     r = e.recomb_total
@@ -159,6 +168,9 @@ def ladder_table(estimates: list[Estimate], links: bool = True, title: str | Non
     t.add_column("listed", justify="right", style="dim")
     t.add_column("margin", justify="right")
     t.add_column("hole", justify="right")
+    fractures = any(e.fracture_worth for e in estimates)
+    if fractures:
+        t.add_column("fractured base worth", overflow="fold", max_width=30)
     t.add_column("worn by", style="dim", max_width=28, overflow="ellipsis", no_wrap=True)
     if links:
         t.add_column("trade")
@@ -175,6 +187,7 @@ def ladder_table(estimates: list[Estimate], links: bool = True, title: str | Non
             str(e.market[1]) if e.market else "",
             margin_text(e.margin, pal),
             hole,
+            *([fracture_worth_text(e, pal)] if fractures else []),
             ", ".join(e.skills),
             *([link("search", e.trade_url, pal=pal)] if links else []),
         )
@@ -185,7 +198,7 @@ def ladder_summary(r) -> Text:
     """One line on where the ladder candidates came from (`pipeline.LadderReport`)."""
     return Text(
         f"{r.characters:,} characters · {r.items:,} rare items → {r.archetypes:,} gear archetypes · "
-        f"{r.clusters:,} cluster jewels → {r.cluster_archetypes:,} notable combos · {len(r.estimates)} costed · prices: {r.prices_source}",
+        f"{r.clusters:,} cluster jewels → {r.cluster_archetypes:,} cluster combos · {len(r.estimates)} costed · prices: {r.prices_source}",
         style="dim",
     )
 

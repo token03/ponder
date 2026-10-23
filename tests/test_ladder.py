@@ -148,3 +148,21 @@ def test_plan_key_is_stable_and_price_sensitive():
     assert pipeline.plan_key(p1, table) == pipeline.plan_key(p2, table)
     assert pipeline.plan_key(p1, table) != pipeline.plan_key(p1, {**table, "alt": 0.2})
     assert pipeline.plan_key(p1, table) == pipeline.plan_key(p1, {**table, "alt": 0.10001})  # 3 significant figures
+
+
+def test_passive_point_clusters_become_tiered_crafts():
+    from ponder import cluster
+
+    w = lambda who, mods, tag="affliction_minion_damage": demand.WornCluster(who, "Raise Spectre", "large", "Minions deal 10% increased Damage", tag, 12, 84, (), (), tuple(sorted(mods)))
+    worn = [w(f"a{i}", ["HaveIncreasedEffect@1", "GrantMinionAttackAndCastSpeed@1"]) for i in range(4)]
+    worn += [w(f"b{i}", ["HaveIncreasedEffect@1", "GrantMinionAttackAndCastSpeed@2", "GrantLife@1"]) for i in range(2)]
+    found = {a.notables: a for a in demand.passive_archetypes(worn, min_characters=3)}
+    # 6 wear Effect + minion speed; most at T1, so the craft asks for T1.
+    pair = found[("GrantMinionAttackAndCastSpeed@1", "HaveIncreasedEffect@1")]
+    assert pair.characters == 6 and pair.passive and pair.usual_passives == 12
+    p = cluster.problem("large", "minion damage", list(pair.notables))
+    effect = next(t for t in p.targets if "Effect" in t.name)
+    assert effect.name == "35% increased Effect" and len(effect.good) == 1  # T1 only
+    assert len(cluster.resolve(p.pool, ["HaveIncreasedEffect@2"])[0].good) == 2  # T2+: 25% or 35%
+    fixed = cluster.resolve_fixed(p.pool, ["HaveIncreasedEffect@1"])
+    assert fixed[0].label.endswith("35% increased Effect")

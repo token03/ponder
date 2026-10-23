@@ -145,7 +145,12 @@ Everything is cached under `.cache/ladder/<snapshot>`.
   chance (lift), which marks one build's item (minion rings, Kinetic Blast
   chaos wands). Cluster jewels are read too (6k on a typical sample): by
   size, enchant, usual passive count and notable combination (2+ notables
-  on larges, all of them on mediums and smalls). With `--trade` each gets a
+  on larges, all of them on mediums and smalls), and **passive point**
+  jewels (no notables: Effect plus "also grant" mods, e.g. a 12-passive
+  minion large with 35% Effect and minion speed) by mod combination, each
+  at the tier most wearers have. Every cluster also gets its **fractured
+  base worth**: crafting from a plain base less the cheapest finish from a
+  base with one wanted mod fractured; buy such a base below that and it pays. With `--trade` each gets a
   selling price and listing count, and `hole = margin × wearers / (listed + 5)`
   ranks market holes: wanted, thinly supplied, profitable.
 
@@ -228,6 +233,7 @@ larger one is shared by exactly the same builds.
 ponder prices fetch                      # current league prices from poe.ninja
 ponder cluster cost large "cold damage" "Prismatic Heart" "Widespread Destruction" "Blast-Freeze"
 ponder cluster cost large "cold damage" ... --fractured "Prismatic Heart"   # start from a fractured base
+ponder cluster cost large "minion damage" HaveIncreasedEffect@1 GrantMinionAttackAndCastSpeed@1   # passive point jewel
 ponder craft https://pobb.in/XXXX --slot Helmet --settle 1                 # any rare in a build
 ```
 
