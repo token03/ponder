@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PathOfBuilding>
+	<Build level="94" className="Witch" ascendClassName="Elementalist" mainSocketGroup="1"/>
+	<Skills>
+		<SkillSet id="1">
+			<Skill slot="Body Armour" enabled="true">
+				<Gem nameSpec="Fireball" skillId="Fireball" level="20" quality="20"/>
+				<Gem nameSpec="Ignite Proliferation" skillId="SupportIgniteProliferation" level="20"/>
+			</Skill>
+		</SkillSet>
+	</Skills>
+	<Items activeItemSet="1">
+		<Item id="1">
+			Rarity: RARE
+			Doom Crown
+			Hubris Circlet
+			Shaper Item
+			Item Level: 86
+			Quality: 20
+			Implicits: 0
+			+121 to maximum Life
+			{fractured}84% increased Energy Shield
+			+44% to Lightning Resistance
+			+28% to Chaos Resistance
+			{crafted}+23% to Lightning Resistance
+		</Item>
+		<Item id="2">
+			Rarity: RARE
+			Rapture Beads
+			Onyx Amulet
+			Item Level: 84
+			Implicits: 1
+			+12 to all Attributes
+			+1 to Level of all Fire Skill Gems
+			+108 to maximum Life
+			+36% to Global Critical Strike Multiplier
+			+29% to Chaos Resistance
+			Corrupted
+		</Item>
+		<Item id="3">
+			Rarity: RARE
+			Grim Stride
+			Two-Toned Boots
+			Item Level: 85
+			Selected Variant: 2
+			Implicits: 2
+			{variant:1}+(8-12)% to Fire and Cold Resistances
+			{variant:2}+(8-12)% to Cold and Lightning Resistances
+			30% increased Movement Speed
+			+117 to maximum Life
+			{range:0.5}+(42-45)% to Lightning Resistance
+			+33% to Chaos Resistance
+		</Item>
+		<ItemSet id="1">
+			<Slot name="Helmet" itemId="1"/>
+			<Slot name="Amulet" itemId="2"/>
+			<Slot name="Boots" itemId="3"/>
+		</ItemSet>
+	</Items>
+</PathOfBuilding>

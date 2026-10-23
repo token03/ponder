@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PathOfBuilding>
+	<Build level="92" className="Templar" ascendClassName="Hierophant" mainSocketGroup="1"/>
+	<Skills>
+		<SkillSet id="1">
+			<Skill slot="Body Armour" enabled="true">
+				<Gem nameSpec="Arc" skillId="Arc" level="20" quality="20"/>
+			</Skill>
+		</SkillSet>
+	</Skills>
+	<Items activeItemSet="1">
+		<Item id="1">
+			Rarity: RARE
+			Storm Halo
+			Hubris Circlet
+			Item Level: 84
+			Implicits: 0
+			+135 to maximum Life
+			95% increased Energy Shield
+			+47% to Lightning Resistance
+			+31% to Chaos Resistance
+			35% increased Energy Shield Recharge Rate
+		</Item>
+		<Item id="2">
+			Rarity: RARE
+			Dusk Talisman
+			Onyx Amulet
+			Item Level: 86
+			Implicits: 1
+			+14 to all Attributes
+			+1 to Level of all Lightning Skill Gems
+			+120 to maximum Life
+			+37% to Global Critical Strike Multiplier
+		</Item>
+		<Item id="3">
+			Rarity: MAGIC
+			Runner's Two-Toned Boots
+			Item Level: 70
+			Implicits: 0
+			25% increased Movement Speed
+		</Item>
+		<ItemSet id="1">
+			<Slot name="Helmet" itemId="1"/>
+			<Slot name="Amulet" itemId="2"/>
+			<Slot name="Boots" itemId="3"/>
+		</ItemSet>
+	</Items>
+</PathOfBuilding>
