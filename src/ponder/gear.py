@@ -88,7 +88,7 @@ def spawn_tags() -> frozenset[str]:
     return frozenset(
         w["tag"]
         for m in data.load("mods").values()
-        if m["domain"] == "item" and m["generation_type"] in ("prefix", "suffix")
+        if m["domain"] in ("item", "misc", "abyss_jewel") and m["generation_type"] in ("prefix", "suffix")
         for w in m["spawn_weights"]
         if w["weight"] > 0
     )
@@ -110,9 +110,10 @@ def group(db: ModDB, match: ItemMatch) -> BaseGroup:
 
 def _group(db: ModDB, match: ItemMatch, signature: frozenset[str], influences) -> BaseGroup:
     used = spawn_tags()
+    domain = db.bases[match.base_id].get("domain", "item")  # jewels and abyss jewels have their own
     ranked = []
     for base_id, base in db.bases.items():
-        if base.get("item_class") != match.item_class or base.get("domain") != "item" or base.get("release_state") != "released":
+        if base.get("item_class") != match.item_class or base.get("domain") != domain or base.get("release_state") != "released":
             continue
         if frozenset(db.item_tags(base_id, influences) & used) == signature:
             tags = set(base.get("tags", []))
