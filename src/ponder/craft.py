@@ -510,6 +510,26 @@ def describe(problem: Problem, s: State) -> str:
     return f"{('normal', 'magic', 'rare')[s.rarity]}: {' + '.join(parts) or 'nothing useful'}"
 
 
+def describe_parts(problem: Problem, s: State) -> tuple[str, list[tuple[str, str]]]:
+    """`describe` in pieces for colouring: (rarity, [(text, "good" | "blocked" | "other")])."""
+    parts = []
+    for i, v in enumerate(s.status):
+        if v == GOOD:
+            parts.append((problem.targets[i].name, "good"))
+        elif v == BLOCKED:
+            parts.append((f"{problem.targets[i].name} (blocked)", "blocked"))
+    labels = ("other prefix notable", "other prefix", "other suffix notable", "other suffix")
+    parts += [(f"{n} {label}", "other") for n, label in zip(s.junk, labels) if n]
+    return ("normal", "magic", "rare")[s.rarity], parts
+
+
+def recipe_states(plan: Plan, min_share: float = 0.01) -> list[tuple[State, str, float]]:
+    """Like `recipe`, but with the states themselves."""
+    total = sum(plan.visits.values()) or 1.0
+    rows = [(s, plan.policy[s], n / total) for s, n in plan.visits.items() if n / total >= min_share]
+    return sorted(rows, key=lambda r: -r[2])
+
+
 def recipe(problem: Problem, plan: Plan, min_share: float = 0.01) -> list[tuple[str, str, float]]:
     """The policy for the states you actually meet: (state, action, share of all actions)."""
     total = sum(plan.visits.values()) or 1.0

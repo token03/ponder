@@ -14,16 +14,26 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from . import auth, cluster, data, gear, pipeline, pob, prices, render
+from . import cluster, data, gear, pipeline, pob, prices, render, trade
 from .item import parse_item
 from .mine import mine
 from .mods import ModDB
 
-COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui", "login", "logout"}
+COMMANDS = {"run", "data", "prices", "items", "mine", "craft", "cluster", "tui"}
 SOURCES_HELP = "pobb.in/pastebin URL, file, PoB code, or .txt list of links"
 
 # Piped output (files, scripts, LLMs) never wraps, so long trade links stay whole.
 console = Console() if sys.stdout.isatty() else Console(width=100_000)
+
+
+def out(*renderables, **kw) -> None:
+    """console.print, minus the padding rich adds out to a very wide piped console."""
+    if console.is_terminal:
+        console.print(*renderables, **kw)
+        return
+    with console.capture() as cap:
+        console.print(*renderables, **kw)
+    sys.stdout.write("\n".join(line.rstrip() for line in cap.get().splitlines()) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,10 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help"):
         argv.insert(0, "run")  # `ponder build.txt` is `ponder run build.txt`
     args = parser().parse_args(argv)
+    render.DIVINE = prices.load()[0].get("divine", 0.0)
     try:
         return COMMAND_FUNCS[args.command](args)
     except FileNotFoundError as e:
-        console.print(str(e), style="red", markup=False)
+        out(str(e), style="red", markup=False)
         return 1
 
 
@@ -42,9 +53,11 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ponder", description="Cost crafting the rares in PoB builds. `ponder SOURCES` runs the whole pipeline.")
     sub = p.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="the whole pipeline: cost every rare, mine shared combos, price clusters")
+    run = sub.add_parser("run", help="the whole pipeline: cost every rare, mine shared combos, price on trade")
     run.add_argument("sources", nargs="+", help=SOURCES_HELP)
-    run.add_argument("--trade", action="store_true", help="look up cluster jewel selling prices on the trade site")
+    run.add_argument("--trade", action="store_true", help="price finished items and fractured bases on the trade site (POESESSID in .env)")
+    run.add_argument("--trade-budget", type=int, default=40, help="most trade searches to send (cached answers are free; default 40)")
+    run.add_argument("--fractures", action="store_true", help="also cost starting from a base with each target already fractured")
     run.add_argument("--settle", type=int, default=0, help="accept tiers this many steps worse")
     run.add_argument("--max-targets", type=int, default=4, help="skip items with more target mods than this")
     run.add_argument("--min-builds", type=int, default=2)
@@ -56,10 +69,6 @@ def parser() -> argparse.ArgumentParser:
     tui = sub.add_parser("tui", help="browse a run interactively (needs the `tui` extra)")
     tui.add_argument("sources", nargs="*", help=SOURCES_HELP)
     tui.add_argument("--trade", action="store_true")
-
-    login = sub.add_parser("login", help="enter your POESESSID for trade lookups (hidden; optionally saved to the system keychain)")
-    login.add_argument("--status", action="store_true", help="only say where the cookie comes from")
-    sub.add_parser("logout", help="remove a POESESSID saved in the system keychain")
 
     data_cmd = sub.add_parser("data", help="manage downloaded game data")
     data_cmd.add_argument("action", choices=["fetch", "version"])
@@ -109,61 +118,57 @@ def _links() -> bool:
 
 
 def _rule() -> None:
-    console.rule() if console.is_terminal else console.print("-" * 80)
+    console.rule() if console.is_terminal else out("-" * 80)
 
 
 def _print_estimates(rows, title: str) -> None:
     links = _links()
-    console.print()
-    console.print(render.estimates_table(rows, links, title=title))
+    out()
+    out(render.estimates_table(rows, links, title=title))
     if not links:
         for i, e in enumerate(rows, 1):
             if e.trade_url:
-                console.print(f"  #{i} trade: {e.trade_url}", markup=False, highlight=False)
-
-
-def _ensure_cookie() -> None:
-    """Before trade lookups: ask once (hidden) if there's no cookie and someone is at the keyboard."""
-    if not auth.get():
-        auth.prompt()
+                out(f"  #{i} trade: {e.trade_url}", markup=False, highlight=False)
 
 
 def _run(args) -> int:
-    if args.trade:
-        _ensure_cookie()
+    options = dict(
+        settle=args.settle,
+        max_targets=args.max_targets,
+        min_builds=args.min_builds,
+        fractures=args.fractures,
+        trade_lookup=args.trade,
+        trade_budget=args.trade_budget,
+        workers=args.workers,
+    )
     if args.json:
-        report = pipeline.run(
-            args.sources, settle=args.settle, max_targets=args.max_targets, min_builds=args.min_builds, trade_lookup=args.trade, workers=args.workers
-        )
-        print(json.dumps(report.to_dict(), indent=1))
+        print(json.dumps(pipeline.run(args.sources, **options).to_dict(), indent=1))
         return 0
     with console.status("starting") as status:
-        report = pipeline.run(
-            args.sources,
-            settle=args.settle,
-            max_targets=args.max_targets,
-            min_builds=args.min_builds,
-            trade_lookup=args.trade,
-            workers=args.workers,
-            progress=lambda msg: status.update(msg[:100]),
-        )
+        trade.on_wait = lambda secs: status.update(f"waiting {secs:.0f}s for the trade site's rate limit")
+        report = pipeline.run(args.sources, progress=lambda msg: status.update(escape(msg[:100])), **options)
     links = _links()
-    console.print(render.report_summary(report))
+    out(render.report_summary(report))
     ranked = report.ranked()
     clusters = [e for e in ranked if e.kind == "cluster"]
     gear_rows = [e for e in ranked if e.kind == "gear"]
     if clusters:
         _print_estimates(clusters[: args.top], "Cluster jewels")
     if gear_rows:
-        _print_estimates(gear_rows[: args.top], "Gear (dearest crafts first)")
+        _print_estimates(gear_rows[: args.top], "Gear")
     if report.shared:
-        console.print()
-        console.print(render.shared_table(report.shared[: args.top], links))
+        out()
+        out(render.shared_table(report.shared[: args.top], links))
     for e in [e for e in clusters + gear_rows if e.plan][: args.detail]:
         _rule()
-        console.print(render.estimate_detail(e, report.prices_source, links, rows=8))
-    if not args.trade and clusters:
-        console.print("\n[dim]add --trade to price cluster jewels on the trade site (needs POESESSID if it 403s)[/dim]")
+        out(render.estimate_detail(e, report.prices_source, links, rows=8))
+    hints = []
+    if not args.trade:
+        hints.append("--trade to price items on the trade site")
+    if not args.fractures:
+        hints.append("--fractures to cost starting from fractured bases")
+    if hints:
+        out("\n[dim]add " + " · ".join(hints) + "[/dim]")
     return 0
 
 
@@ -171,41 +176,18 @@ def _tui(args) -> int:
     try:
         from .tui import run_tui
     except ImportError:
-        console.print("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
+        out("the TUI needs textual: `uv sync --extra tui` (or `pip install 'ponder[tui]'`)", style="red", markup=False)
         return 1
     return run_tui(args.sources, trade=args.trade)
-
-
-def _login(args) -> int:
-    has_keychain = auth.keychain_available()
-    if not args.status and has_keychain:
-        auth.prompt()
-    console.print(f"POESESSID: {auth.source()}", markup=False, highlight=False)
-    if not has_keychain:
-        console.print(
-            "No system keychain here (usual on WSL), so there is nothing to log in to: "
-            "`--trade` and the TUI ask for the cookie when they need it and keep it in memory only. "
-            "To skip that prompt, export POESESSID in your shell or keep it in a git-ignored .env.",
-            style="dim",
-            markup=False,
-            highlight=False,
-        )
-    return 0
-
-
-def _logout(args) -> int:
-    auth.forget()
-    console.print(f"removed any saved POESESSID; now: {auth.source()}", markup=False, highlight=False)
-    return 0
 
 
 def _data(args) -> int:
     if args.action == "fetch":
         with console.status("downloading repoe data"):
             version = data.fetch()
-        console.print(f"fetched repoe data for {version} into {data.data_dir()}", markup=False)
+        out(f"fetched repoe data for {version} into {data.data_dir()}", markup=False)
     else:
-        console.print(data.version() or "no data; run `ponder data fetch`", markup=False)
+        out(data.version() or "no data; run `ponder data fetch`", markup=False)
     return 0
 
 
@@ -213,14 +195,14 @@ def _prices(args) -> int:
     if args.action == "fetch":
         with console.status("fetching poe.ninja prices"):
             league, n = prices.fetch(args.league)
-        console.print(f"fetched {n} prices for {league}", markup=False)
+        out(f"fetched {n} prices for {league}", markup=False)
     table, source = prices.load()
     t = Table(title=f"prices from {source}", title_justify="left", box=None)
     t.add_column("chaos", justify="right")
     t.add_column("id")
     for pid in sorted(prices.SNAPSHOT):
         t.add_row(f"{table.get(pid, 0):.3f}", pid)
-    console.print(t)
+    out(t)
     return 0
 
 
@@ -229,12 +211,12 @@ def _items(args) -> int:
     for source in pipeline.expand_sources(args.sources):
         build = pob.load(source)
         title = f"{escape(pipeline.build_name(build))}  [dim]{escape(source[:60])}[/dim]"
-        console.rule(title) if console.is_terminal else console.print(f"== {title}")
+        console.rule(title) if console.is_terminal else out(f"== {title}")
         for pob_item in build.items:
             item = parse_item(pob_item.text)
             if item.rarity != "RARE" and not args.all:
                 continue
-            console.print(render.item_match(pob_item.slot, pob_item.sets, db.match(item)))
+            out(render.item_match(pob_item.slot, pob_item.sets, db.match(item)))
     return 0
 
 
@@ -259,8 +241,8 @@ def _mine(args) -> int:
                 est = pipeline.estimate_cluster(size, tag, list(c.families), table, league, solve=False)
             shared.append(pipeline.Shared(c, est))
         pipeline.solve_all([x.estimate for x in shared if x.estimate], table, progress=status.update)
-    console.print(f"{len(matched)} rare items from {len(sources)} builds; costs use {source_note}", markup=False)
-    console.print(render.shared_table(shared, _links()))
+    out(f"{len(matched)} rare items from {len(sources)} builds; costs use {source_note}", markup=False)
+    out(render.shared_table(shared, _links()))
     return 0
 
 
@@ -268,6 +250,7 @@ def _craft(args) -> int:
     db = ModDB()
     table, source = prices.load()
     build = pob.load(args.source)
+    league = pipeline.current_league()
     seen, estimates = set(), []
     for pob_item in build.items:
         item = parse_item(pob_item.text)
@@ -276,11 +259,10 @@ def _craft(args) -> int:
         match = db.match(item)
         if match.base_id is None or item.base.endswith("Cluster Jewel"):
             continue  # clusters: use `ponder cluster cost`
-        key = pipeline.item_key(match, args.settle)
-        if key in seen:
+        est = pipeline.estimate_gear(db, match, table, league, settle=args.settle, item_level=args.ilvl, max_targets=args.max_targets, solve=False)
+        if est.key in seen:
             continue
-        seen.add(key)
-        est = pipeline.estimate_gear(db, match, table, settle=args.settle, item_level=args.ilvl, max_targets=args.max_targets, solve=False)
+        seen.add(est.key)
         if est.targets:
             est.slot = pob_item.slot or "unequipped"
             estimates.append(est)
@@ -288,7 +270,7 @@ def _craft(args) -> int:
         pipeline.solve_all(estimates, table, progress=status.update)
     for est in estimates:
         _rule()
-        console.print(render.estimate_detail(est, source, _links(), rows=6))
+        out(render.estimate_detail(est, source, _links(), rows=6))
     return 0
 
 
@@ -299,7 +281,7 @@ def _cluster(args) -> int:
         t.add_column("enchant")
         for e in cluster.enchants(args.size):
             t.add_row(e.tag, " / ".join(e.text))
-        console.print(t)
+        out(t)
         return 0
     enchant = cluster.find_enchant(args.size, args.enchant)
     if args.cluster_command == "notables":
@@ -312,7 +294,7 @@ def _cluster(args) -> int:
             t.add_column("notable")
             for m in sorted((m for m in mods if m.side == side and m.notable), key=lambda m: -m.weight):
                 t.add_row(str(m.weight), f"{m.weight / side_total:.1%}", m.label)
-            console.print(t)
+            out(t)
         return 0
 
     table, source = prices.load()
@@ -323,18 +305,15 @@ def _cluster(args) -> int:
             passives=args.passives, item_level=args.ilvl, need=args.need, fractured=args.fractured,
         )  # fmt: skip
     if args.trade and est.query:
-        _ensure_cookie()
         with console.status("asking the trade site"):
             pipeline.lookup_market(est, table, league)
-    console.print(render.estimate_detail(est, source, _links()))
+    out(render.estimate_detail(est, source, _links()))
     return 0 if est.error is None else 1
 
 
 COMMAND_FUNCS = {
     "run": _run,
     "tui": _tui,
-    "login": _login,
-    "logout": _logout,
     "data": _data,
     "prices": _prices,
     "items": _items,

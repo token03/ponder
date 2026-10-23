@@ -10,14 +10,45 @@ for the user.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from functools import cache
 
-from . import actions
+from . import actions, data
 from .craft import Mod, Plan, Problem, Target, solve
 from .mods import ItemMatch, ModDB
 
 JEWEL_CLASSES = {"Jewel", "AbyssJewel"}
 DEFAULT_ITEM_LEVEL = 84
+
+
+DEFENCES = {"str": "Armour", "dex": "Evasion", "int": "ES"}
+_DEFENCE_TAG = re.compile(r"^((?:str|dex|int)(?:_(?:str|dex|int))*)_(armour|shield)$")
+
+
+@dataclass(frozen=True)
+class Row:
+    """One mod line of a craft, for display."""
+
+    role: str  # target | essence | fractured | bench | skipped
+    side: str  # prefix | suffix
+    text: str
+    tier: str = ""  # e.g. "T2+"
+
+
+@dataclass
+class BaseGroup:
+    """Bases that roll exactly the same mods with the same weights: one craft for all of them."""
+
+    item_class: str
+    signature: frozenset[str]  # the base's tags that some mod's spawn weight uses
+    label: str  # e.g. "Gloves (ES)", "Ring", "Cobalt Jewel"
+    bases: list[str]  # names, best first (see `group`)
+
+    @property
+    def best(self) -> str:
+        """The base to craft on and sell: the same mods roll on it, and it sells for more."""
+        return self.bases[0]
 
 
 @dataclass
@@ -26,6 +57,8 @@ class GearProblem:
     item_level: int
     skipped: list[str] = field(default_factory=list)  # mods we don't try to craft
     bench: list[tuple[str, tuple[tuple[str, float], ...]]] = field(default_factory=list)  # (label, cost) crafted last
+    rows: list[Row] = field(default_factory=list)
+    bench_ids: list[str] = field(default_factory=list)
 
     def bench_cost(self, prices: dict[str, float]) -> float:
         return sum(action_cost_of(cost, prices) for _, cost in self.bench)
@@ -45,6 +78,47 @@ def pool(db: ModDB, base_id: str, tags: set[str], item_level: int) -> list[Mod]:
     return out
 
 
+@cache
+def spawn_tags() -> frozenset[str]:
+    """Every tag that some item mod's spawn weight mentions."""
+    return frozenset(
+        w["tag"]
+        for m in data.load("mods").values()
+        if m["domain"] == "item" and m["generation_type"] in ("prefix", "suffix")
+        for w in m["spawn_weights"]
+        if w["weight"] > 0
+    )
+
+
+def group(db: ModDB, match: ItemMatch) -> BaseGroup:
+    """The bases sharing this item's mod pool: same class, same spawn-relevant tags (influences included)."""
+    used = spawn_tags()
+    influences = match.item.influences
+    signature = frozenset(match.tags & used)
+    ranked = []
+    for base_id, base in db.bases.items():
+        if base.get("item_class") != match.item_class or base.get("domain") != "item" or base.get("release_state") != "released":
+            continue
+        if frozenset(db.item_tags(base_id, influences) & used) == signature:
+            tags = set(base.get("tags", []))
+            # Best first: real drops over experimental bases, end-game bases, then highest drop level.
+            ranked.append(("experimental_base" not in tags, "top_tier_base_item_type" in tags, base.get("drop_level", 0), base["name"]))
+    names = list(dict.fromkeys(n for *_, n in sorted(ranked, reverse=True))) or [match.item.base]
+    if len(names) == 1:
+        label = names[0]
+    else:
+        defence = next((_defence(t) for t in signature if _DEFENCE_TAG.match(t)), None)
+        label = f"{match.item_class} ({defence})" if defence else match.item_class
+    if influences:
+        label += " · " + "/".join(sorted(i.title() for i in influences))
+    return BaseGroup(match.item_class, signature, label, names)
+
+
+def _defence(tag: str) -> str:
+    parts = _DEFENCE_TAG.match(tag).group(1).split("_")
+    return "/".join(DEFENCES[p] for p in parts)
+
+
 def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None = None) -> GearProblem:
     if match.base_id is None:
         raise ValueError(f"unknown base {match.item.base!r}")
@@ -53,13 +127,14 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         ilvl = max([ilvl] + [db.mods[m.mod_id]["required_level"] for m in match.mods if m.source == "natural"])
     mods = pool(db, match.base_id, match.tags, ilvl)
     item_class = match.item_class
-    targets, fixed, skipped, extra, bench = [], [], [], {}, []
+    targets, fixed, skipped, extra, bench, rows, bench_ids = [], [], [], {}, [], [], []
     reserve: dict[str, int] = {}
     has_multimod = False
     for m in match.mods:
         text = " / ".join(line.text for line in m.lines)
         if m.fractured:
             fixed.append(_mod(m.mod_id, db.mods[m.mod_id], 0))
+            rows.append(Row("fractured", m.kind, text, f"T{m.tier}" if m.tier else ""))
         elif m.source == "natural" and m.tier:
             good = [
                 x for x in mods
@@ -67,21 +142,29 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
             ]  # fmt: skip
             if not good:
                 skipped.append(f"needs ilvl {db.mods[m.mod_id]['required_level']}: {text}")
+                rows.append(Row("skipped", m.kind, text, f"ilvl {db.mods[m.mod_id]['required_level']}"))
                 continue
             worst = m.tier + settle
+            rows.append(Row("target", m.kind, text, f"T{worst}+" if worst > 1 else "T1"))
             groups = frozenset(g for x in good for g in x.groups)
             targets.append(Target(f"{_short(text)} (T{worst}+)" if worst > 1 else f"{_short(text)} (T1)", m.kind, frozenset(x.id for x in good), groups))
         elif m.source == "essence":
             extra[m.mod_id] = _mod(m.mod_id, db.mods[m.mod_id], 0)
             targets.append(Target(f"{_short(text)} (essence)", m.kind, frozenset({m.mod_id}), frozenset(db.mods[m.mod_id]["groups"])))
+            rows.append(Row("essence", m.kind, text, "essence"))
         elif m.source == "crafted" and (cost := actions.bench_cost(item_class, m.mod_id)):
             bench.append((text, cost))
+            bench_ids.append(m.mod_id)
+            rows.append(Row("bench", m.kind, text, "bench"))
             reserve[m.kind] = reserve.get(m.kind, 0) + 1
             has_multimod = has_multimod or m.mod_id == actions.MULTIMOD
         else:
             skipped.append(f"{m.source}: {text}")
+            rows.append(Row("skipped", m.kind, text, m.source))
     if len(bench) > 1 and not has_multimod and (cost := actions.bench_cost(item_class, actions.MULTIMOD)):
         bench.insert(0, ("Can have up to 3 Crafted Modifiers", cost))
+        bench_ids.insert(0, actions.MULTIMOD)
+        rows.append(Row("bench", "suffix", "Can have up to 3 Crafted Modifiers", "bench"))
         reserve["suffix"] = reserve.get("suffix", 0) + 1
     harvest, h_profiles = actions.harvest(mods)
     fossil, f_profiles = actions.fossils(mods)
@@ -99,7 +182,7 @@ def build(db: ModDB, match: ItemMatch, settle: int = 0, item_level: int | None =
         extra_mods=extra,
         reserve=reserve,
     )
-    return GearProblem(problem, ilvl, skipped, bench)
+    return GearProblem(problem, ilvl, skipped, bench, rows, bench_ids)
 
 
 def cost(db: ModDB, match: ItemMatch, prices: dict[str, float], settle: int = 0, item_level: int | None = None) -> tuple[GearProblem, Plan]:

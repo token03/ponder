@@ -1,9 +1,16 @@
 """Rich renderables for pipeline results, shared by the CLI and the TUI.
 
+Colour means something here, and only a few things: what a mod line is
+(target, fractured, bench, essence, not crafted), how good a tier is, item
+rarity the way the game shows it (magic blue, rare yellow), what's already on
+the item vs what blocks a target, and whether a margin is a profit or a loss.
+Everything else stays plain.
+
+Prices at or above one divine are shown in divines (`2.4d`), below in chaos
+(`85c`); set `DIVINE` to the chaos price of a divine.
+
 Links are terminal hyperlinks when `links` is true; otherwise the raw URL is
 printed, so piped output (and anything reading it, like an LLM) keeps them.
-Colours come from a `Palette`: plain ANSI names by default, so the terminal's
-own colour scheme applies; the TUI passes one built from its current theme.
 """
 
 from __future__ import annotations
@@ -14,26 +21,48 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from . import craft
 from .mods import ItemMatch
 from .pipeline import Estimate, Report, Shared
+
+DIVINE = 0.0  # chaos per divine; 0 shows everything in chaos
 
 
 @dataclass(frozen=True)
 class Palette:
     accent: str = "magenta"  # cluster jewels
     link: str = "cyan"
-    good: str = "green"
-    bad: str = "red"
+    good: str = "green"  # profit, a target already on the item, a cheaper route
+    bad: str = "red"  # loss, a blocked target
     warn: str = "yellow"  # mods the plan doesn't make
     action: str = "yellow"  # what to do in a recipe
     share: str = "cyan"
+    magic: str = "bright_blue"
+    rare: str = "bright_yellow"
+    fractured: str = "yellow"  # the game shows fractured mods in a muted gold
+    bench: str = "bright_cyan"  # crafted mods are light blue in game
+    essence: str = "magenta"
+    best_tier: str = "bold"
 
 
 ANSI = Palette()
 
 
-def chaos(x: float | None, digits: int = 0) -> str:
-    return "-" if x is None else f"{x:,.{digits}f}c"
+def money(x: float | None) -> str:
+    if x is None:
+        return "-"
+    if DIVINE and abs(x) >= DIVINE:
+        d = x / DIVINE
+        return f"{d:,.0f}d" if abs(d) >= 100 else f"{d:,.1f}d"
+    return f"{x:,.1f}c" if abs(x) < 10 else f"{x:,.0f}c"
+
+
+def money_text(x: float | None, style: str = "") -> Text:
+    """Divine amounts in bold, so the expensive end of a column stands out."""
+    if x is None:
+        return Text("-", style="dim")
+    big = DIVINE and abs(x) >= DIVINE
+    return Text(money(x), style=f"{style} bold".strip() if big else style)
 
 
 def link(label: str, url: str | None, links: bool = True, pal: Palette = ANSI) -> Text:
@@ -45,40 +74,84 @@ def link(label: str, url: str | None, links: bool = True, pal: Palette = ANSI) -
 def margin_text(x: float | None, pal: Palette = ANSI) -> Text:
     if x is None:
         return Text("-", style="dim")
-    return Text(chaos(x), style=f"bold {pal.good if x > 0 else pal.bad}")
+    return Text(("+" if x > 0 else "") + money(x), style=f"bold {pal.good if x > 0 else pal.bad}")
+
+
+def market_text(e: Estimate) -> Text:
+    if e.market:
+        return money_text(e.market[0])
+    return Text("?" if e.market_error else "-", style="dim")
+
+
+def total_text(e: Estimate, pal: Palette = ANSI) -> Text:
+    if e.error:
+        return Text("no plan", style="dim italic")
+    t = money_text(e.total)
+    if e.needs_base_price:
+        t.append(" +base", style=pal.fractured)
+    return t
+
+
+def fracture_text(e: Estimate, pal: Palette = ANSI) -> Text:
+    """The best fracture route against crafting from scratch, for tables."""
+    f = e.best_fracture
+    if f and e.total is not None and f.total < e.total:
+        return Text(f"{money(f.total)} ↓", style=pal.good)
+    if e.fractures and not f:
+        best = min((x.craft_cost for x in e.fractures if x.plan), default=None)
+        return Text(f"{money(best)}+b", style="dim") if best is not None else Text("")
+    return Text("")
 
 
 def estimates_table(estimates: list[Estimate], links: bool = True, title: str | None = None, pal: Palette = ANSI) -> Table:
-    t = Table(title=title, title_justify="left", header_style="bold", expand=False, pad_edge=False)
+    t = Table(title=title, title_justify="left", title_style="bold", header_style="bold", expand=False, pad_edge=False, box=None)
     t.add_column("#", justify="right", style="dim")
     t.add_column("item")
-    t.add_column("targets", overflow="fold")
+    t.add_column("mods", overflow="fold")
     t.add_column("builds", justify="right")
     t.add_column("craft", justify="right")
-    t.add_column("total", justify="right")
+    t.add_column("fractured", justify="right")
     t.add_column("market", justify="right")
     t.add_column("margin", justify="right")
     if links:
         t.add_column("trade")
     for i, e in enumerate(estimates, 1):
-        style = pal.accent if e.kind == "cluster" else ""
-        total = Text(chaos(e.total)) if e.error is None else Text(e.error, style="dim italic")
         t.add_row(
             str(i),
-            Text(e.title, style=style),
-            Text("\n".join(e.targets)),
+            item_title(e, pal),
+            mods_inline(e, pal),
             str(len(e.builds)),
-            chaos(e.craft_cost),
-            total,
-            chaos(e.market[0]) if e.market else Text(e.market_error or "-", style="dim"),
+            total_text(e, pal),
+            fracture_text(e, pal),
+            market_text(e),
             margin_text(e.margin, pal),
             *([link("search", e.trade_url, pal=pal)] if links else []),
         )
     return t
 
 
+def item_title(e: Estimate, pal: Palette = ANSI) -> Text:
+    return Text(e.title, style=pal.accent if e.kind == "cluster" else "")
+
+
+def mods_inline(e: Estimate, pal: Palette = ANSI, width: int = 0, sep: str = "\n") -> Text:
+    """Targets prefixes first, with a dim P/S and the tier."""
+    out = Text()
+    for r in sorted(e.rows, key=lambda r: (r.side != "prefix", r.role != "fractured")):
+        if r.role not in ("target", "fractured", "essence"):
+            continue
+        if out:
+            out.append(sep, style="dim")
+        out.append(f"{r.side[0].upper()} ", style="dim")
+        text = r.text if not width or len(r.text) <= width else r.text[: width - 1] + "…"
+        out.append(text, style=_role_style(r.role, pal))
+        if r.tier and r.role == "target":
+            out.append(f" {r.tier}", style=_tier_style(r.tier, pal))
+    return out
+
+
 def shared_table(shared: list[Shared], links: bool = True, pal: Palette = ANSI) -> Table:
-    t = Table(title="Mod combinations shared across builds", title_justify="left", header_style="bold")
+    t = Table(title="Mod combinations shared across builds", title_justify="left", title_style="bold", header_style="bold", box=None)
     t.add_column("builds", justify="right")
     t.add_column("items", justify="right")
     t.add_column("class")
@@ -93,70 +166,160 @@ def shared_table(shared: list[Shared], links: bool = True, pal: Palette = ANSI) 
             str(c.count),
             Text(c.item_class),
             Text(" + ".join(c.families)),
-            (chaos(e.total) if e.error is None else Text(e.error, style="dim")) if e else "",
+            total_text(e, pal) if e else "",
             *([link("search", e.trade_url, pal=pal) if e else ""] if links else []),
         )
     return t
 
 
 def estimate_detail(e: Estimate, prices_source: str = "", links: bool = True, rows: int = 12, pal: Palette = ANSI) -> RenderableType:
-    parts: list[RenderableType] = []
-    head = Text(e.title, style=f"bold {pal.accent}" if e.kind == "cluster" else "bold")
-    if e.slot:
-        head.append(f"  [{e.slot}]", style="dim")
-    head.append(f"  ilvl {e.item_level}+", style="dim")
-    parts.append(head)
-
-    info = Table.grid(padding=(0, 1))
-    info.add_column(style="dim", justify="right")
-    info.add_column()
-    for t in e.targets:
-        info.add_row("target", Text(t))
-    for m in e.fixed:
-        info.add_row("fractured", Text(m))
-    for label, c in e.bench:
-        info.add_row("bench last", Text(f"{label}  ({chaos(c, 1)})"))
-    for s in e.skipped:
-        info.add_row("not crafted", Text(s, style=pal.warn))
-    if e.builds:
-        info.add_row("used by", f"{len(e.builds)} build(s)")
-    parts.append(info)
-
+    parts: list[RenderableType] = [_header(e, pal), Text(""), _mod_lines(e, pal)]
     if e.error:
-        parts.append(Text(f"no plan: {e.error}", style=pal.bad))
+        parts += [Text(""), Text(f"no plan: {e.error}", style=pal.bad)]
         return Group(*parts)
-
-    costs = Table.grid(padding=(0, 1))
-    costs.add_column(style="dim", justify="right")
-    costs.add_column(justify="right")
-    costs.add_column(style="dim")
-    costs.add_row("craft", chaos(e.craft_cost, 1), Text(prices_source))
-    if e.bench:
-        costs.add_row("bench", chaos(e.bench_cost, 1), "")
-    if e.kind == "cluster" and not e.fixed:
-        costs.add_row("base", chaos(e.base_price[0], 1) if e.base_price else "?", f"{e.base_price[1]} listed on poe.ninja" if e.base_price else "no poe.ninja price (run `ponder prices fetch`)")
-    costs.add_row(Text("total", style="bold"), Text(chaos(e.total, 1), style="bold"), "")
-    if e.market:
-        costs.add_row("market", chaos(e.market[0], 1), f"median of cheapest asks, {e.market[1]} listed")
-        costs.add_row(Text("margin", style="bold"), margin_text(e.margin, pal), "")
-    elif e.market_error:
-        costs.add_row("market", "-", e.market_error)
-    parts.append(costs)
-
-    used = ", ".join(f"{n:,.1f} {a}" for a, n in e.usage())
-    parts.append(Text.assemble(("expected currency: ", "dim"), used))
-
-    recipe = Table(title="recipe (most common situations first)", title_justify="left", title_style="bold", box=None, pad_edge=False)
-    recipe.add_column("share", justify="right", style=pal.share)
-    recipe.add_column("situation")
-    recipe.add_column("do", style=f"bold {pal.action}")
-    for state, action, share in e.recipe(rows):
-        recipe.add_row(f"{share:.1%}", Text(state), Text(action))
-    parts.append(recipe)
-
-    if e.trade_url:
-        parts.append(Text.assemble(("trade: ", "dim"), link("open search on pathofexile.com", e.trade_url, links, pal)))
+    parts += [Text(""), _costs(e, prices_source, links, pal)]
+    if e.fractures:
+        parts += [Text(""), _fractures(e, links, pal)]
+    parts += [Text(""), _recipe(e, rows, pal), Text(""), _currency(e)]
     return Group(*parts)
+
+
+def _header(e: Estimate, pal: Palette) -> Text:
+    head = Text()
+    head.append(e.title, style=f"bold {pal.accent}" if e.kind == "cluster" else "bold")
+    if e.kind == "gear" and e.bases > 1:
+        head.append(f"  on {e.base}")
+        if e.used_base:
+            head.append(f" (build has {e.used_base})", style="dim")
+    head.append(f"  ilvl {e.item_level}+", style="dim")
+    if len(e.builds) > 1:
+        head.append(f"  · {len(e.builds)} builds", style=pal.good)
+    return head
+
+
+def _role_style(role: str, pal: Palette) -> str:
+    return {"fractured": pal.fractured, "bench": pal.bench, "essence": pal.essence, "skipped": "dim strike"}.get(role, "")
+
+
+def _tier_style(tier: str, pal: Palette) -> str:
+    if tier == "T1":
+        return f"{pal.best_tier} {pal.rare}"
+    if tier.startswith("T") and tier[1:].rstrip("+").isdigit():
+        return "" if int(tier[1:].rstrip("+")) <= 3 else "dim"
+    return "dim"
+
+
+def _mod_lines(e: Estimate, pal: Palette) -> Table:
+    t = Table.grid(padding=(0, 1))
+    t.add_column(justify="right", style="dim")  # prefix / suffix
+    t.add_column()  # mod text
+    t.add_column(justify="right")  # tier or role
+    order = {"fractured": 0, "target": 1, "essence": 2, "bench": 3, "skipped": 4}
+    for side in ("prefix", "suffix"):
+        rows = sorted((r for r in e.rows if r.side == side), key=lambda r: order.get(r.role, 9))
+        for i, r in enumerate(rows):
+            label = Text(side if i == 0 else "")
+            if r.role == "target":
+                tag = Text(r.tier, style=_tier_style(r.tier, pal))
+            elif r.role == "skipped":
+                tag = Text(f"not crafted ({r.tier})", style=pal.warn)
+            else:
+                tag = Text(r.role, style=_role_style(r.role, pal))
+            t.add_row(label, Text(r.text, style=_role_style(r.role, pal)), tag)
+    return t
+
+
+def _costs(e: Estimate, prices_source: str, links: bool, pal: Palette) -> Table:
+    t = Table.grid(padding=(0, 1))
+    t.add_column(style="dim", justify="right")
+    t.add_column(justify="right")
+    t.add_column(style="dim")
+    t.add_row("craft", money_text(e.craft_cost), Text(f"expected, {prices_source}"))
+    if e.bench:
+        t.add_row("bench", money_text(e.bench_cost), Text(", ".join(label for label, _ in e.bench)))
+    if e.fixed:
+        note = Text("fractured base: ", style="dim")
+        note.append(" + ".join(e.fixed), style=pal.fractured)
+        if e.base_price:
+            note.append(f"  ({e.base_price[1]} listed)", style="dim")
+        elif e.base_error:
+            note.append(f"  ({e.base_error})", style=pal.warn)
+        else:
+            note.append("  (not priced yet: needs a trade search)", style=pal.warn)
+        if e.base_url:
+            note.append("  ")
+            note.append_text(link("search", e.base_url, links, pal))
+        t.add_row("base", money_text(e.base_price[0]) if e.base_price else Text("?", style=pal.warn), note)
+    elif e.kind == "cluster":
+        note = f"{e.base_price[1]} listed on poe.ninja" if e.base_price else "no poe.ninja price (run `ponder prices fetch`)"
+        t.add_row("base", money_text(e.base_price[0]) if e.base_price else Text("?", style="dim"), Text(note))
+    total = money_text(e.total, "bold")
+    if e.needs_base_price:
+        total.append(" + base", style=pal.fractured)
+    t.add_row(Text("total", style="bold"), total, "")
+    if e.market:
+        t.add_row("market", money_text(e.market[0]), Text.assemble(f"median of cheapest asks, {e.market[1]} listed  ", link("search", e.trade_url, links, pal)))
+        uses_fracture = e.best_fracture is not None and e.cheapest != e.total
+        t.add_row(Text("margin", style="bold"), margin_text(e.margin, pal), Text("buying the best fractured base" if uses_fracture else ""))
+    else:
+        t.add_row("market", Text("-", style="dim"), Text.assemble(e.market_error or "not priced yet  ", link("search", e.trade_url, links, pal)))
+    return t
+
+
+def _fractures(e: Estimate, links: bool, pal: Palette) -> Table:
+    t = Table(title="or start from a fractured base", title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+    t.add_column("fractured mod")
+    t.add_column("craft rest", justify="right")
+    t.add_column("base", justify="right")
+    t.add_column("total", justify="right")
+    t.add_column("vs scratch", justify="right")
+    t.add_column("")
+    for f in sorted(e.fractures, key=lambda f: (f.total is None, f.total or 0, f.craft_cost or 0)):
+        if f.error:
+            t.add_row(Text(f.target, style=pal.fractured), Text("no plan", style="dim"), "", "", "", "")
+            continue
+        saving = e.total - f.total if f.total is not None and e.total is not None else None
+        if saving is None:
+            vs = Text("-", style="dim")
+        else:
+            vs = Text(("−" if saving > 0 else "+") + money(abs(saving)), style=pal.good if saving > 0 else pal.bad)
+        base = money_text(f.base_price[0]) if f.base_price else Text(f.base_error or "?", style="dim")
+        t.add_row(Text(f.target, style=pal.fractured), money_text(f.craft_cost), base, money_text(f.total), vs, link("bases", f.trade_url, links, pal))
+    return t
+
+
+def _recipe(e: Estimate, rows: int, pal: Palette) -> Table:
+    t = Table(title="recipe · what to do in each situation, commonest first", title_justify="left", title_style="bold", box=None, pad_edge=False, header_style="dim")
+    t.add_column("share", justify="right", style=pal.share)
+    t.add_column("situation")
+    t.add_column("do", style=f"bold {pal.action}")
+    for state, action, share in e.recipe_states(rows):
+        t.add_row(f"{share:.0%}" if share >= 0.1 else f"{share:.1%}", situation(e.problem, state, pal), Text(action))
+    return t
+
+
+def situation(problem: craft.Problem, state: craft.State, pal: Palette = ANSI) -> Text:
+    rarity, parts = craft.describe_parts(problem, state)
+    out = Text()
+    out.append(rarity, style={"magic": pal.magic, "rare": pal.rare}.get(rarity, ""))
+    out.append(": ")
+    if not parts:
+        out.append("nothing useful", style="dim")
+    for i, (text, kind) in enumerate(parts):
+        if i:
+            out.append(" + ", style="dim")
+        out.append(text, style={"good": pal.good, "blocked": pal.bad, "other": "dim"}[kind])
+    return out
+
+
+def _currency(e: Estimate) -> Text:
+    out = Text("expected currency  ", style="dim")
+    for i, (a, n) in enumerate(e.usage()):
+        if i:
+            out.append(" · ", style="dim")
+        out.append(f"{n:,.0f}" if n >= 10 else f"{n:,.1f}", style="bold")
+        out.append(f" {a}")
+    return out
 
 
 def report_summary(r: Report) -> Text:
@@ -164,6 +327,8 @@ def report_summary(r: Report) -> Text:
     out = Text()
     out.append(f"{len(r.builds)} build(s), {rares} rares, {len(r.estimates)} distinct crafts", style="bold")
     out.append(f"  ·  league {r.league}  ·  prices: {r.prices_source}", style="dim")
+    if r.divine:
+        out.append(f"  ·  1d = {r.divine:,.0f}c", style="dim")
     for b in r.builds:
         out.append(f"\n  {b.name}", style="")
         out.append(f"  {b.source[:70]}", style="dim")
@@ -186,15 +351,15 @@ def item_match(slot: str | None, sets: list[str], m: ItemMatch) -> RenderableTyp
         t.add_row("", "", "", Text("sets", style="dim"), Text(", ".join(sets)), "")
     if m.base_id is None:
         t.add_row(Text("!", style="red"), "", "", "", Text("base type not found in data", style="red"), "")
-    source_style = {"natural": "green", "crafted": "blue", "essence": "magenta", "special": "yellow"}
+    source_style = {"natural": "green", "crafted": "bright_cyan", "essence": "magenta", "special": "yellow"}
     for mod in m.prefixes + m.suffixes:
         flags = "".join(["F" if mod.fractured else "", " +" if mod.merged else "", f" ~{mod.alternatives}" if mod.alternatives else ""])
         t.add_row(
             mod.kind[0].upper(),
-            f"T{mod.tier}" if mod.tier else "",
+            Text(f"T{mod.tier}" if mod.tier else "", style="bold" if mod.tier == 1 else ""),
             Text(mod.source, style=source_style.get(mod.source, "dim")),
             Text(mod.mod_id, style="dim"),
-            Text(" / ".join(line.text for line in mod.lines)),
+            Text(" / ".join(line.text for line in mod.lines), style="yellow" if mod.fractured else ""),
             Text(flags, style="bold"),
         )
     for line in m.unmatched:

@@ -1,21 +1,30 @@
 """The whole pipeline as a library: builds in, priced crafting estimates out.
 
-`run(sources)` loads each build, matches its rares to mod ids, works out the
-cheapest craft for every gear rare and cluster jewel, merges the same item
-across builds, ranks mod combinations the builds share, and (with `trade`)
-looks up selling prices for cluster jewels. Nothing here prints; the CLI and
-TUI render the `Report`, and `Report.to_dict()` gives plain JSON.
+`run(sources)` loads each build, matches its rares to mod ids, and turns each
+rare into a craft: the target mods plus the group of bases that roll exactly
+the same mods (so Warlock and Sorcerer Gloves are one "Gloves (ES)" craft).
+Crafts that several builds need are merged. Every craft gets the cheapest
+plan, and optionally:
+
+- fracture options: for each target, the cost of buying a base with that mod
+  already fractured and crafting the rest, against crafting from scratch;
+- trade prices: what the finished item sells for, and what fractured bases
+  cost, within a budget of searches (the trade API is slow to allow more).
+
+Nothing here prints; the CLI and TUI render the `Report`, and
+`Report.to_dict()` gives plain JSON.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import multiprocessing
 import os
 import sys
-import time
 import urllib.error
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,11 +32,49 @@ from pathlib import Path
 import numpy as np
 
 from . import cluster, craft, gear, pob, prices, trade
+from .gear import Row
 from .item import parse_item
 from .mine import Candidate, mine, target_key
 from .mods import ItemMatch, ModDB
 
 Progress = Callable[[str], None]
+JEWELLERY = {"Ring", "Amulet", "Belt"}  # one implicit apart, their bases sell alike: search by category
+
+
+@dataclass
+class Fracture:
+    """Buy a base with one target already fractured on it, then craft the rest."""
+
+    target: str  # the target's name
+    mod_id: str  # the mod fixed in the solver (any acceptable tier)
+    problem: craft.Problem | None = None
+    plan: craft.Plan | None = None
+    query: dict | None = None  # trade search for the fractured base
+    trade_url: str | None = None
+    base_price: tuple[float, int] | None = None
+    base_error: str | None = None
+    error: str | None = None
+
+    @property
+    def craft_cost(self) -> float | None:
+        return self.plan.cost if self.plan else None
+
+    @property
+    def total(self) -> float | None:
+        if self.plan is None or self.base_price is None:
+            return None
+        return self.plan.cost + self.base_price[0]
+
+    def to_dict(self) -> dict:
+        return {
+            "target": self.target,
+            "craft_cost": self.craft_cost,
+            "base_price": self.base_price[0] if self.base_price else None,
+            "base_listed": self.base_price[1] if self.base_price else None,
+            "total": self.total,
+            "trade_url": self.trade_url,
+            "error": self.error or self.base_error,
+        }
 
 
 @dataclass
@@ -35,22 +82,33 @@ class Estimate:
     """Expected cost of crafting one item, and what it sells for when known."""
 
     kind: str  # "cluster" or "gear"
-    title: str  # e.g. "medium cluster, 10% increased Area Damage" or "Warlock Gloves"
+    title: str  # the base group, e.g. "Gloves (ES)", or "medium cluster, 10% increased Area Damage, 4 passives"
     targets: list[str]
     key: tuple = ()  # identifies the same craft across builds
+    base: str = ""  # the best base with this mod pool, which crafts and searches use, e.g. "Warlock Gloves"
+    used_base: str = ""  # the base the build had, when different, e.g. "Sorcerer Gloves"
+    bases: int = 1  # how many bases share this mod pool
     slot: str | None = None
     builds: list[str] = field(default_factory=list)  # sources whose rares need this craft
     item_level: int = 84
     problem: craft.Problem | None = None
     plan: craft.Plan | None = None
+    rows: list[Row] = field(default_factory=list)  # every mod line, for display
     bench: list[tuple[str, float]] = field(default_factory=list)  # (label, chaos) crafted last
     skipped: list[str] = field(default_factory=list)  # mods the plan doesn't make
-    fixed: list[str] = field(default_factory=list)  # fractured mods on the base
-    base_price: tuple[float, int] | None = None  # (chaos, listings) from poe.ninja
-    query: dict | None = None  # trade-site query, when we can build one
+    fixed: list[str] = field(default_factory=list)  # fractured mods the base must already have
+    fixed_ids: list[str] = field(default_factory=list)
+    base_price: tuple[float, int] | None = None  # (chaos, listings)
+    base_source: str = ""  # "poe.ninja", "trade"
+    base_query: dict | None = None  # trade search for the (fractured) base, when one is needed
+    base_url: str | None = None
+    base_error: str | None = None
+    query: dict | None = None  # trade search for the finished item
     trade_url: str | None = None
     market: tuple[float, int] | None = None  # (median of cheapest asks, total listed)
     market_error: str | None = None
+    fractures: list[Fracture] = field(default_factory=list)
+    search: dict = field(default_factory=dict)  # how to search its bases: cluster size/enchant/passives, or gear base/category
     error: str | None = None  # why there is no plan
 
     @property
@@ -62,6 +120,11 @@ class Estimate:
         return sum(c for _, c in self.bench)
 
     @property
+    def needs_base_price(self) -> bool:
+        """A fractured base costs real money; without its price the total is incomplete."""
+        return bool(self.fixed) and self.base_price is None
+
+    @property
     def total(self) -> float | None:
         if self.plan is None:
             return None
@@ -69,10 +132,26 @@ class Estimate:
 
     @property
     def margin(self) -> float | None:
-        return self.market[0] - self.total if self.market and self.total is not None else None
+        if not self.market or self.total is None or self.needs_base_price:
+            return None
+        return self.market[0] - self.cheapest
+
+    @property
+    def best_fracture(self) -> Fracture | None:
+        priced = [f for f in self.fractures if f.total is not None]
+        return min(priced, key=lambda f: f.total) if priced else None
+
+    @property
+    def cheapest(self) -> float | None:
+        """The cheaper of crafting from scratch and the best priced fracture."""
+        options = [x for x in (self.total, self.best_fracture.total if self.best_fracture else None) if x is not None]
+        return min(options) if options else None
 
     def recipe(self, rows: int = 12) -> list[tuple[str, str, float]]:
         return craft.recipe(self.problem, self.plan)[:rows] if self.plan else []
+
+    def recipe_states(self, rows: int = 12) -> list[tuple[craft.State, str, float]]:
+        return craft.recipe_states(self.plan)[:rows] if self.plan else []
 
     def usage(self) -> list[tuple[str, float]]:
         if not self.plan:
@@ -83,6 +162,10 @@ class Estimate:
         return {
             "kind": self.kind,
             "title": self.title,
+            "base": self.base,
+            "build_base": self.used_base or self.base,
+            "bases_in_group": self.bases,
+            "mods": [dataclasses.asdict(r) for r in self.rows],
             "targets": self.targets,
             "slot": self.slot,
             "builds": self.builds,
@@ -90,16 +173,18 @@ class Estimate:
             "craft_cost": self.craft_cost,
             "bench": [{"mod": label, "chaos": c} for label, c in self.bench],
             "base_price": self.base_price[0] if self.base_price else None,
+            "base_source": self.base_source or None,
+            "base_url": self.base_url,
             "total": self.total,
             "market": self.market[0] if self.market else None,
             "listed": self.market[1] if self.market else None,
             "margin": self.margin,
             "currency": dict(self.usage()),
             "recipe": [{"state": s, "action": a, "share": share} for s, a, share in self.recipe()],
-            "fractured": self.fixed,
+            "fractures": [f.to_dict() for f in self.fractures],
             "not_crafted": self.skipped,
             "trade_url": self.trade_url,
-            "error": self.error or self.market_error,
+            "error": self.error or self.market_error or self.base_error,
         }
 
 
@@ -136,20 +221,29 @@ class Report:
     prices_source: str
     league: str
     errors: list[str] = field(default_factory=list)  # sources that failed to load
+    divine: float = 0.0  # chaos per divine, for display
 
     def ranked(self) -> list[Estimate]:
-        """Best margin first, then the dearest crafts (where tooling saves the most)."""
-        return sorted(self.estimates, key=lambda e: (e.margin is None, -(e.margin or 0), -(e.total or 0)))
+        """Best margin first, then crafts more builds need, then the dearest."""
+        return sorted(self.estimates, key=priority)
 
     def to_dict(self) -> dict:
         return {
             "league": self.league,
             "prices": self.prices_source,
+            "chaos_per_divine": self.divine,
             "builds": [vars(b) for b in self.builds],
             "estimates": [e.to_dict() for e in self.ranked()],
             "shared": [s.to_dict() for s in self.shared],
             "errors": self.errors,
         }
+
+
+def priority(e: Estimate) -> tuple:
+    return (e.margin is None, -(e.margin or 0), -len(e.builds), e.total is None, -(e.total or 0))
+
+
+# -- the run -------------------------------------------------------------------------
 
 
 def run(
@@ -159,11 +253,13 @@ def run(
     max_targets: int = 4,
     min_builds: int = 2,
     top: int = 30,
+    fractures: bool = False,
     trade_lookup: bool = False,
+    trade_budget: int = 40,
     workers: int | None = None,
     progress: Progress | None = None,
 ) -> Report:
-    """`workers` processes solve in parallel (default: every CPU; 1 solves inline)."""
+    """`trade_budget` caps trade searches (cached answers are free); `workers` 1 solves inline."""
     say = progress or (lambda _msg: None)
     table, prices_source = prices.load()
     league = current_league()
@@ -186,18 +282,16 @@ def run(
             rares += 1
             match = db.match(item)
             matched.append((source, match))
-            key = item_key(match, settle)
-            if key is None:
+            est = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets, solve=False)
+            if est is None or not est.targets:
                 continue
-            if key not in by_key:
-                by_key[key] = estimate_item(db, match, table, league, settle=settle, max_targets=max_targets, solve=False)
-                by_key[key].key = key
-                by_key[key].slot = pob_item.slot
-            if source not in by_key[key].builds:
-                by_key[key].builds.append(source)
+            est = by_key.setdefault(est.key, est)
+            est.slot = est.slot or pob_item.slot
+            if source not in est.builds:
+                est.builds.append(source)
         infos.append(BuildInfo(source, build_name(build), rares))
 
-    estimates = [e for e in by_key.values() if e.targets]
+    estimates = list(by_key.values())
     shared = []
     if len(infos) >= 2:
         say("mining shared combinations")
@@ -208,39 +302,36 @@ def run(
                 est = next((e for e in estimates if e.key[:3] == ("cluster", size, tag) and set(c.families) == set(e.targets)), None)
                 est = est or estimate_cluster(size, tag, list(c.families), table, league, solve=False)
             shared.append(Shared(c, est))
-    solve_all(estimates + [s.estimate for s in shared if s.estimate and s.estimate not in estimates], table, workers, say)
+
+    if fractures:
+        for e in estimates:
+            add_fractures(e, league)
+    extra = [s.estimate for s in shared if s.estimate and s.estimate not in estimates]
+    solve_all(estimates + extra + [f for e in estimates for f in e.fractures], table, workers, say)
 
     if trade_lookup:
-        for e in [e for e in estimates if e.query]:
-            say(f"trade lookup: {', '.join(e.targets)}")
-            lookup_market(e, table, league)
-            time.sleep(2)  # the trade API rate-limits hard
-    return Report(infos, estimates, shared, prices_source, league, errors)
+        price_on_trade(sorted(estimates, key=priority), table, league, budget=trade_budget, progress=say)
+    return Report(infos, estimates, shared, prices_source, league, errors, table.get("divine", 0.0))
 
 
-def item_key(match: ItemMatch, settle: int = 0) -> tuple | None:
-    """What makes two rares the same craft, or None when we can't craft it."""
+# -- estimates -------------------------------------------------------------------------
+
+
+def estimate_item(
+    db: ModDB, match: ItemMatch, table: dict[str, float], league: str, settle: int = 0, max_targets: int = 4, solve: bool = True
+) -> Estimate | None:
+    """The craft for one rare, or None when we can't craft it (unknown base, cluster without notables)."""
     item = match.item
     if item.base.endswith("Cluster Jewel"):
         cls, notables = target_key(match)
         if " cluster: " not in cls or not notables:
             return None
         size, tag = cls.split(" cluster: ")
-        return ("cluster", size, tag, tuple(notables), item.header.get("Cluster Jewel Node Count"))
-    if match.base_id is None:
-        return None
-    families = tuple(sorted((m.family, m.tier) for m in match.mods if m.source == "natural"))
-    return ("gear", item.base, families, settle, tuple(sorted(m.mod_id for m in match.mods if m.source != "natural")))
-
-
-def estimate_item(db: ModDB, match: ItemMatch, table: dict[str, float], league: str, settle: int = 0, max_targets: int = 4, solve: bool = True) -> Estimate:
-    item = match.item
-    if item.base.endswith("Cluster Jewel"):
-        cls, notables = target_key(match)
-        size, tag = cls.split(" cluster: ")
         count = item.header.get("Cluster Jewel Node Count")
         return estimate_cluster(size, tag, notables, table, league, passives=int(count) if count else None, solve=solve)
-    return estimate_gear(db, match, table, settle=settle, max_targets=max_targets, solve=solve)
+    if match.base_id is None:
+        return None
+    return estimate_gear(db, match, table, league, settle=settle, max_targets=max_targets, solve=solve)
 
 
 def estimate_cluster(
@@ -264,9 +355,10 @@ def estimate_cluster(
         return Estimate("cluster", f"{size} cluster, {enchant}", list(notables), error=str(e))
     est = Estimate(
         "cluster",
-        f"{size} cluster, {ench.short}, {passives} passives",
+        f"{size.title()} cluster · {ench.short} · {passives}p",
         list(notables),
-        key=("cluster", size, ench.tag, tuple(sorted(notables)), str(passives)),
+        key=("cluster", size, ench.tag, tuple(sorted(notables)), str(passives), tuple(sorted(fractured))),
+        base=f"{size.title()} Cluster Jewel",
         item_level=item_level,
         fixed=list(fractured),
     )
@@ -277,69 +369,154 @@ def estimate_cluster(
         return est
     if need and need < len(notables):
         est.title += f" ({need} of {len(notables)})"
-    if not fractured:
-        est.base_price = prices.cluster_base(size, ench.short, passives, item_level)
+    est.rows = [Row("target", t.side, t.name) for t in est.problem.targets] + [Row("fractured", m.side, m.label) for m in est.problem.fixed]
+    est.fixed_ids = [m.id for m in est.problem.fixed]
+    option = prices.enchant_option(ench.short)
+    est.search = {"size": size, "enchant": option, "passives": passives}
     wanted = [m.id for m in cluster.resolve_notables(est.problem.pool, list(notables))]
-    est.query = trade.cluster_query(size, prices.enchant_option(ench.short), passives, wanted, item_level)
+    est.query = trade.cluster_query(size, option, passives, wanted, item_level)
     est.trade_url = trade.search_url(league, est.query)
+    if fractured:
+        est.base_query = trade.cluster_query(size, option, passives, [], item_level, fractured_ids=est.fixed_ids)
+        est.base_url = trade.search_url(league, est.base_query)
+    elif base := prices.cluster_base(size, ench.short, passives, item_level):
+        est.base_price, est.base_source = base, "poe.ninja"
     if solve:
         solve_one(est, table)
     return est
 
 
 def estimate_gear(
-    db: ModDB, match: ItemMatch, table: dict[str, float], *, settle: int = 0, item_level: int | None = None, max_targets: int = 4, solve: bool = True
+    db: ModDB,
+    match: ItemMatch,
+    table: dict[str, float],
+    league: str = "Standard",
+    *,
+    settle: int = 0,
+    item_level: int | None = None,
+    max_targets: int = 4,
+    solve: bool = True,
 ) -> Estimate:
     gp = gear.build(db, match, settle, item_level)
+    grp = gear.group(db, match)
+    p = gp.problem
     est = Estimate(
         "gear",
-        match.item.base,
-        [t.name for t in gp.problem.targets],
+        grp.label,
+        [t.name for t in p.targets],
+        key=(
+            "gear",
+            grp.item_class,
+            grp.signature,
+            tuple(sorted((t.side, tuple(sorted(t.good))) for t in p.targets)),
+            tuple(sorted(m.id for m in p.fixed)),
+            tuple(sorted(gp.bench_ids)),
+            gp.item_level,
+        ),
+        base=grp.best,
+        used_base=match.item.base if match.item.base != grp.best else "",
+        bases=len(grp.bases),
         item_level=gp.item_level,
-        problem=gp.problem,
+        problem=p,
+        rows=gp.rows,
         bench=[(label, gear.action_cost_of(cost, table)) for label, cost in gp.bench],
         skipped=list(gp.skipped),
-        fixed=[m.label for m in gp.problem.fixed],
+        fixed=[m.label for m in p.fixed],
+        fixed_ids=[m.id for m in p.fixed],
     )
-    if len(gp.problem.targets) > max_targets:
-        est.error = f"{len(gp.problem.targets)} target mods (raise max_targets, or settle to loosen)"
-        return est
-    if solve:
+    where = {"category": trade.CATEGORIES.get(grp.item_class)} if grp.item_class in JEWELLERY and len(grp.bases) > 1 else {"base": grp.best}
+    stats = [(sid, trade.stat_min(t.good)) for t in p.targets if (sid := trade.stat_id(next(iter(t.good))))]
+    stats += [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m))]
+    if stats:
+        est.query = trade.item_query(**where, stats=stats)
+        est.trade_url = trade.search_url(league, est.query)
+    if est.fixed_ids:
+        frac = [(sid, trade.stat_min([m])) for m in est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
+        est.base_query = trade.item_query(**where, stats=frac, item_level=gp.item_level, fractured_only=True)
+        est.base_url = trade.search_url(league, est.base_query)
+    est.search = where
+    if len(p.targets) > max_targets:
+        est.error = f"{len(p.targets)} target mods (raise max_targets, or settle to loosen)"
+    elif solve:
         solve_one(est, table)
     return est
 
 
-def solve_one(est: Estimate, table: dict[str, float]) -> None:
+def add_fractures(est: Estimate, league: str) -> None:
+    """One `Fracture` per target: the same craft starting from a base with that target fractured.
+
+    Only targets that can roll naturally are offered (an essence-only mod
+    can't be on a base you buy). The solver's numbers come from `solve_all`.
+    """
+    if est.problem is None or est.error or len(est.problem.targets) < 2 or est.fractures:
+        return
+    p = est.problem
+    pool = {m.id: m for m in p.pool}
+    for i, t in enumerate(p.targets):
+        candidates = [pool[m] for m in t.good if m in pool]
+        if not candidates:
+            continue
+        mod = max(candidates, key=lambda m: m.weight)  # the commonest acceptable tier
+        problem = dataclasses.replace(
+            p,
+            targets=p.targets[:i] + p.targets[i + 1 :],
+            need=p.need - 1,
+            fixed=p.fixed + [dataclasses.replace(mod, weight=0)],
+            actions=list(p.actions),
+        )
+        f = Fracture(t.name, mod.id, problem)
+        if est.kind == "cluster":
+            c = est.search
+            f.query = trade.cluster_query(c["size"], c["enchant"], c["passives"], [], est.item_level, fractured_ids=[mod.id] + est.fixed_ids)
+        else:
+            frac = [(sid, trade.stat_min(t.good if m == mod.id else [m])) for m in [mod.id] + est.fixed_ids if (sid := trade.stat_id(m, "fractured"))]
+            if frac:
+                f.query = trade.item_query(**est.search, stats=frac, item_level=est.item_level, fractured_only=True)
+        if f.query:
+            f.trade_url = trade.search_url(league, f.query)
+        est.fractures.append(f)
+
+
+# -- solving ---------------------------------------------------------------------------
+
+
+def solve_one(est, table: dict[str, float]) -> None:
+    """Solve an Estimate or Fracture in place."""
     try:
         _attach(est, craft.solve(est.problem, table))
     except (ValueError, ArithmeticError, np.linalg.LinAlgError) as e:
         est.error = str(e)
 
 
-def solve_all(estimates: list[Estimate], table: dict[str, float], workers: int | None = None, progress: Progress | None = None) -> None:
-    """Solve every estimate that has a problem but no plan yet, in parallel processes.
+def solve_all(items: list, table: dict[str, float], workers: int | None = None, progress: Progress | None = None) -> None:
+    """Solve every Estimate/Fracture that has a problem but no plan yet, in parallel processes.
 
     Each solve is independent CPU work in Python and numpy, so processes (not
     threads) scale with cores. Biggest problems go first so no core idles at the end.
     """
     say = progress or (lambda _msg: None)
-    todo = [e for e in estimates if e.problem is not None and e.plan is None and e.error is None]
+    todo = [e for e in items if e.problem is not None and e.plan is None and e.error is None]
     todo.sort(key=lambda e: -len(e.problem.targets))
     workers = workers or os.cpu_count() or 1
     if workers == 1 or len(todo) < 4:
         for i, e in enumerate(todo, 1):
-            say(f"solving {i}/{len(todo)}: {e.title}")
+            say(f"solving {i}/{len(todo)}")
             solve_one(e, table)
         return
-    with _worker_env(), ProcessPoolExecutor(min(workers, len(todo)), mp_context=multiprocessing.get_context("spawn")) as pool:
-        futures = {pool.submit(craft.solve, e.problem, table): e for e in todo}
-        for i, done in enumerate(as_completed(futures), 1):
-            e = futures[done]
-            say(f"solved {i}/{len(todo)}: {e.title}")
-            try:
-                _attach(e, done.result())
-            except (ValueError, ArithmeticError, np.linalg.LinAlgError) as err:
-                e.error = str(err)
+    try:
+        with _worker_env(), ProcessPoolExecutor(min(workers, len(todo)), mp_context=multiprocessing.get_context("spawn")) as pool:
+            futures = {pool.submit(craft.solve, e.problem, table): e for e in todo}
+            for i, done in enumerate(as_completed(futures), 1):
+                e = futures[done]
+                say(f"solved {i}/{len(todo)}")
+                try:
+                    _attach(e, done.result())
+                except (ValueError, ArithmeticError, np.linalg.LinAlgError) as err:
+                    e.error = str(err)
+    except (BrokenProcessPool, OSError, RuntimeError):
+        # Workers can't start where the main module can't be re-imported (a REPL,
+        # stdin, a notebook, or a script without `if __name__ == "__main__"`).
+        solve_all(todo, table, workers=1, progress=progress)
 
 
 @contextmanager
@@ -377,28 +554,76 @@ def _has_fd(stream) -> bool:
         return False
 
 
-def _attach(est: Estimate, plan: craft.Plan) -> None:
+def _attach(est, plan: craft.Plan) -> None:
     # A worker solved a copy; drop the same unpriced actions here so recipe and simulate agree.
     est.problem.actions = [a for a in est.problem.actions if a.name not in plan.unpriced]
     est.plan = plan
 
 
-def lookup_market(est: Estimate, table: dict[str, float], league: str) -> None:
-    """Fill `est.market` from the trade site; failures land in `est.market_error`."""
-    if not est.query:
-        est.market_error = "no trade query for this item"
-        return
+# -- trade -----------------------------------------------------------------------------
+
+
+def price_on_trade(
+    estimates: list[Estimate], table: dict[str, float], league: str, budget: int = 40, progress: Progress | None = None
+) -> int:
+    """Price `estimates` in order: each one's selling price, then its fractured base, then fracture bases.
+
+    Stops after `budget` searches that weren't cached. Returns searches used.
+    """
+    say = progress or (lambda _msg: None)
+    used = 0
+    jobs = []
+    for e in estimates:
+        if e.query and not e.market:
+            jobs.append((e, "market"))
+        if e.base_query and e.base_price is None:
+            jobs.append((e, "base"))
+    for e in estimates:
+        jobs += [(f, "fracture") for f in e.fractures if f.query and f.plan and f.base_price is None]
+    for i, (obj, what) in enumerate(jobs, 1):
+        if used >= budget:
+            say(f"trade budget of {budget} searches used; {len(jobs) - i + 1} left unpriced")
+            break
+        name = obj.target if what == "fracture" else obj.title
+        say(f"trade {i}/{len(jobs)}: {what} · {name}")
+        used += lookup(obj, what, table, league)
+    return used
+
+
+def lookup(obj, what: str, table: dict[str, float], league: str) -> int:
+    """One trade search for an Estimate's market ("market") or base ("base"), or a Fracture's base.
+
+    Returns 1 if it hit the site, 0 if the answer was cached.
+    """
+    query = {"market": getattr(obj, "query", None), "base": getattr(obj, "base_query", None), "fracture": obj.query}[what]
+    if not query:
+        return 0
+    before = trade.searches
     try:
-        found = trade.price(league, est.query, table)
+        found = trade.price(league, query, table)
+        err = None if found else "no listings"
     except urllib.error.HTTPError as e:
-        hint = "check your POESESSID (`ponder login`)" if e.code in (401, 403) else "try again later"
-        est.market_error = f"trade lookup failed ({e.code}); {hint}, or use the link"
-        return
-    except (urllib.error.URLError, OSError) as e:
-        est.market_error = f"trade lookup failed ({e})"
-        return
-    est.market = found
-    est.market_error = None if found else "no listings found"
+        found, err = None, f"trade {e.code}: " + ("check POESESSID in .env" if e.code in (401, 403) else "try again later")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        found, err = None, f"trade failed: {e}"
+    if what == "market":
+        obj.market, obj.market_error = found, err
+    elif what == "base":
+        obj.base_price, obj.base_error = found, err
+        obj.base_source = "trade" if found else obj.base_source
+    else:
+        obj.base_price, obj.base_error = found, err
+    return trade.searches - before
+
+
+def lookup_market(est: Estimate, table: dict[str, float], league: str) -> None:
+    """Price one estimate: its selling price and, if it needs one, its fractured base."""
+    lookup(est, "market", table, league)
+    if est.base_query and est.base_price is None:
+        lookup(est, "base", table, league)
+
+
+# -- sources ---------------------------------------------------------------------------
 
 
 def expand_sources(sources: list[str]) -> list[str]:

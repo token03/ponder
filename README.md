@@ -36,28 +36,57 @@ XML, or a PoB code pasted directly.
 
 ```sh
 ponder build.txt                         # = ponder run build.txt
-ponder builds/3.29.txt --trade           # many builds, with trade prices for clusters
+ponder builds/3.29.txt --fractures       # also cost starting from fractured bases
+ponder builds/3.29.txt --trade           # price items and bases on the trade site
 ponder https://pobb.in/XXXX --json       # the same report as JSON, for scripts and LLMs
 ponder tui builds/3.29.txt               # browse it interactively (also: ponder-tui)
 ```
 
-`ponder run` loads every build, works out the cheapest craft for each rare
-(gear and cluster jewels), merges the same craft across builds, ranks mod
-combinations the builds share, and with `--trade` prices the cluster jewels
-on the trade site. It prints a table of cluster jewels and one of gear, then
-the full recipe for the top few (`--detail N`). In a terminal the trade links
-are clickable; piped output prints the raw URLs and never wraps.
+`ponder run` loads every build and turns each rare into a craft: its target
+mods plus the **group of bases that roll exactly the same mods** (same item
+class, same spawn-relevant tags, influences included). Warlock, Sage and
+Sorcerer Gloves are one "Gloves (ES)" craft; most rings are one "Ring". Crafts
+and trade searches always use the group's **best base** (end-game bases first,
+then highest drop level; experimental bases are skipped), since the same mods
+sell for more on it. Jewellery is searched by category, since its bases differ
+only by implicit. The same craft needed by several builds is merged.
 
-The TUI runs the same pipeline. Keys: `t` price the selected cluster on
-trade, `T` price all of them, `o` open its trade search, `y` copy the link,
-`f` filter (all / clusters / gear), `s` sort (margin / total / builds /
-cheapest), `n` new builds, `q` quit. It starts in the `ansi-dark` theme, which
-uses your terminal's own colours; pick another with `ctrl+p` and it is
-remembered (in `~/.config/ponder/tui.json`). It needs `textual`, which
-`uv sync` installs; elsewhere use `pip install 'ponder[tui]'`.
+For each craft it prints the expected cost and the recipe, and:
+
+- `--fractures`: for every target, the cost of buying a base with that mod
+  already fractured and crafting the rest, against crafting from scratch.
+  Fractured bases are real money, so with `--trade` their price is looked up
+  (a fractured-item search for that mod at its minimum tier and the item
+  level the rest needs). Items in a build that already have a fractured mod
+  need such a base too; until it is priced their total shows `+base`.
+- `--trade`: the selling price (median of the cheapest asks) and the margin,
+  using whichever is cheaper, scratch or the best fracture. See below for the
+  search budget.
+
+Prices of one divine and up show in divines (`2.4d`), below in chaos. In a
+terminal the trade links are clickable; piped output prints the raw URLs and
+never wraps.
 
 Solving runs in one process per CPU (`--workers N` to change). Most rares
 take well under a second; four-target T1 gear can take a couple.
+
+### The TUI
+
+`ponder tui SOURCES` runs the same pipeline (fractures included) and shows the
+crafts beside the selected one's detail: prefixes and suffixes with tiers,
+costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
+them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
+`/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
+builds), `t` price the selected item on trade, `T` price everything shown
+within the search budget, `o`/`y` open or copy its trade search, `b` other
+builds, `q` quit.
+
+Colour means something: fractured mods gold, bench crafts light blue, essence
+mods magenta, T1 tiers bold yellow, magic and rare the way the game shows
+them, mods already on the item green and blocked ones red, margins green or
+red. It starts in the `ansi-dark` theme (your terminal's own colours); pick
+another with `ctrl+p` and it is remembered in `~/.config/ponder/tui.json`.
+It needs `textual`, which `uv sync` installs; elsewhere `pip install 'ponder[tui]'`.
 
 ### Single tools
 
@@ -168,26 +197,21 @@ Kept as constants so they're easy to correct:
 
 `ponder prices fetch` caches currency, essence, fossil, resonator and cluster
 base prices under `.cache/ninja`; without it a built-in snapshot is used.
-The trade API (the one Awakened PoE Trade uses) refuses some networks; set
-`POESESSID` to your pathofexile.com session cookie if `--trade` gets a 403.
-The printed search link always works in a browser.
 
-The cookie is a login token for your account, so ponder treats it like a
-password (`auth.py`). It uses, in order:
+The trade API (the one Awakened PoE Trade uses) wants your pathofexile.com
+session cookie: put `POESESSID=...` in a `.env` in the directory you run
+ponder from (it is git-ignored), or export it. It is a login token, so keep it
+out of anything you share. A 403 with a valid cookie means the site is
+blocking the network; the printed search links always work in a browser.
 
-1. the `POESESSID` environment variable;
-2. a cookie you typed in this run (hidden input; kept in memory only);
-3. the system keychain (Windows Credential Manager, macOS Keychain, Linux
-   Secret Service) via [keyring](https://pypi.org/project/keyring/), only if
-   you chose to save it there.
+The API allows only a few dozen searches per five minutes, so:
 
-When none is set, `--trade` asks on the terminal and the TUI shows a password
-dialog (or press `l`), both linking to the
-[poedb guide](https://poedb.tw/us/POESESSID). `ponder login` saves it to the
-keychain, `ponder login --status` says where it comes from, and
-`ponder logout` removes it. WSL usually has no keychain, so there it is never
-written anywhere and you're asked once per run; to skip that, export it in
-your shell or keep it in a git-ignored `.env` (`uv run --env-file .env ...`).
+- every call waits as long as the API's own rate-limit headers say it must;
+- answers are cached in `.cache/trade` for an hour (`PONDER_TRADE_TTL`
+  seconds), in the currency they were listed in, so reruns are free and pick
+  up a new divine price;
+- `--trade-budget N` (default 40) caps the searches one run sends: finished
+  items first in priority order, then fractured bases.
 
 ## Layout
 
@@ -210,10 +234,9 @@ src/ponder/
   craft.py  crafting states, policy iteration, simulation
   actions.py currencies, Harvest, essences, fossils, bench and metamods
   cluster.py cluster jewel enchants, mod pools, costs
-  gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods)
+  gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods), base groups
   prices.py poe.ninja prices
   trade.py  trade-site queries
-  auth.py   the POESESSID cookie: env, memory or system keychain
   cli.py    the `ponder` command
 builds/     lists of build links per league
 tests/      unit tests; the mod tests run once data is fetched

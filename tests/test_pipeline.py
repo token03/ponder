@@ -43,3 +43,23 @@ def test_cluster_estimate_has_cost_link_and_json(monkeypatch):
     assert est.error is None and 10 < est.craft_cost < 500
     assert "Medium%20Cluster%20Jewel" in est.trade_url and "available" in est.trade_url
     json.dumps(est.to_dict())
+
+
+@needs_data
+def test_fractures_and_best_base():
+    from ponder import pob
+    from ponder.item import parse_item
+    from ponder.mods import ModDB
+
+    db = ModDB()
+    build = pob.load("tests/fixtures/real/occultist_winter_orb.txt")
+    gloves = next(parse_item(i.text) for i in build.items if parse_item(i.text).base == "Warlock Gloves" and parse_item(i.text).rarity == "RARE")
+    table = {"alt": 0.074, "aug": 0.017, "regal": 0.093, "scour": 0.35, "transmute": 0.004, "chaos": 1.0, "exalted": 5, "annul": 11, "alch": 0.03}
+    est = pipeline.estimate_gear(db, db.match(gloves), table, "Allflame", solve=False)
+    assert est.title == "Gloves (ES)" and est.base == "Warlock Gloves" and est.bases > 5
+    pipeline.add_fractures(est, "Allflame")
+    pipeline.solve_all([est, *est.fractures], table, workers=1)
+    assert len(est.fractures) == len(est.targets)
+    # Starting with one target already on the item can only make the rest cheaper.
+    assert all(f.craft_cost <= est.craft_cost + 1e-6 for f in est.fractures)
+    assert all("fractured.stat_" in f.trade_url and "fractured_item" in f.trade_url for f in est.fractures)
