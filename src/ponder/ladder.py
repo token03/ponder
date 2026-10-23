@@ -153,14 +153,18 @@ def cached(snap: Snapshot | None = None) -> Iterator[dict]:
         root = dirs[-1]
     else:
         root = CACHE / snap.version
-    for path in sorted(root.glob("*/*.json")):
-        small = path.with_suffix(".lite")
+    # A snapshot unpacked from a zip of `.lite` files has no full documents: read those alone.
+    stems = sorted({p.with_suffix("") for p in root.glob("*/*.json")} | {p.with_suffix("") for p in root.glob("*/*.lite")})
+    for stem in stems:
+        path, small = stem.with_suffix(".json"), stem.with_suffix(".lite")
         try:
             if small.is_file():
                 data = json.loads(small.read_text())
                 if data.get("v") == LITE_VERSION:
                     yield data
                     continue
+            if not path.is_file():
+                continue  # an outdated lite copy with nothing to rebuild it from
             data = lite(json.loads(path.read_text()))
         except ValueError:
             continue
