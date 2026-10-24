@@ -1,0 +1,263 @@
+[
+ {
+  "input": {
+   "account": "Ann#1234",
+   "name": "Zed",
+   "class": "Deadeye",
+   "level": 100,
+   "passives": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49
+   ],
+   "skills": [
+    {
+     "dps": [],
+     "allGems": [
+      {
+       "name": "Herald of Ash"
+      }
+     ]
+    },
+    {
+     "dps": [
+      {
+       "name": "Lightning Arrow",
+       "dps": 1234.5
+      }
+     ],
+     "allGems": [
+      {
+       "name": "Mirage Archer Support"
+      },
+      {
+       "name": "Lightning Arrow"
+      }
+     ]
+    }
+   ],
+   "items": [
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "Bone Ring",
+      "ilvl": 84,
+      "influences": [
+       "shaper"
+      ],
+      "inventoryId": "Ring",
+      "mods": {
+       "explicit": [
+        {
+         "id": "IncreasedLife7",
+         "tier": 1,
+         "magnitudes": [
+          {
+           "min": 1.5,
+           "max": 2e-05
+          }
+         ]
+        }
+       ],
+       "implicit": [
+        {
+         "id": "Imp"
+        }
+       ]
+      },
+      "enchantMods": [
+       "Adds 8 Passive Skills"
+      ],
+      "extra": "dropped",
+      "name": "Gale Loop"
+     }
+    },
+    {
+     "itemData": {
+      "frameType": 3,
+      "baseType": "Unique Thing",
+      "mods": {
+       "explicit": []
+      }
+     }
+    },
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "Unidentified",
+      "identified": false
+     }
+    },
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "Café Belt",
+      "ilvl": null
+     }
+    },
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "Plain Rare"
+     }
+    }
+   ],
+   "jewels": [
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "Large Cluster Jewel",
+      "ilvl": 84,
+      "mods": {
+       "enchant": [
+        {
+         "id": "JewelExpansionPassiveNodes",
+         "stats": {
+          "n": 8
+         }
+        }
+       ],
+       "explicit": [
+        {
+         "id": "N1"
+        },
+        {
+         "id": "N2"
+        }
+       ]
+      },
+      "enchantMods": [
+       "Adds 8 Passive Skills",
+       "Added Small Passive Skills grant: X\nAdded Small Passive Skills grant: Y"
+      ]
+     }
+    }
+   ]
+  },
+  "output": "{\"v\": 2, \"account\": \"Ann#1234\", \"name\": \"Zed\", \"class\": \"Deadeye\", \"skill\": \"Lightning Arrow\", \"rares\": [{\"baseType\": \"Bone Ring\", \"ilvl\": 84, \"influences\": [\"shaper\"], \"mods\": {\"explicit\": [{\"id\": \"IncreasedLife7\", \"tier\": 1, \"magnitudes\": [{\"min\": 1.5, \"max\": 2e-05}]}], \"implicit\": [{\"id\": \"Imp\"}]}, \"inventoryId\": \"Ring\", \"enchantMods\": [\"Adds 8 Passive Skills\"]}, {\"baseType\": \"Caf\\u00e9 Belt\", \"ilvl\": null}, {\"baseType\": \"Plain Rare\"}, {\"baseType\": \"Large Cluster Jewel\", \"ilvl\": 84, \"mods\": {\"enchant\": [{\"id\": \"JewelExpansionPassiveNodes\", \"stats\": {\"n\": 8}}], \"explicit\": [{\"id\": \"N1\"}, {\"id\": \"N2\"}]}, \"enchantMods\": [\"Adds 8 Passive Skills\", \"Added Small Passive Skills grant: X\\nAdded Small Passive Skills grant: Y\"]}]}"
+ },
+ {
+  "input": {
+   "account": null,
+   "name": "Solo",
+   "class": null,
+   "skills": [],
+   "items": [],
+   "jewels": []
+  },
+  "output": "{\"v\": 2, \"account\": null, \"name\": \"Solo\", \"class\": null, \"skill\": \"?\", \"rares\": []}"
+ },
+ {
+  "input": {
+   "account": "B",
+   "name": "NoSkill",
+   "class": "Witch",
+   "skills": [
+    {
+     "allGems": [
+      {
+       "name": ""
+      },
+      {
+       "name": "Foo Support"
+      }
+     ]
+    }
+   ],
+   "items": [
+    {
+     "itemData": {
+      "frameType": 2,
+      "baseType": "X",
+      "influences": {
+       "shaper": true
+      },
+      "ilvl": 0,
+      "inventoryId": "Weapon"
+     }
+    }
+   ]
+  },
+  "output": "{\"v\": 2, \"account\": \"B\", \"name\": \"NoSkill\", \"class\": \"Witch\", \"skill\": \"?\", \"rares\": [{\"baseType\": \"X\", \"ilvl\": 0, \"influences\": {\"shaper\": true}, \"inventoryId\": \"Weapon\"}]}"
+ },
+ {
+  "input": {
+   "account": "C",
+   "name": "AlreadyLite",
+   "class": "Ranger",
+   "rares": [
+    {
+     "baseType": "Y",
+     "mods": {
+      "explicit": [
+       {
+        "id": "Z"
+       }
+      ]
+     }
+    },
+    {
+     "junk": 1
+    }
+   ],
+   "skills": [
+    {
+     "dps": true,
+     "allGems": [
+      {
+       "name": "Tornado Shot"
+      }
+     ]
+    }
+   ]
+  },
+  "output": "{\"v\": 2, \"account\": \"C\", \"name\": \"AlreadyLite\", \"class\": \"Ranger\", \"skill\": \"Tornado Shot\", \"rares\": [{\"baseType\": \"Y\", \"mods\": {\"explicit\": [{\"id\": \"Z\"}]}}, {}]}"
+ }
+]

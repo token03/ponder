@@ -1,0 +1,935 @@
+[
+ {
+  "input": {
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Allflame?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_1",
+         "value": {
+          "min": 40
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Warlock Gloves"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Settlers%20of%20Kalguur?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_1%22%2C%22value%22%3A%7B%22min%22%3A40%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%7D%2C%22type%22%3A%22Warlock%20Gloves%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "fractured.stat_9",
+         "value": {
+          "min": 5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "accessory.ring"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Standard?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22fractured.stat_9%22%2C%22value%22%3A%7B%22min%22%3A5%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%2C%22category%22%3A%7B%22option%22%3A%22accessory.ring%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A84%7D%2C%22fractured_item%22%3A%7B%22option%22%3A%22true%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_2",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_3",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "rare"
+        }
+       }
+      }
+     },
+     "type": "Maelström Staff"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hardcore%20Settlers?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_2%22%2C%22value%22%3A%7B%22min%22%3A0.5%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22explicit.stat_3%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22rare%22%7D%7D%7D%7D%2C%22type%22%3A%22Maelstr%5Cu00f6m%20Staff%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_4",
+         "value": {
+          "min": 12.0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "weapon.bow"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Quote \" and \\ slash"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/R%C3%A9sistance/Test?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_4%22%2C%22value%22%3A%7B%22min%22%3A12.0%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%2C%22category%22%3A%7B%22option%22%3A%22weapon.bow%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22corrupted%22%3A%7B%22option%22%3A%22false%22%7D%7D%7D%7D%2C%22type%22%3A%22Quote%20%5C%22%20and%20%5C%5C%20slash%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_5",
+         "value": {
+          "min": 1e-05
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_6",
+         "value": {
+          "min": 123456789012345678
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 86
+        },
+        "corrupted": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Vaal Regalia"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hall%20of%20Grandmasters%20100%25?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_5%22%2C%22value%22%3A%7B%22min%22%3A1e-05%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22explicit.stat_6%22%2C%22value%22%3A%7B%22min%22%3A123456789012345678%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A86%7D%2C%22corrupted%22%3A%7B%22option%22%3A%22true%22%7D%7D%7D%7D%2C%22type%22%3A%22Vaal%20Regalia%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "a",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "b",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 2
+       },
+       "filters": [
+        {
+         "id": "c",
+         "value": {
+          "min": 3
+         },
+         "disabled": false
+        },
+        {
+         "id": "d",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "e",
+         "value": {
+          "min": 4.5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Allflame?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22a%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22b%22%2C%22value%22%3A%7B%22min%22%3A2%7D%2C%22disabled%22%3Afalse%7D%5D%7D%2C%7B%22type%22%3A%22count%22%2C%22value%22%3A%7B%22min%22%3A2%7D%2C%22filters%22%3A%5B%7B%22id%22%3A%22c%22%2C%22value%22%3A%7B%22min%22%3A3%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22d%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22e%22%2C%22value%22%3A%7B%22min%22%3A4.5%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%2C%22category%22%3A%7B%22option%22%3A%22armour.chest%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Settlers%20of%20Kalguur?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%2C%22category%22%3A%7B%22option%22%3A%22armour.chest%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.boots"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Standard?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%2C%22category%22%3A%7B%22option%22%3A%22armour.boots%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "x",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_1",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "unique"
+        }
+       }
+      }
+     },
+     "type": "Hubris Circlet"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hardcore%20Settlers?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22x%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_1%22%2C%22value%22%3A%7B%22option%22%3A%223%22%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22unique%22%7D%7D%7D%7D%2C%22type%22%3A%22Hubris%20Circlet%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/R%C3%A9sistance/Test?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22s%22%2C%22value%22%3A%7B%22min%22%3A0%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%7D%2C%22type%22%3A%22Large%20Cluster%20Jewel%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hall%20of%20Grandmasters%20100%25?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22s%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%7D%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 3
+       },
+       "filters": [
+        {
+         "id": "t",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "u",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 100
+        },
+        "fractured_item": {
+         "option": "true"
+        },
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Sapphire Ring"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Allflame?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22s%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22s%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22s%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%5D%7D%2C%7B%22type%22%3A%22count%22%2C%22value%22%3A%7B%22min%22%3A3%7D%2C%22filters%22%3A%5B%7B%22id%22%3A%22t%22%2C%22value%22%3A%7B%22min%22%3A1%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22u%22%2C%22value%22%3A%7B%22min%22%3A2%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A100%7D%2C%22fractured_item%22%3A%7B%22option%22%3A%22true%22%7D%2C%22corrupted%22%3A%7B%22option%22%3A%22false%22%7D%7D%7D%7D%2C%22type%22%3A%22Sapphire%20Ring%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_222",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 8,
+          "max": 8
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Settlers%20of%20Kalguur?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_111%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22explicit.stat_222%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3948993189%22%2C%22value%22%3A%7B%22option%22%3A%223%22%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3086156145%22%2C%22value%22%3A%7B%22min%22%3A8%2C%22max%22%3A8%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A84%7D%7D%7D%7D%2C%22type%22%3A%22Large%20Cluster%20Jewel%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "fractured.stat_111",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Medium Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Standard?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_111%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22fractured.stat_111%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22fractured_item%22%3A%7B%22option%22%3A%22true%22%7D%7D%7D%7D%2C%22type%22%3A%22Medium%20Cluster%20Jewel%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 8
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "12"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 3,
+          "max": 3
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 50
+        }
+       }
+      }
+     },
+     "type": "Small Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hardcore%20Settlers?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22explicit.stat_444%22%2C%22value%22%3A%7B%22min%22%3A8%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22explicit.stat_444%22%2C%22value%22%3A%7B%22min%22%3A0.5%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3948993189%22%2C%22value%22%3A%7B%22option%22%3A%2212%22%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3086156145%22%2C%22value%22%3A%7B%22min%22%3A3%2C%22max%22%3A3%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A50%7D%7D%7D%7D%2C%22type%22%3A%22Small%20Cluster%20Jewel%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "AfflictionNotableNoTrade",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {
+          "min": 2.0
+         },
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "AfflictionNotableB",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "7"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 12,
+          "max": 12
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 75
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/R%C3%A9sistance/Test?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%7B%22id%22%3A%22AfflictionNotableNoTrade%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22Orphan%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22Orphan%22%2C%22value%22%3A%7B%22min%22%3A2.0%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22Orphan%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22AfflictionNotableB%22%2C%22value%22%3A%7B%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3948993189%22%2C%22value%22%3A%7B%22option%22%3A%227%22%7D%2C%22disabled%22%3Afalse%7D%2C%7B%22id%22%3A%22enchant.stat_3086156145%22%2C%22value%22%3A%7B%22min%22%3A12%2C%22max%22%3A12%7D%2C%22disabled%22%3Afalse%7D%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%2C%22misc_filters%22%3A%7B%22filters%22%3A%7B%22ilvl%22%3A%7B%22min%22%3A75%7D%2C%22fractured_item%22%3A%7B%22option%22%3A%22true%22%7D%7D%7D%7D%2C%22type%22%3A%22Large%20Cluster%20Jewel%22%7D%7D"
+ },
+ {
+  "input": {
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   }
+  },
+  "output": "https://www.pathofexile.com/trade/search/Hall%20of%20Grandmasters%20100%25?q=%7B%22query%22%3A%7B%22status%22%3A%7B%22option%22%3A%22available%22%7D%2C%22stats%22%3A%5B%7B%22type%22%3A%22and%22%2C%22filters%22%3A%5B%5D%7D%5D%2C%22filters%22%3A%7B%22type_filters%22%3A%7B%22filters%22%3A%7B%22rarity%22%3A%7B%22option%22%3A%22nonunique%22%7D%7D%7D%7D%2C%22type%22%3A%22Large%20Cluster%20Jewel%22%7D%7D"
+ }
+]

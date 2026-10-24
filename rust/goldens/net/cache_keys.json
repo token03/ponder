@@ -1,0 +1,1940 @@
+[
+ {
+  "input": {
+   "kind": "price",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "e7babf233424e0336d2b9ae71e7b27bafb8b01f5"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "c44422187493f887982b2b1f8c98817ea3844896"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_1",
+         "value": {
+          "min": 40
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Warlock Gloves"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "e4213de6242aca397f614f96a1a8797ff4ee0dfe"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_1",
+         "value": {
+          "min": 40
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Warlock Gloves"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "48fc4b584a7f8d9ccd27ba71385d107640daf813"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "fractured.stat_9",
+         "value": {
+          "min": 5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "accessory.ring"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "ba13b8ebb5b6445a4f0499b412fc8073c128f4fc"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "fractured.stat_9",
+         "value": {
+          "min": 5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "accessory.ring"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "7ee2531105664c53003873fe667340f2948940a8"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_2",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_3",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "rare"
+        }
+       }
+      }
+     },
+     "type": "Maelström Staff"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "ae1cc66adbf7b44aa0f2a21c5ee7d633e3c91971"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_2",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_3",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "rare"
+        }
+       }
+      }
+     },
+     "type": "Maelström Staff"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "9262946efc7ef923f412092c6661bf09903f40f5"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_4",
+         "value": {
+          "min": 12.0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "weapon.bow"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Quote \" and \\ slash"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "8f93faa0d9e8b743b86984b69cf8bb851b18d463"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_4",
+         "value": {
+          "min": 12.0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "weapon.bow"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Quote \" and \\ slash"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "b5c17880f7075db4daa79dd387494989873be527"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_5",
+         "value": {
+          "min": 1e-05
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_6",
+         "value": {
+          "min": 123456789012345678
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 86
+        },
+        "corrupted": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Vaal Regalia"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "3c7faac94f2756a80f92ef8d8da5e430c2268bc0"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_5",
+         "value": {
+          "min": 1e-05
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_6",
+         "value": {
+          "min": 123456789012345678
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 86
+        },
+        "corrupted": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Vaal Regalia"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "4baaa847f6702d5fdb9864098163143dbe1bf839"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "a",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "b",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 2
+       },
+       "filters": [
+        {
+         "id": "c",
+         "value": {
+          "min": 3
+         },
+         "disabled": false
+        },
+        {
+         "id": "d",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "e",
+         "value": {
+          "min": 4.5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "2d80c1e6a7aa4a69e0dbc2be30821bbb3fe13278"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "a",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "b",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 2
+       },
+       "filters": [
+        {
+         "id": "c",
+         "value": {
+          "min": 3
+         },
+         "disabled": false
+        },
+        {
+         "id": "d",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "e",
+         "value": {
+          "min": 4.5
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "eb7b2e34da3f510476512c973eafb91aef3da5fa"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "7dfc8e895f1cbf267a83ebde8994a72c70a2ffe8"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.chest"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "f4cb92b45f7c50aa10a6eb4c7c4425085b845441"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.boots"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "2c3e88436b4ff87be10b780025d534c2b60f520d"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        },
+        "category": {
+         "option": "armour.boots"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "90db05e93e07273e43f20b9694d3c36d6a94a817"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "x",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_1",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "unique"
+        }
+       }
+      }
+     },
+     "type": "Hubris Circlet"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "e88be77a1e5d7fbd316d99c6b51cbac27f616267"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "x",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_1",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "unique"
+        }
+       }
+      }
+     },
+     "type": "Hubris Circlet"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "f150570755020346078a536edacdad6396349e71"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "86eb4f21c207668ead55c90854ee6a47d3033bb3"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 0
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "63d9070ce2d45c3de59e4039733efa380d6526e1"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "0b02895af11eec4bf3dab61465e7d43987a0c389"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     }
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "5be46e9abd1de236b08a3077da6c652819fbb3ab"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 3
+       },
+       "filters": [
+        {
+         "id": "t",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "u",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 100
+        },
+        "fractured_item": {
+         "option": "true"
+        },
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Sapphire Ring"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "a3094fd8338d4cc157c93362149c830dc04c143c"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Allflame",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "s",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        }
+       ]
+      },
+      {
+       "type": "count",
+       "value": {
+        "min": 3
+       },
+       "filters": [
+        {
+         "id": "t",
+         "value": {
+          "min": 1
+         },
+         "disabled": false
+        },
+        {
+         "id": "u",
+         "value": {
+          "min": 2
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 100
+        },
+        "fractured_item": {
+         "option": "true"
+        },
+        "corrupted": {
+         "option": "false"
+        }
+       }
+      }
+     },
+     "type": "Sapphire Ring"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "3eae8d53b548929147ca4fcd4288d009df844422"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_222",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 8,
+          "max": 8
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "98c892a74cde7127e9bbb94aad38eef095a66f5e"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Settlers of Kalguur",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_222",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "3"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 8,
+          "max": 8
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 84
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "2f30462156649d284b53b1e99b2a465c278a315b"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "fractured.stat_111",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Medium Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "b81afd59dcda26d6c30a25dbb5101e4c50f392fb"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Standard",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_111",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "fractured.stat_111",
+         "value": {},
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Medium Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "129565e9e6b9c84656adf8de4a0871588e01f2cc"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 8
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "12"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 3,
+          "max": 3
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 50
+        }
+       }
+      }
+     },
+     "type": "Small Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "a91306303cabf13493779228ded27a5e9d55a2a8"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hardcore Settlers",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 8
+         },
+         "disabled": false
+        },
+        {
+         "id": "explicit.stat_444",
+         "value": {
+          "min": 0.5
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "12"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 3,
+          "max": 3
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 50
+        }
+       }
+      }
+     },
+     "type": "Small Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 10
+  },
+  "output": "6f0fa1f100dfc0cabb1e84b49727b8591e1b4418"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "AfflictionNotableNoTrade",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {
+          "min": 2.0
+         },
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "AfflictionNotableB",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "7"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 12,
+          "max": 12
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 75
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "648846d7cceeea7bbbe2e5fc59c8f714200c0822"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Résistance/Test",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": [
+        {
+         "id": "AfflictionNotableNoTrade",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {
+          "min": 2.0
+         },
+         "disabled": false
+        },
+        {
+         "id": "Orphan",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "AfflictionNotableB",
+         "value": {},
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3948993189",
+         "value": {
+          "option": "7"
+         },
+         "disabled": false
+        },
+        {
+         "id": "enchant.stat_3086156145",
+         "value": {
+          "min": 12,
+          "max": 12
+         },
+         "disabled": false
+        }
+       ]
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      },
+      "misc_filters": {
+       "filters": {
+        "ilvl": {
+         "min": 75
+        },
+        "fractured_item": {
+         "option": "true"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 25
+  },
+  "output": "ab5af7d8f5a593e8d21d46cebe833277a111f909"
+ },
+ {
+  "input": {
+   "kind": "price",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "4af3143c2b9f7d458ef31b209ee4c9bd18c71731"
+ },
+ {
+  "input": {
+   "kind": "listings",
+   "league": "Hall of Grandmasters 100%",
+   "query": {
+    "query": {
+     "status": {
+      "option": "available"
+     },
+     "stats": [
+      {
+       "type": "and",
+       "filters": []
+      }
+     ],
+     "filters": {
+      "type_filters": {
+       "filters": {
+        "rarity": {
+         "option": "nonunique"
+        }
+       }
+      }
+     },
+     "type": "Large Cluster Jewel"
+    },
+    "sort": {
+     "price": "asc"
+    }
+   },
+   "n": 50
+  },
+  "output": "101c8f5cff393d89318710cc8c4e4e0c0e348b6d"
+ }
+]

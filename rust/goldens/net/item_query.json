@@ -1,0 +1,240 @@
+[
+ {
+  "input": {},
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": []}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Warlock Gloves",
+   "stats": [
+    [
+     "explicit.stat_1",
+     40
+    ]
+   ]
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"explicit.stat_1\",\"value\":{\"min\":40},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}}},\"type\":\"Warlock Gloves\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"explicit.stat_1\", \"value\": {\"min\": 40}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}}, \"type\": \"Warlock Gloves\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "category": "accessory.ring",
+   "stats": [
+    [
+     "fractured.stat_9",
+     5
+    ]
+   ],
+   "item_level": 84,
+   "fractured_only": true
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"fractured.stat_9\",\"value\":{\"min\":5},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"},\"category\":{\"option\":\"accessory.ring\"}}},\"misc_filters\":{\"filters\":{\"ilvl\":{\"min\":84},\"fractured_item\":{\"option\":\"true\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"fractured.stat_9\", \"value\": {\"min\": 5}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}, \"category\": {\"option\": \"accessory.ring\"}}}, \"misc_filters\": {\"filters\": {\"ilvl\": {\"min\": 84}, \"fractured_item\": {\"option\": \"true\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Maelström Staff",
+   "stats": [
+    [
+     "explicit.stat_2",
+     0.5
+    ],
+    [
+     "explicit.stat_3",
+     null
+    ]
+   ],
+   "rarity": "rare"
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"explicit.stat_2\",\"value\":{\"min\":0.5},\"disabled\":false},{\"id\":\"explicit.stat_3\",\"value\":{},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"rare\"}}}},\"type\":\"Maelstr\\u00f6m Staff\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"explicit.stat_2\", \"value\": {\"min\": 0.5}, \"disabled\": false}, {\"id\": \"explicit.stat_3\", \"value\": {}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"rare\"}}}}, \"type\": \"Maelstr\\u00f6m Staff\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Quote \" and \\ slash",
+   "category": "weapon.bow",
+   "stats": [
+    [
+     "explicit.stat_4",
+     12.0
+    ]
+   ],
+   "corrupted": false
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"explicit.stat_4\",\"value\":{\"min\":12.0},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"},\"category\":{\"option\":\"weapon.bow\"}}},\"misc_filters\":{\"filters\":{\"corrupted\":{\"option\":\"false\"}}}},\"type\":\"Quote \\\" and \\\\ slash\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"explicit.stat_4\", \"value\": {\"min\": 12.0}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}, \"category\": {\"option\": \"weapon.bow\"}}}, \"misc_filters\": {\"filters\": {\"corrupted\": {\"option\": \"false\"}}}}, \"type\": \"Quote \\\" and \\\\ slash\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Vaal Regalia",
+   "stats": [
+    [
+     "explicit.stat_5",
+     1e-05
+    ],
+    [
+     "explicit.stat_6",
+     123456789012345678
+    ]
+   ],
+   "corrupted": true,
+   "item_level": 86
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"explicit.stat_5\",\"value\":{\"min\":1e-05},\"disabled\":false},{\"id\":\"explicit.stat_6\",\"value\":{\"min\":123456789012345678},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}},\"misc_filters\":{\"filters\":{\"ilvl\":{\"min\":86},\"corrupted\":{\"option\":\"true\"}}}},\"type\":\"Vaal Regalia\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"explicit.stat_5\", \"value\": {\"min\": 1e-05}, \"disabled\": false}, {\"id\": \"explicit.stat_6\", \"value\": {\"min\": 123456789012345678}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}, \"misc_filters\": {\"filters\": {\"ilvl\": {\"min\": 86}, \"corrupted\": {\"option\": \"true\"}}}}, \"type\": \"Vaal Regalia\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "category": "armour.chest",
+   "stats": [
+    [
+     "a",
+     1
+    ],
+    [
+     "b",
+     2
+    ]
+   ],
+   "count": [
+    2,
+    [
+     [
+      "c",
+      3
+     ],
+     [
+      "d",
+      null
+     ],
+     [
+      "e",
+      4.5
+     ]
+    ]
+   ]
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"a\",\"value\":{\"min\":1},\"disabled\":false},{\"id\":\"b\",\"value\":{\"min\":2},\"disabled\":false}]},{\"type\":\"count\",\"value\":{\"min\":2},\"filters\":[{\"id\":\"c\",\"value\":{\"min\":3},\"disabled\":false},{\"id\":\"d\",\"value\":{},\"disabled\":false},{\"id\":\"e\",\"value\":{\"min\":4.5},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"},\"category\":{\"option\":\"armour.chest\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"a\", \"value\": {\"min\": 1}, \"disabled\": false}, {\"id\": \"b\", \"value\": {\"min\": 2}, \"disabled\": false}]}, {\"type\": \"count\", \"value\": {\"min\": 2}, \"filters\": [{\"id\": \"c\", \"value\": {\"min\": 3}, \"disabled\": false}, {\"id\": \"d\", \"value\": {}, \"disabled\": false}, {\"id\": \"e\", \"value\": {\"min\": 4.5}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}, \"category\": {\"option\": \"armour.chest\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "category": "armour.chest",
+   "stats": [],
+   "count": [
+    0,
+    [
+     [
+      "c",
+      3
+     ]
+    ]
+   ]
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"},\"category\":{\"option\":\"armour.chest\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": []}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}, \"category\": {\"option\": \"armour.chest\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "category": "armour.boots",
+   "stats": [],
+   "count": [
+    1,
+    []
+   ]
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"},\"category\":{\"option\":\"armour.boots\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": []}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}, \"category\": {\"option\": \"armour.boots\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Hubris Circlet",
+   "stats": [
+    [
+     "x",
+     1
+    ]
+   ],
+   "extra": [
+    {
+     "id": "enchant.stat_1",
+     "value": {
+      "option": "3"
+     },
+     "disabled": false
+    }
+   ],
+   "rarity": "unique"
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"x\",\"value\":{\"min\":1},\"disabled\":false},{\"id\":\"enchant.stat_1\",\"value\":{\"option\":\"3\"},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"unique\"}}}},\"type\":\"Hubris Circlet\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"x\", \"value\": {\"min\": 1}, \"disabled\": false}, {\"id\": \"enchant.stat_1\", \"value\": {\"option\": \"3\"}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"unique\"}}}}, \"type\": \"Hubris Circlet\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Large Cluster Jewel",
+   "item_level": 0,
+   "stats": [
+    [
+     "s",
+     0
+    ]
+   ],
+   "fractured_only": false
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"s\",\"value\":{\"min\":0},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}}},\"type\":\"Large Cluster Jewel\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"s\", \"value\": {\"min\": 0}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}}, \"type\": \"Large Cluster Jewel\"}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "",
+   "category": "",
+   "stats": [
+    [
+     "s",
+     null
+    ]
+   ],
+   "rarity": "nonunique"
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"s\",\"value\":{},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}}}},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"s\", \"value\": {}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}}}, \"sort\": {\"price\": \"asc\"}}"
+ },
+ {
+  "input": {
+   "base": "Sapphire Ring",
+   "stats": [
+    [
+     "s",
+     1
+    ],
+    [
+     "s",
+     1
+    ],
+    [
+     "s",
+     1
+    ]
+   ],
+   "item_level": 100,
+   "corrupted": false,
+   "fractured_only": true,
+   "count": [
+    3,
+    [
+     [
+      "t",
+      1
+     ],
+     [
+      "u",
+      2
+     ]
+    ]
+   ]
+  },
+  "output": "{\"query\":{\"status\":{\"option\":\"available\"},\"stats\":[{\"type\":\"and\",\"filters\":[{\"id\":\"s\",\"value\":{\"min\":1},\"disabled\":false},{\"id\":\"s\",\"value\":{\"min\":1},\"disabled\":false},{\"id\":\"s\",\"value\":{\"min\":1},\"disabled\":false}]},{\"type\":\"count\",\"value\":{\"min\":3},\"filters\":[{\"id\":\"t\",\"value\":{\"min\":1},\"disabled\":false},{\"id\":\"u\",\"value\":{\"min\":2},\"disabled\":false}]}],\"filters\":{\"type_filters\":{\"filters\":{\"rarity\":{\"option\":\"nonunique\"}}},\"misc_filters\":{\"filters\":{\"ilvl\":{\"min\":100},\"fractured_item\":{\"option\":\"true\"},\"corrupted\":{\"option\":\"false\"}}}},\"type\":\"Sapphire Ring\"},\"sort\":{\"price\":\"asc\"}}",
+  "output_default": "{\"query\": {\"status\": {\"option\": \"available\"}, \"stats\": [{\"type\": \"and\", \"filters\": [{\"id\": \"s\", \"value\": {\"min\": 1}, \"disabled\": false}, {\"id\": \"s\", \"value\": {\"min\": 1}, \"disabled\": false}, {\"id\": \"s\", \"value\": {\"min\": 1}, \"disabled\": false}]}, {\"type\": \"count\", \"value\": {\"min\": 3}, \"filters\": [{\"id\": \"t\", \"value\": {\"min\": 1}, \"disabled\": false}, {\"id\": \"u\", \"value\": {\"min\": 2}, \"disabled\": false}]}], \"filters\": {\"type_filters\": {\"filters\": {\"rarity\": {\"option\": \"nonunique\"}}}, \"misc_filters\": {\"filters\": {\"ilvl\": {\"min\": 100}, \"fractured_item\": {\"option\": \"true\"}, \"corrupted\": {\"option\": \"false\"}}}}, \"type\": \"Sapphire Ring\"}, \"sort\": {\"price\": \"asc\"}}"
+ }
+]

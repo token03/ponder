@@ -7,6 +7,7 @@ description = "poe.ninja ladder and prices, the trade site, repoe downloads, and
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
 ureq.workspace = true
 anyhow.workspace = true
