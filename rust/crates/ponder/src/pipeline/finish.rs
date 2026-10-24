@@ -249,9 +249,18 @@ pub fn finishes(cx: &Context, db: &ModDB, m: &ItemMatch, estimates: &[Estimate],
         .map(|e| (e, finish(cx, db, e, m, table, false)))
         .filter(|(_, f)| f.craft_cost.is_some())
         .collect();
-    // most saved first; items with no known saving by their (negated) total
+    // most saved first; items with no known saving by their (negated) total. Savings equal to
+    // a millichaos (the same steps left either way) go to the cheaper finish.
     let key = |f: &Finish| -f.saves().unwrap_or_else(|| -f.total().unwrap_or(0.0));
-    found.sort_by(|a, b| key(&a.1).partial_cmp(&key(&b.1)).unwrap_or(std::cmp::Ordering::Equal));
+    let tied = |a: f64, b: f64| (a - b).abs() <= 1e-3;
+    found.sort_by(|a, b| {
+        let (ka, kb) = (key(&a.1), key(&b.1));
+        if tied(ka, kb) {
+            a.1.total().partial_cmp(&b.1.total()).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            ka.total_cmp(&kb)
+        }
+    });
     found.into_iter().take(top).map(|(e, _)| finish(cx, db, e, m, table, true)).collect()
 }
 
