@@ -47,7 +47,8 @@ struct Sim<'a> {
 ///
 /// Panics if the policy has no action for a state the replay reaches.
 pub fn simulate(problem: &Problem, plan: &Plan, prices: &Prices, settings: &Settings, runs: usize, seed: u64, max_steps: usize) -> f64 {
-    let by_name: HashMap<&str, (&Action, f64)> = problem.actions.iter().map(|a| (a.name.as_str(), (a, step_cost(a, prices, settings)))).collect();
+    let by_name: HashMap<&str, (&Action, f64)> =
+        problem.actions.iter().map(|a| (a.name.as_str(), (a, step_cost(a, prices, settings)))).collect();
     let mut sim = Sim { problem, weights: HashMap::new(), cache: HashMap::new(), rng: Rng::new(seed) };
     let mut total = 0.0;
     for _ in 0..runs {
@@ -90,7 +91,8 @@ impl<'a> Sim<'a> {
             }
             "annul" | "annul_prefix" | "annul_suffix" => {
                 let side = a.kind.strip_prefix("annul_").map(|s| if s == "prefix" { Side::Prefix } else { Side::Suffix });
-                let removable: Vec<usize> = (0..mods.len()).filter(|&i| !fixed(mods[i]) && side.is_none_or(|s| mods[i].side == s)).collect();
+                let removable: Vec<usize> =
+                    (0..mods.len()).filter(|&i| !fixed(mods[i]) && side.is_none_or(|s| mods[i].side == s)).collect();
                 if !removable.is_empty() {
                     mods.remove(removable[(self.rng.random() * removable.len() as f64) as usize]);
                 }
@@ -121,7 +123,13 @@ impl<'a> Sim<'a> {
     }
 
     fn count(&mut self, counts: &[(usize, f64)]) -> usize {
-        let cum: Vec<f64> = counts.iter().scan(0.0, |acc, c| { *acc += c.1; Some(*acc) }).collect();
+        let cum: Vec<f64> = counts
+            .iter()
+            .scan(0.0, |acc, c| {
+                *acc += c.1;
+                Some(*acc)
+            })
+            .collect();
         counts[self.rng.choose(&cum)].0
     }
 
@@ -168,7 +176,13 @@ impl<'a> Sim<'a> {
                         && !(m.notable && notables >= problem.notable_cap)
                 })
                 .collect();
-            let cum = pool.iter().scan(0.0, |acc, m| { *acc += weights[&m.id]; Some(*acc) }).collect();
+            let cum = pool
+                .iter()
+                .scan(0.0, |acc, m| {
+                    *acc += weights[&m.id];
+                    Some(*acc)
+                })
+                .collect();
             self.cache.insert(key.clone(), (pool, cum));
         }
         let (pool, cum) = &self.cache[&key];

@@ -4,11 +4,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use faer::Mat;
-use faer::linalg::solvers::{PartialPivLu, Solve};
-use faer::sparse::{SparseColMat, Triplet, linalg::solvers::Lu as SparseLu};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
+use crate::linear::{self, Backend, Lu, System};
 use crate::problem::{ActionC, Problem, Res};
 use crate::types::*;
 
@@ -127,7 +126,8 @@ fn cheapest_of_equals(acts: Vec<Action>, problem: &Problem, prices: &Prices, set
     }
     let keep: Vec<bool> = keys.iter().enumerate().map(|(i, k)| k.as_ref().is_none_or(|k| best[k] == i)).collect();
     // Plain actions first, then the chosen rerolls, as Python orders them.
-    let (plain, rolls): (Vec<_>, Vec<_>) = acts.into_iter().zip(keys).zip(keep).filter(|(_, k)| *k).map(|(x, _)| x).partition(|(_, k)| k.is_none());
+    let (plain, rolls): (Vec<_>, Vec<_>) =
+        acts.into_iter().zip(keys).zip(keep).filter(|(_, k)| *k).map(|(x, _)| x).partition(|(_, k)| k.is_none());
     plain.into_iter().chain(rolls).map(|(a, _)| a).collect()
 }
 
@@ -242,28 +242,6 @@ pub(crate) fn explore(problem: &Problem, costs: &[f64]) -> Graph {
     }
 }
 
-/// A factored `I - P`: dense or sparse (the matrices are very sparse, so sparse is far quicker).
-pub(crate) enum Lu {
-    Dense(PartialPivLu<f64>),
-    Sparse(SparseLu<usize, f64>),
-}
-
-impl Lu {
-    fn solve(&self, rhs: &mut Mat<f64>) {
-        match self {
-            Lu::Dense(lu) => lu.solve_in_place(rhs.as_mut()),
-            Lu::Sparse(lu) => lu.solve_in_place(rhs.as_mut()),
-        }
-    }
-
-    fn solve_transpose(&self, rhs: &mut Mat<f64>) {
-        match self {
-            Lu::Dense(lu) => lu.solve_transpose_in_place(rhs.as_mut()),
-            Lu::Sparse(lu) => lu.solve_transpose_in_place(rhs.as_mut()),
-        }
-    }
-}
-
 impl Graph {
     pub fn n(&self) -> usize {
         self.states.len()
@@ -357,32 +335,9 @@ impl Graph {
     }
 
     /// I - P for the policy, factored. None if the matrix is singular.
-    fn factor(&self, policy: &[usize]) -> Option<Lu> {
-        let n = self.n();
-        if std::env::var_os("PONDER_DENSE").is_some() {
-            let mut m = Mat::<f64>::identity(n, n);
-            for (i, &p) in policy.iter().enumerate() {
-                let l = self.pair_list[p];
-                for e in self.list_ptr[l]..self.list_ptr[l + 1] {
-                    if self.e_next[e] >= 0 {
-                        m[(i, self.e_next[e] as usize)] -= self.e_prob[e];
-                    }
-                }
-            }
-            return Some(Lu::Dense(m.partial_piv_lu()));
-        }
-        let mut t = Vec::with_capacity(n * 8);
-        for (i, &p) in policy.iter().enumerate() {
-            t.push(Triplet::new(i, i, 1.0));
-            let l = self.pair_list[p];
-            for e in self.list_ptr[l]..self.list_ptr[l + 1] {
-                if self.e_next[e] >= 0 {
-                    t.push(Triplet::new(i, self.e_next[e] as usize, -self.e_prob[e]));
-                }
-            }
-        }
-        let m = SparseColMat::<usize, f64>::try_new_from_triplets(n, n, &t).ok()?;
-        m.sp_lu().ok().map(Lu::Sparse)
+    fn factor(&self, policy: &[usize], backend: Backend) -> Option<Lu> {
+        let rows = policy.iter().map(|&p| self.pair_list[p]).collect();
+        linear::factor(&System { rows, list_ptr: &self.list_ptr, e_next: &self.e_next, e_prob: &self.e_prob }, backend)
     }
 
     fn evaluate(&self, lu: &Lu, policy: &[usize]) -> Vec<f64> {
@@ -403,6 +358,9 @@ fn index_of(g: &Graph, s: &State) -> usize {
     g.states.iter().position(|x| x == s).expect("origin is an open state")
 }
 
+/// Final values, the policy they belong to, and its factorisation if still current.
+type Improved = (Vec<f64>, Vec<usize>, Option<Lu>);
+
 /// Optimal policy by policy iteration, evaluating each policy exactly.
 ///
 /// Actions with any unpriced input are left out rather than treated as free. Like Python,
@@ -413,7 +371,19 @@ pub fn solve(problem: &mut Problem, prices: &Prices, settings: &Settings) -> Res
 }
 
 pub fn solve_rounds(problem: &mut Problem, prices: &Prices, settings: &Settings, max_rounds: usize) -> Result<Plan, SolveError> {
-    let unpriced: Vec<String> = problem.actions.iter().filter(|a| a.cost.iter().any(|(pid, _)| !prices.contains_key(pid))).map(|a| a.name.clone()).collect();
+    solve_with(problem, prices, settings, max_rounds, Backend::Auto)
+}
+
+/// `solve` with a choice of linear solver (the answers agree; the dense one is the reference).
+pub fn solve_with(
+    problem: &mut Problem,
+    prices: &Prices,
+    settings: &Settings,
+    max_rounds: usize,
+    backend: Backend,
+) -> Result<Plan, SolveError> {
+    let unpriced: Vec<String> =
+        problem.actions.iter().filter(|a| a.cost.iter().any(|(pid, _)| !prices.contains_key(pid))).map(|a| a.name.clone()).collect();
     let kept: Vec<Action> = std::mem::take(&mut problem.actions).into_iter().filter(|a| !unpriced.contains(&a.name)).collect();
     problem.actions = cheapest_of_equals(kept, problem, prices, settings);
     problem.clear_lock_cache();
@@ -425,12 +395,12 @@ pub fn solve_rounds(problem: &mut Problem, prices: &Prices, settings: &Settings,
     let mut policy: Vec<usize> = g.proper_policy().into_iter().collect::<Option<_>>().ok_or(SolveError::Unreachable)?;
     let start = index_of(&g, &problem.origin());
 
-    let run = || -> Result<(Vec<f64>, Vec<usize>, Option<Lu>), SolveError> {
+    let run = || -> Result<Improved, SolveError> {
         let mut policy = policy.clone();
         let (mut value, mut lu) = (Vec::new(), None);
         for _ in 0..max_rounds {
             let singular = || SolveError::Singular("singular matrix: a sale is worth more than making it again".into());
-            let f = g.factor(&policy).ok_or_else(singular)?;
+            let f = g.factor(&policy, backend).ok_or_else(singular)?;
             value = g.evaluate(&f, &policy);
             if !value.iter().all(|v| v.is_finite()) {
                 return Err(SolveError::Singular("singular matrix: a sale is worth more than making it again".into()));
@@ -455,20 +425,21 @@ pub fn solve_rounds(problem: &mut Problem, prices: &Prices, settings: &Settings,
             }
             // Selling sub-products would pay for itself (their values are rough): plan without sales.
             problem.actions.retain(|a| a.kind != "sell");
-            return solve_rounds(problem, prices, settings, max_rounds);
+            return solve_with(problem, prices, settings, max_rounds, backend);
         }
     };
     policy = final_policy;
     let lu = match lu {
         Some(lu) => lu,
-        None => g.factor(&policy).ok_or_else(|| SolveError::Singular("singular matrix".into()))?,
+        None => g.factor(&policy, backend).ok_or_else(|| SolveError::Singular("singular matrix".into()))?,
     };
     let visits = g.visits(&lu, start);
     let mut usage: HashMap<String, f64> = problem.actions.iter().map(|a| (a.name.clone(), 0.0)).collect();
     for (i, &p) in policy.iter().enumerate() {
         *usage.get_mut(&problem.actions[g.pair_action[p]].name).unwrap() += visits[i];
     }
-    let hours = problem.actions.iter().filter_map(|a| Some(usage[&a.name]).filter(|n| *n != 0.0).map(|n| n * seconds(a))).sum::<f64>() / 3600.0;
+    let hours =
+        problem.actions.iter().filter_map(|a| Some(usage[&a.name]).filter(|n| *n != 0.0).map(|n| n * seconds(a))).sum::<f64>() / 3600.0;
     let name = |p: usize| problem.actions[g.pair_action[p]].name.clone();
     Ok(Plan {
         cost: value[start],
@@ -485,6 +456,16 @@ pub fn solve_rounds(problem: &mut Problem, prices: &Prices, settings: &Settings,
 
 /// Exact expected cost of following `policy` (state -> action name) from the origin.
 pub fn evaluate(problem: &Problem, policy: &StateMap<String>, prices: &Prices, settings: &Settings) -> Result<f64, SolveError> {
+    evaluate_with(problem, policy, prices, settings, Backend::Auto)
+}
+
+pub fn evaluate_with(
+    problem: &Problem,
+    policy: &StateMap<String>,
+    prices: &Prices,
+    settings: &Settings,
+    backend: Backend,
+) -> Result<f64, SolveError> {
     if problem.done(&problem.origin()) {
         return Ok(0.0);
     }
@@ -499,7 +480,7 @@ pub fn evaluate(problem: &Problem, policy: &StateMap<String>, prices: &Prices, s
             g.pair_of(i, &problem.actions, name).ok_or_else(|| SolveError::MissingPolicy(format!("{name:?} is not available in {s:?}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let lu = g.factor(&chosen).ok_or_else(|| SolveError::Singular("singular matrix".into()))?;
+    let lu = g.factor(&chosen, backend).ok_or_else(|| SolveError::Singular("singular matrix".into()))?;
     let value = g.evaluate(&lu, &chosen);
     Ok(value[index_of(&g, &problem.origin())])
 }
@@ -512,12 +493,12 @@ pub fn evaluate(problem: &Problem, policy: &StateMap<String>, prices: &Prices, s
 /// 1 time in k; a miss ruins the base and the loop starts over on a new one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelfFracture {
-    pub target: usize, // index into the problem's targets
-    pub action: String, // the reroll to spam
-    pub max_mods: usize, // fracture only when the item has at most this many mods
-    pub hit: f64,       // chance one reroll lands the mod with few enough mods
+    pub target: usize,        // index into the problem's targets
+    pub action: String,       // the reroll to spam
+    pub max_mods: usize,      // fracture only when the item has at most this many mods
+    pub hit: f64,             // chance one reroll lands the mod with few enough mods
     pub fracture_chance: f64, // chance the orb then picks it
-    pub cost: f64,      // expected chaos (currency and clicking) to a base with the mod fractured
+    pub cost: f64,            // expected chaos (currency and clicking) to a base with the mod fractured
     pub hours: f64,
 }
 

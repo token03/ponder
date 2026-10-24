@@ -26,7 +26,8 @@ fn dir() -> PathBuf {
 }
 
 fn load() -> Vec<Golden> {
-    let mut files: Vec<_> = std::fs::read_dir(dir()).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().ends_with(".json.gz")).collect();
+    let mut files: Vec<_> =
+        std::fs::read_dir(dir()).unwrap().map(|e| e.unwrap().path()).filter(|p| p.to_string_lossy().ends_with(".json.gz")).collect();
     files.sort();
     files
         .iter()
@@ -50,9 +51,9 @@ fn state(v: &Value) -> State {
     serde_json::from_value(v.clone()).unwrap()
 }
 
-fn check(g: &Golden, bad: &mut Vec<String>) {
+fn check(g: &Golden, backend: Backend, bad: &mut Vec<String>) {
     let settings = Settings { chaos_per_hour: g.chaos_per_hour };
-    let mut fail = |what: String| bad.push(format!("{}: {what}", g.name));
+    let mut fail = |what: String| bad.push(format!("{} ({backend:?}): {what}", g.name));
 
     // Fractured bases are priced before the solve rewrites the action list.
     for (i, want) in g.self_fracture.iter().enumerate() {
@@ -75,7 +76,7 @@ fn check(g: &Golden, bad: &mut Vec<String>) {
     }
 
     let mut problem = g.problem.clone();
-    let solved = solve(&mut problem, &g.prices, &settings);
+    let solved = solve_with(&mut problem, &g.prices, &settings, 60, backend);
     if let Some(e) = g.plan.get("error") {
         if solved.is_ok() {
             fail(format!("expected error {e}, got a plan"));
@@ -143,8 +144,9 @@ fn check(g: &Golden, bad: &mut Vec<String>) {
     }
 
     // The golden policy may break ties differently; it must cost the same.
-    let policy: StateMap<String> = want["policy"].as_array().unwrap().iter().map(|p| (state(&p[0]), p[1].as_str().unwrap().to_string())).collect();
-    match evaluate(&problem, &policy, &g.prices, &settings) {
+    let policy: StateMap<String> =
+        want["policy"].as_array().unwrap().iter().map(|p| (state(&p[0]), p[1].as_str().unwrap().to_string())).collect();
+    match evaluate_with(&problem, &policy, &g.prices, &settings, backend) {
         Ok(c) if close(c, plan.cost, 1e-7, 1e-9) => {}
         c => fail(format!("evaluate(golden policy) {c:?} != cost {}", plan.cost)),
     }
@@ -156,19 +158,51 @@ fn check(g: &Golden, bad: &mut Vec<String>) {
         return fail(format!("{} steps != {}", steps.len(), g.steps.len()));
     }
     let id = |rarity: u64, have: &[&str]| format!("{rarity}:{}", have.join("|"));
-    let want_have = |w: &Value| -> Vec<String> { let mut h: Vec<String> = w["have"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect(); h.sort(); h };
-    let ids_ours: HashMap<usize, String> = steps.iter().map(|s| { let mut h = s.have.clone(); h.sort(); (s.number, id(s.rarity as u64, &h.iter().map(String::as_str).collect::<Vec<_>>())) }).collect();
-    let ids_want: HashMap<usize, String> = g.steps.iter().map(|w| { let h = want_have(w); (w["number"].as_u64().unwrap() as usize, id(w["rarity"].as_u64().unwrap(), &h.iter().map(String::as_str).collect::<Vec<_>>())) }).collect();
+    let want_have = |w: &Value| -> Vec<String> {
+        let mut h: Vec<String> = w["have"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        h.sort();
+        h
+    };
+    let ids_ours: HashMap<usize, String> = steps
+        .iter()
+        .map(|s| {
+            let mut h = s.have.clone();
+            h.sort();
+            (s.number, id(s.rarity as u64, &h.iter().map(String::as_str).collect::<Vec<_>>()))
+        })
+        .collect();
+    let ids_want: HashMap<usize, String> = g
+        .steps
+        .iter()
+        .map(|w| {
+            let h = want_have(w);
+            (w["number"].as_u64().unwrap() as usize, id(w["rarity"].as_u64().unwrap(), &h.iter().map(String::as_str).collect::<Vec<_>>()))
+        })
+        .collect();
     let want_by_id: HashMap<&String, &Value> = g.steps.iter().map(|w| (&ids_want[&(w["number"].as_u64().unwrap() as usize)], w)).collect();
     for st in &steps {
         let sid = &ids_ours[&st.number];
-        let Some(w) = want_by_id.get(sid) else { fail(format!("step {sid} not in the golden")); continue };
+        let Some(w) = want_by_id.get(sid) else {
+            fail(format!("step {sid} not in the golden"));
+            continue;
+        };
         if !close(st.reached, num(&w["reached"]), 1e-6, 1e-9) || !close(st.uses, num(&w["uses"]), 1e-6, 1e-9) {
             fail(format!("step {sid} reached/uses {}/{} != {}/{}", st.reached, st.uses, w["reached"], w["uses"]));
         }
         let key = |kind: &str, what: &str, to: Option<&String>| format!("{kind}/{what}/{}", to.map_or("-", |s| s.as_str()));
-        let mut ours: Vec<(String, f64)> = st.exits.iter().map(|x| (key(&x.kind, &x.what, x.to.map(|t| &ids_ours[&t])), x.chance)).collect();
-        let mut theirs: Vec<(String, f64)> = w["exits"].as_array().unwrap().iter().map(|x| (key(x["kind"].as_str().unwrap(), x["what"].as_str().unwrap(), x["to"].as_u64().map(|t| &ids_want[&(t as usize)])), num(&x["chance"]))).collect();
+        let mut ours: Vec<(String, f64)> =
+            st.exits.iter().map(|x| (key(&x.kind, &x.what, x.to.map(|t| &ids_ours[&t])), x.chance)).collect();
+        let mut theirs: Vec<(String, f64)> = w["exits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                (
+                    key(x["kind"].as_str().unwrap(), x["what"].as_str().unwrap(), x["to"].as_u64().map(|t| &ids_want[&(t as usize)])),
+                    num(&x["chance"]),
+                )
+            })
+            .collect();
         ours.sort_by(|a, b| a.0.cmp(&b.0));
         theirs.sort_by(|a, b| a.0.cmp(&b.0));
         if ours.len() != theirs.len() || ours.iter().zip(&theirs).any(|(a, b)| a.0 != b.0 || !close(a.1, b.1, 1e-6, 1e-9)) {
@@ -183,7 +217,11 @@ fn rust_solver_matches_python_goldens() {
     assert!(goldens.len() >= 20, "found only {} goldens", goldens.len());
     let mut bad = Vec::new();
     for g in &goldens {
-        check(g, &mut bad);
+        // The dense solver is the reference; the split one is what runs by default on big systems.
+        check(g, Backend::Split, &mut bad);
+        if g.plan.get("states").and_then(Value::as_u64).unwrap_or(0) <= 500 {
+            check(g, Backend::Dense, &mut bad);
+        }
     }
     assert!(bad.is_empty(), "{} mismatches:\n{}", bad.len(), bad.join("\n"));
 }
@@ -198,4 +236,18 @@ fn solving_twice_gives_the_same_plan() {
     let b = solve(&mut p, &g.prices, &settings).unwrap();
     assert!(close(a.cost, b.cost, 1e-9, 1e-12));
     let _: HashMap<_, _> = a.usage.clone();
+}
+
+#[test]
+fn replaying_the_plan_on_real_mods_agrees_with_the_solver() {
+    // Exact group exclusion instead of lumping: the numbers stay close. (Big gear pools drift further,
+    // e.g. gear_fractured replays ~13% under its plan in Python too: the lumped group weights are approximate.)
+    for (name, tolerance) in [("cluster_0", 0.08), ("cluster_1", 0.08), ("toy_three", 0.08), ("toy_harvest_fossil", 0.08)] {
+        let g = load().into_iter().find(|g| g.name == name).unwrap();
+        let settings = Settings { chaos_per_hour: g.chaos_per_hour };
+        let mut p = g.problem.clone();
+        let plan = solve(&mut p, &g.prices, &settings).unwrap();
+        let replay = simulate(&p, &plan, &g.prices, &settings, 3000, 11, 100_000);
+        assert!(close(replay, plan.cost, tolerance, 0.0), "{name}: replay {replay} vs plan {}", plan.cost);
+    }
 }

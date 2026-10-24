@@ -5,17 +5,20 @@
 //! currency maps a state to a distribution over states; policy iteration finds, for every
 //! state, the action minimising the expected cost to finish.
 
+mod linear;
 mod problem;
 mod simulate;
 mod solve;
 mod steps;
 mod types;
 
+pub use linear::Backend;
 pub use problem::{Problem, RollKey};
 pub use simulate::{Rng, simulate};
 pub use solve::{
     FOSSIL_SECONDS, FRACTURE_MIN_MODS, FRACTURE_ORB, FRACTURE_SECONDS, HARVEST_SECONDS, LOCK_SECONDS, Plan, SECONDS, SELL_SECONDS,
-    SelfFracture, SolveError, StateMap, action_cost, evaluate, seconds, self_fracture, solve, solve_rounds, step_cost,
+    SelfFracture, SolveError, StateMap, action_cost, evaluate, evaluate_with, seconds, self_fracture, solve, solve_rounds, solve_with,
+    step_cost,
 };
 pub use steps::{Exit, Step, describe, describe_parts, recipe, recipe_states, steps};
 pub use types::*;

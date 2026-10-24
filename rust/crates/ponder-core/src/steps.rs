@@ -65,9 +65,9 @@ fn ordered_visits(plan: &Plan) -> Vec<(State, f64)> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Exit {
-    pub chance: f64, // per time you reach the step
+    pub chance: f64,       // per time you reach the step
     pub to: Option<usize>, // step number; None when the item is done or the branch is too rare to list
-    pub what: String, // e.g. "+Life", "lost Life", "done"
+    pub what: String,      // e.g. "+Life", "lost Life", "done"
     /// "done", "win", "back" (lost a target), "side" (same targets, something else changed),
     /// "sell" (sold, start over), "rare" (unlisted)
     pub kind: String,
@@ -80,10 +80,10 @@ pub struct Exit {
 pub struct Step {
     pub number: usize,
     pub rarity: u8,
-    pub have: Vec<String>, // target names on the item
+    pub have: Vec<String>,                   // target names on the item
     pub actions: Vec<(String, String, f64)>, // (action, what else is on the item when you use it, uses per reach), most used first
-    pub reached: f64, // expected times you get here per finished item
-    pub uses: f64,    // expected actions here per finished item
+    pub reached: f64,                        // expected times you get here per finished item
+    pub uses: f64,                           // expected actions here per finished item
     pub exits: Vec<Exit>,
 }
 
@@ -138,7 +138,8 @@ fn grouped(x: f64) -> String {
 /// into their parent's "rare" exit.
 pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
     let by_name: HashMap<&str, &Action> = problem.actions.iter().map(|a| (a.name.as_str(), a)).collect();
-    let open_visits: Vec<(State, f64)> = ordered_visits(plan).into_iter().filter(|(s, v)| *v > 1e-9 && plan.policy.contains_key(s)).collect();
+    let open_visits: Vec<(State, f64)> =
+        ordered_visits(plan).into_iter().filter(|(s, v)| *v > 1e-9 && plan.policy.contains_key(s)).collect();
     let ov: HashMap<State, f64> = open_visits.iter().copied().collect();
     let mut gi: HashMap<Key, usize> = HashMap::new();
     let mut keys: Vec<Key> = Vec::new();
@@ -235,10 +236,17 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
                 }
                 Dest::At(t) if number.contains_key(&t) => {
                     let (gained, lost) = (t.1 & !have, have & !t.1);
-                    let mut what: Vec<String> = (0..names.len()).filter(|i| gained >> i & 1 == 1).map(|i| format!("got {}", names[i])).collect();
+                    let mut what: Vec<String> =
+                        (0..names.len()).filter(|i| gained >> i & 1 == 1).map(|i| format!("got {}", names[i])).collect();
                     what.extend((0..names.len()).filter(|i| lost >> i & 1 == 1).map(|i| format!("lost {}", names[i])));
                     let what = if what.is_empty() { format!("now {}", RARITY[t.0 as usize]) } else { what.join(", ") };
-                    let kind = if lost != 0 { "back" } else if gained != 0 { "win" } else { "side" };
+                    let kind = if lost != 0 {
+                        "back"
+                    } else if gained != 0 {
+                        "win"
+                    } else {
+                        "side"
+                    };
                     exits.push(Exit { chance, to: Some(number[&t]), what, kind: kind.into(), via: by.into() });
                 }
                 Dest::At(_) => rare += chance,

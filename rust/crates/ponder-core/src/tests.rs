@@ -7,10 +7,22 @@ use super::*;
 const FREE: Settings = Settings { chaos_per_hour: 0.0 }; // tests check currency maths; time costs get their own
 
 fn prices() -> Prices {
-    [("transmute", 0.1), ("alt", 1.0), ("aug", 0.2), ("regal", 3.0), ("exalted", 50.0), ("annul", 20.0), ("alch", 0.5), ("chaos", 2.0), ("scour", 1.0), ("lifeforce", 0.1), ("fossil", 5.0)]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
+    [
+        ("transmute", 0.1),
+        ("alt", 1.0),
+        ("aug", 0.2),
+        ("regal", 3.0),
+        ("exalted", 50.0),
+        ("annul", 20.0),
+        ("alch", 0.5),
+        ("chaos", 2.0),
+        ("scour", 1.0),
+        ("lifeforce", 0.1),
+        ("fossil", 5.0),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
 }
 
 fn pool() -> Vec<Mod> {
@@ -114,7 +126,8 @@ fn solver_matches_simulation() {
 fn harvest_and_fossil_match_simulation() {
     let harvest = Action::new("harvest fire", "reroll_rare", &[("lifeforce", 30.0)], &[RARE]).with_first_profile("fire");
     let fossil = Action::new("fire fossil", "reroll_rare", &[("fossil", 1.0)], &[NORMAL, RARE]).with_profile("fossil");
-    let fossil_weights = pool().iter().map(|m| (m.id.clone(), m.weight * if m.tags.iter().any(|t| t == "fire") { 10.0 } else { 1.0 })).collect();
+    let fossil_weights =
+        pool().iter().map(|m| (m.id.clone(), m.weight * if m.tags.iter().any(|t| t == "fire") { 10.0 } else { 1.0 })).collect();
     let mut p = toy_with(vec![harvest, fossil], &[("fire", vec![("A".into(), 100.0)]), ("fossil", fossil_weights)], &[], &["A", "B"]);
     let plan = solved(&mut p, &prices());
     approx(simulated(&p, &plan, &prices(), 4000, 3), plan.cost, 0.08);
@@ -293,7 +306,8 @@ fn steps_follow_the_policy_flow() {
 
 fn sale(credit: f64) -> Action {
     let need = BTreeSet::from([0]);
-    Action::new("sell as A", "sell", &[], &[MAGIC, RARE]).with_sale(credit, Sale { need, prefix: 0, suffix: 0, any: 0, spare: BTreeSet::new() })
+    Action::new("sell as A", "sell", &[], &[MAGIC, RARE])
+        .with_sale(credit, Sale { need, prefix: 0, suffix: 0, any: 0, spare: BTreeSet::new() })
 }
 
 #[test]
@@ -306,9 +320,11 @@ fn selling_a_brick_as_a_smaller_product_lowers_the_cost() {
     let selling = solved(&mut p, &prices());
     assert!(selling.cost < plain.cost && selling.usage["sell as A"] > 0.0);
     approx(simulated(&p, &selling, &prices(), 3000, 0), selling.cost, 0.1);
-    let mut greedy = toy_with(vec![sale(100.0 * only_a.cost)], &[], &[], &["A", "B"]);
-    approx(solved(&mut greedy, &prices()).cost, plain.cost, 1e-9);
-    assert!(greedy.actions.iter().all(|a| a.kind != "sell"));
+    for backend in [Backend::Dense, Backend::Split] {
+        let mut greedy = toy_with(vec![sale(100.0 * only_a.cost)], &[], &[], &["A", "B"]);
+        approx(solve_with(&mut greedy, &prices(), &FREE, 60, backend).unwrap().cost, plain.cost, 1e-9);
+        assert!(greedy.actions.iter().all(|a| a.kind != "sell"));
+    }
 }
 
 #[test]
