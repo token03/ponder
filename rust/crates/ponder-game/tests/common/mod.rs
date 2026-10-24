@@ -8,10 +8,13 @@ use std::sync::{Once, OnceLock};
 use ponder_game::data;
 use ponder_game::item::{Item, ModLine};
 use ponder_game::mods::{ItemMatch, ModDB};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..").canonicalize().unwrap()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap()
 }
 
 pub fn fixtures() -> PathBuf {
@@ -36,7 +39,10 @@ pub fn skip_without_data() -> bool {
     if data::available(None) {
         return false;
     }
-    eprintln!("skipping: repoe data not found in {}; run `ponder data fetch`", data::data_dir().display());
+    eprintln!(
+        "skipping: repoe data not found in {}; run `ponder data fetch`",
+        data::data_dir().display()
+    );
     true
 }
 
@@ -47,11 +53,15 @@ pub fn db() -> &'static ModDB {
 
 pub fn golden(name: &str) -> Value {
     // PONDER_GOLDENS points at a bigger set made with PONDER_GOLDEN_SAMPLE / PONDER_GOLDEN_SYNTH.
-    let dir = std::env::var_os("PONDER_GOLDENS").map(PathBuf::from).unwrap_or_else(|| repo_root().join("rust/goldens/items"));
+    let dir = std::env::var_os("PONDER_GOLDENS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("rust/goldens/items"));
     let path = dir.join(format!("{name}.json.gz"));
     let file = std::fs::File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut text = String::new();
-    flate2::read::GzDecoder::new(file).read_to_string(&mut text).unwrap();
+    flate2::read::GzDecoder::new(file)
+        .read_to_string(&mut text)
+        .unwrap();
     serde_json::from_str(&text).unwrap()
 }
 
@@ -98,7 +108,14 @@ pub fn normalized(mut m: Value, with_tags: bool) -> Value {
     } else {
         // A tag with two influence suffixes ("helmet_shaper_elder") is spelled in Python's set
         // iteration order, which varies per run: keep their number, not their spelling.
-        const INF: [&str; 6] = ["shaper", "elder", "crusader", "eyrie", "basilisk", "adjudicator"];
+        const INF: [&str; 6] = [
+            "shaper",
+            "elder",
+            "crusader",
+            "eyrie",
+            "basilisk",
+            "adjudicator",
+        ];
         let tags = o.get_mut("tags").unwrap().as_array_mut().unwrap();
         let multi = |t: &Value| {
             let parts: Vec<&str> = t.as_str().unwrap().rsplitn(3, '_').collect();

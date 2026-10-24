@@ -6,15 +6,17 @@
 //! are matched as a unit before single-line mods.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 use regex::Regex;
 
 use crate::data::{self, BaseItems, DataError, Mod, Mods};
-use crate::item::{py_splitlines, Item, ModLine};
+use crate::item::{Item, ModLine, py_splitlines};
 
-static TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\((-?[0-9]+(?:\.[0-9]+)?)-(-?[0-9]+(?:\.[0-9]+)?)\)|([0-9]+(?:\.[0-9]+)?)").unwrap());
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\((-?[0-9]+(?:\.[0-9]+)?)-(-?[0-9]+(?:\.[0-9]+)?)\)|([0-9]+(?:\.[0-9]+)?)")
+        .unwrap()
+});
 
 /// repoe spawn tags use the old internal influence names.
 pub const INFLUENCE_TAGS: &[(&str, &str)] = &[
@@ -29,10 +31,17 @@ pub const INFLUENCE_TAGS: &[(&str, &str)] = &[
 /// Base domains we match items for; jewels and flasks keep their mods in their own domain.
 pub const BASE_DOMAINS: &[&str] = &["item", "misc", "abyss_jewel", "affliction_jewel", "flask"];
 /// Mod domains that apply to ordinary (`item` domain) bases, and the source they imply.
-pub const ITEM_EXTRA_DOMAINS: &[(&str, &str)] = &[("crafted", "crafted"), ("unveiled", "veiled"), ("delve", "delve")];
+pub const ITEM_EXTRA_DOMAINS: &[(&str, &str)] = &[
+    ("crafted", "crafted"),
+    ("unveiled", "veiled"),
+    ("delve", "delve"),
+];
 
 fn extra_domain(domain: &str) -> Option<&'static str> {
-    ITEM_EXTRA_DOMAINS.iter().find(|(d, _)| *d == domain).map(|(_, s)| *s)
+    ITEM_EXTRA_DOMAINS
+        .iter()
+        .find(|(d, _)| *d == domain)
+        .map(|(_, s)| *s)
 }
 
 /// Lower sorts first when several mods fit a line.
@@ -126,12 +135,19 @@ pub fn template_ranges(text: &str) -> Vec<(f64, f64)> {
 /// Numbers on an item line; ranges are resolved with PoB's roll position.
 pub fn line_values(line: &ModLine) -> Vec<f64> {
     let roll = line.roll().unwrap_or(0.5);
-    template_ranges(&line.text).into_iter().map(|(lo, hi)| lo + (hi - lo) * roll).collect()
+    template_ranges(&line.text)
+        .into_iter()
+        .map(|(lo, hi)| lo + (hi - lo) * roll)
+        .collect()
 }
 
 /// Do all `values` sit in their `ranges` (with half a point of rounding slack)?
 pub fn fits(values: &[f64], ranges: &[(f64, f64)]) -> bool {
-    values.len() == ranges.len() && values.iter().zip(ranges).all(|(v, (lo, hi))| lo - 0.5 <= *v && *v <= hi + 0.5)
+    values.len() == ranges.len()
+        && values
+            .iter()
+            .zip(ranges)
+            .all(|(v, (lo, hi))| lo - 0.5 <= *v && *v <= hi + 0.5)
 }
 
 /// What `match_ids` takes: mod ids by how the character wears them
@@ -149,10 +165,23 @@ impl IdMods {
         let ids = |kind: &str| -> Vec<String> {
             mods.get(kind)
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().map(|e| e.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string()).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|e| {
+                            e.get("id")
+                                .and_then(|i| i.as_str())
+                                .unwrap_or("")
+                                .to_string()
+                        })
+                        .collect()
+                })
                 .unwrap_or_default()
         };
-        IdMods { explicit: ids("explicit"), fractured: ids("fractured"), crafted: ids("crafted") }
+        IdMods {
+            explicit: ids("explicit"),
+            fractured: ids("fractured"),
+            crafted: ids("crafted"),
+        }
     }
 }
 
@@ -178,9 +207,12 @@ struct Index {
     hybrids_by_line: HashMap<String, Vec<usize>>,
 }
 
+/// tag set -> tier key -> required levels of the family, best first
+type TierCache = HashMap<BTreeSet<String>, HashMap<u32, Arc<Vec<i64>>>>;
+
 pub struct ModDB {
-    pub mods: std::sync::Arc<Mods>,
-    pub bases: std::sync::Arc<BaseItems>,
+    pub mods: Arc<Mods>,
+    pub bases: Arc<BaseItems>,
     bench: Bench,
     /// per mod position: is it a prefix/suffix we can match?
     is_affix: Vec<bool>,
@@ -191,20 +223,27 @@ pub struct ModDB {
     /// (domain, type, generation_type) -> positions of its affixes
     families: HashMap<(String, String, String), Vec<usize>>,
     bases_by_name: data::OrderedMap<String>,
-    /// tag set -> tier key -> required levels of the family, best first
-    tiers: RwLock<HashMap<BTreeSet<String>, HashMap<u32, std::sync::Arc<Vec<i64>>>>>,
+    tiers: RwLock<TierCache>,
 }
 
 impl ModDB {
     /// The default database: repoe mods and bases from the data directory, and the current bench.
     pub fn load() -> Result<ModDB, DataError> {
-        Ok(ModDB::new(Some(data::mods()?), Some(data::base_items()?), None))
+        Ok(ModDB::new(
+            Some(data::mods()?),
+            Some(data::base_items()?),
+            None,
+        ))
     }
 
     /// A database over the given data; `None` loads the data directory's.
     ///
     /// Panics if a `None` file cannot be loaded; use [`ModDB::load`] to get the error.
-    pub fn new(mods: Option<std::sync::Arc<Mods>>, bases: Option<std::sync::Arc<BaseItems>>, bench: Option<Bench>) -> ModDB {
+    pub fn new(
+        mods: Option<Arc<Mods>>,
+        bases: Option<Arc<BaseItems>>,
+        bench: Option<Bench>,
+    ) -> ModDB {
         let mods = mods.unwrap_or_else(|| data::mods().unwrap_or_else(|e| panic!("{e}")));
         let bases = bases.unwrap_or_else(|| data::base_items().unwrap_or_else(|e| panic!("{e}")));
         let bench = bench.unwrap_or_else(|| load_bench().unwrap_or_else(|e| panic!("{e}")));
@@ -218,12 +257,19 @@ impl ModDB {
             })
             .collect();
 
-        let mut index = Index { keys: Vec::new(), pos: HashMap::new(), hybrids_by_line: HashMap::new() };
+        let mut index = Index {
+            keys: Vec::new(),
+            pos: HashMap::new(),
+            hybrids_by_line: HashMap::new(),
+        };
         for (i, (_, m)) in mods.iter().enumerate() {
             if !is_affix[i] {
                 continue;
             }
-            let key: Vec<String> = py_splitlines(m.text_or_empty()).into_iter().map(normalize).collect();
+            let key: Vec<String> = py_splitlines(m.text_or_empty())
+                .into_iter()
+                .map(normalize)
+                .collect();
             match index.pos.get(&key) {
                 Some(&k) => index.keys[k].1.push(i),
                 None => {
@@ -235,7 +281,11 @@ impl ModDB {
         for (k, (key, _)) in index.keys.iter().enumerate() {
             if key.len() > 1 {
                 for line in key {
-                    index.hybrids_by_line.entry(line.clone()).or_default().push(k);
+                    index
+                        .hybrids_by_line
+                        .entry(line.clone())
+                        .or_default()
+                        .push(k);
                 }
             }
         }
@@ -245,9 +295,16 @@ impl ModDB {
         let mut tier_key = Vec::with_capacity(mods.len());
         for (i, (_, m)) in mods.iter().enumerate() {
             let next = tier_ids.len() as u32;
-            tier_key.push(*tier_ids.entry((m.type_.as_str(), m.generation_type.as_str())).or_insert(next));
+            tier_key.push(
+                *tier_ids
+                    .entry((m.type_.as_str(), m.generation_type.as_str()))
+                    .or_insert(next),
+            );
             if is_affix[i] {
-                families.entry((m.domain.clone(), m.type_.clone(), m.generation_type.clone())).or_default().push(i);
+                families
+                    .entry((m.domain.clone(), m.type_.clone(), m.generation_type.clone()))
+                    .or_default()
+                    .push(i);
             }
         }
 
@@ -262,7 +319,18 @@ impl ModDB {
         }
 
         let templates = (0..mods.len()).map(|_| OnceLock::new()).collect();
-        ModDB { mods, bases, bench, is_affix, templates, index, tier_key, families, bases_by_name, tiers: RwLock::new(HashMap::new()) }
+        ModDB {
+            mods,
+            bases,
+            bench,
+            is_affix,
+            templates,
+            index,
+            tier_key,
+            families,
+            bases_by_name,
+            tiers: RwLock::new(HashMap::new()),
+        }
     }
 
     /// The mod `mod_id` if it is one we match (a prefix or suffix with text).
@@ -273,7 +341,10 @@ impl ModDB {
 
     fn template(&self, i: usize) -> &Template {
         self.templates[i].get_or_init(|| {
-            let lines: Vec<String> = py_splitlines(self.mods.entry(i).1.text_or_empty()).into_iter().map(String::from).collect();
+            let lines: Vec<String> = py_splitlines(self.mods.entry(i).1.text_or_empty())
+                .into_iter()
+                .map(String::from)
+                .collect();
             let ranges = lines.iter().map(|l| template_ranges(l)).collect();
             Template { lines, ranges }
         })
@@ -301,7 +372,9 @@ impl ModDB {
         let mut tags: BTreeSet<String> = self.bases[base_id].tags.iter().cloned().collect();
         // Python walks the influences in set order; sorted keeps ours deterministic.
         for influence in influences {
-            let Some((_, suffix)) = INFLUENCE_TAGS.iter().find(|(k, _)| k == influence) else { continue };
+            let Some((_, suffix)) = INFLUENCE_TAGS.iter().find(|(k, _)| k == influence) else {
+                continue;
+            };
             let more: Vec<String> = tags.iter().map(|t| format!("{t}_{suffix}")).collect();
             tags.extend(more);
         }
@@ -310,7 +383,10 @@ impl ModDB {
 
     /// The weight of the first of the mod's spawn weights whose tag the item has, else 0.
     pub fn spawn_weight(m: &Mod, tags: &BTreeSet<String>) -> i64 {
-        m.spawn_weights.iter().find(|e| tags.contains(&e.tag)).map_or(0, |e| e.weight)
+        m.spawn_weights
+            .iter()
+            .find(|e| tags.contains(&e.tag))
+            .map_or(0, |e| e.weight)
     }
 
     /// Where a mod comes from on an item with these tags.
@@ -321,7 +397,11 @@ impl ModDB {
         if Self::spawn_weight(m, tags) > 0 {
             return "natural";
         }
-        if m.is_essence_only { "essence" } else { "special" }
+        if m.is_essence_only {
+            "essence"
+        } else {
+            "special"
+        }
     }
 
     /// Tier of a mod among its family's natural rolls on these tags (1 = highest required level).
@@ -332,13 +412,22 @@ impl ModDB {
     fn tier_at(&self, i: usize, tags: &BTreeSet<String>) -> Option<i64> {
         let m = self.mods.entry(i).1;
         let key = self.tier_key[i];
-        let cached = self.tiers.read().unwrap().get(tags).and_then(|t| t.get(&key).cloned());
+        let cached = self
+            .tiers
+            .read()
+            .unwrap()
+            .get(tags)
+            .and_then(|t| t.get(&key).cloned());
         // The cache is keyed by (type, generation type, tags) like Python's, so the
         // first caller's domain decides which family it holds.
         let levels = match cached {
             Some(l) => l,
             None => {
-                let family = self.families.get(&(m.domain.clone(), m.type_.clone(), m.generation_type.clone()));
+                let family = self.families.get(&(
+                    m.domain.clone(),
+                    m.type_.clone(),
+                    m.generation_type.clone(),
+                ));
                 let mut levels: Vec<i64> = family
                     .into_iter()
                     .flatten()
@@ -348,21 +437,32 @@ impl ModDB {
                     .collect();
                 levels.sort_unstable_by(|a, b| b.cmp(a));
                 levels.dedup();
-                let levels = std::sync::Arc::new(levels);
+                let levels = Arc::new(levels);
                 let mut w = self.tiers.write().unwrap();
-                w.entry(tags.clone()).or_default().entry(key).or_insert(levels).clone()
+                w.entry(tags.clone())
+                    .or_default()
+                    .entry(key)
+                    .or_insert(levels)
+                    .clone()
             }
         };
         if Self::spawn_weight(m, tags) <= 0 {
             return None;
         }
-        levels.iter().position(|&l| l == m.required_level).map(|p| p as i64 + 1)
+        levels
+            .iter()
+            .position(|&l| l == m.required_level)
+            .map(|p| p as i64 + 1)
     }
 
     /// Match an item's explicit mod lines to mods. (Python `ModDB.match`.)
     pub fn match_item(&self, item: &Item) -> ItemMatch {
         let Some(base_id) = self.find_base(&item.base) else {
-            return ItemMatch { item: item.clone(), unmatched: item.explicits.clone(), ..Default::default() };
+            return ItemMatch {
+                item: item.clone(),
+                unmatched: item.explicits.clone(),
+                ..Default::default()
+            };
         };
         let base = &self.bases[base_id];
         let tags = self.item_tags(base_id, &item.influences);
@@ -390,10 +490,14 @@ impl ModDB {
             if !remaining.contains(&line) {
                 continue;
             }
-            let Some(keys) = self.index.hybrids_by_line.get(&norms[line]) else { continue };
+            let Some(keys) = self.index.hybrids_by_line.get(&norms[line]) else {
+                continue;
+            };
             for &k in keys {
                 let key = &self.index.keys[k].0;
-                let Some(claimed) = claim(key, &remaining, &norms) else { continue };
+                let Some(claimed) = claim(key, &remaining, &norms) else {
+                    continue;
+                };
                 if let Some(found) = self.best(key, &claimed, &ctx, &norms) {
                     result.mods.push(found);
                     remaining.retain(|r| !claimed.contains(r));
@@ -403,7 +507,9 @@ impl ModDB {
         }
 
         for line in remaining.clone() {
-            if let Some(found) = self.best(std::slice::from_ref(&norms[line]), &[line], &ctx, &norms) {
+            if let Some(found) =
+                self.best(std::slice::from_ref(&norms[line]), &[line], &ctx, &norms)
+            {
                 result.mods.push(found);
                 remaining.retain(|&r| r != line);
             }
@@ -427,7 +533,8 @@ impl ModDB {
 
     /// An item whose explicit mods are known by id (e.g. from poe.ninja), no text matching.
     ///
-    /// Unknown ids are skipped.
+    /// Unknown ids are skipped. Mirrors Python's signature, hence the many arguments.
+    #[allow(clippy::too_many_arguments)]
     pub fn match_ids(
         &self,
         base: &str,
@@ -443,14 +550,23 @@ impl ModDB {
         item.influences = influences.clone();
         item.header = header.clone();
         let Some(base_id) = self.find_base(base) else {
-            return ItemMatch { item, ..Default::default() };
+            return ItemMatch {
+                item,
+                ..Default::default()
+            };
         };
         let b = &self.bases[base_id];
         let tags = self.item_tags(base_id, &item.influences);
         let mut found = Vec::new();
-        for (marker, ids) in [(None, &mods.explicit), (Some("fractured"), &mods.fractured), (Some("crafted"), &mods.crafted)] {
+        for (marker, ids) in [
+            (None, &mods.explicit),
+            (Some("fractured"), &mods.fractured),
+            (Some("crafted"), &mods.crafted),
+        ] {
             for id in ids {
-                let Some(i) = self.mods.position(id).filter(|&i| self.is_affix[i]) else { continue };
+                let Some(i) = self.mods.position(id).filter(|&i| self.is_affix[i]) else {
+                    continue;
+                };
                 let m = self.mods.entry(i).1;
                 let text = m.text.as_deref().unwrap_or(id).split('\n').next().unwrap();
                 let line = match marker {
@@ -458,7 +574,11 @@ impl ModDB {
                     None => ModLine::new(text),
                 };
                 let source = self.source_at(i, &b.item_class, &tags);
-                let tier = if source == "natural" { self.tier_at(i, &tags) } else { None };
+                let tier = if source == "natural" {
+                    self.tier_at(i, &tags)
+                } else {
+                    None
+                };
                 found.push(ModMatch {
                     mod_id: id.clone(),
                     kind: m.generation_type.clone(),
@@ -472,11 +592,21 @@ impl ModDB {
                 });
             }
         }
-        ItemMatch { item, base_id: Some(base_id.to_string()), item_class: Some(b.item_class.clone()), tags, mods: found, ..Default::default() }
+        ItemMatch {
+            item,
+            base_id: Some(base_id.to_string()),
+            item_class: Some(b.item_class.clone()),
+            tags,
+            mods: found,
+            ..Default::default()
+        }
     }
 
     fn known(&self, norm: &str) -> bool {
-        self.index.pos.contains_key(std::slice::from_ref(&norm.to_string())) || self.index.hybrids_by_line.contains_key(norm)
+        self.index
+            .pos
+            .contains_key(std::slice::from_ref(&norm.to_string()))
+            || self.index.hybrids_by_line.contains_key(norm)
     }
 
     /// Explain a line the game summed from a hybrid mod plus a single mod.
@@ -484,11 +614,20 @@ impl ModDB {
     /// E.g. `140% increased Energy Shield` = hybrid `(39-42)% ES / Stun
     /// Recovery` + `(92-100)% ES`. The hybrid's other lines must be on the item;
     /// if they were matched to a single mod already, the hybrid takes them over.
-    fn split(&self, line: usize, result: &mut ItemMatch, ctx: &Ctx, remaining: &[usize], norms: &[String]) -> bool {
+    fn split(
+        &self,
+        line: usize,
+        result: &mut ItemMatch,
+        ctx: &Ctx,
+        remaining: &[usize],
+        norms: &[String],
+    ) -> bool {
         let norm = &norms[line];
         let line_ref = &ctx.item.explicits[line];
         let value = line_values(line_ref);
-        let Some(keys) = self.index.hybrids_by_line.get(norm) else { return false };
+        let Some(keys) = self.index.hybrids_by_line.get(norm) else {
+            return false;
+        };
         for &k in keys {
             let key = &self.index.keys[k].0;
             let mut others: Vec<String> = key.clone();
@@ -496,13 +635,23 @@ impl ModDB {
                 others.remove(p);
             }
             // lines already explained by a single-line mod, by line position
-            let taken: HashSet<usize> = result.mods.iter().filter(|m| m.line_ids.len() == 1).map(|m| m.line_ids[0]).collect();
-            let pool: Vec<usize> =
-                (0..ctx.item.explicits.len()).filter(|&l| l != line && (taken.contains(&l) || remaining.contains(&l))).collect();
-            let Some(claimed) = claim(&others, &pool, norms) else { continue };
+            let taken: HashSet<usize> = result
+                .mods
+                .iter()
+                .filter(|m| m.line_ids.len() == 1)
+                .map(|m| m.line_ids[0])
+                .collect();
+            let pool: Vec<usize> = (0..ctx.item.explicits.len())
+                .filter(|&l| l != line && (taken.contains(&l) || remaining.contains(&l)))
+                .collect();
+            let Some(claimed) = claim(&others, &pool, norms) else {
+                continue;
+            };
             for hybrid_pos in self.candidates(key, ctx, line_ref.crafted()) {
                 let h = self.template(hybrid_pos);
-                let h_other: Vec<usize> = (0..h.lines.len()).filter(|&j| normalize(&h.lines[j]) != *norm).collect();
+                let h_other: Vec<usize> = (0..h.lines.len())
+                    .filter(|&j| normalize(&h.lines[j]) != *norm)
+                    .collect();
                 if !claimed
                     .iter()
                     .zip(&h_other)
@@ -510,16 +659,27 @@ impl ModDB {
                 {
                     continue;
                 }
-                let Some(own) = (0..h.lines.len()).find(|&j| normalize(&h.lines[j]) == *norm) else { continue };
+                let Some(own) = (0..h.lines.len()).find(|&j| normalize(&h.lines[j]) == *norm)
+                else {
+                    continue;
+                };
                 let h_range = &h.ranges[own];
-                for single_pos in self.candidates(std::slice::from_ref(norm), ctx, line_ref.crafted()) {
+                for single_pos in
+                    self.candidates(std::slice::from_ref(norm), ctx, line_ref.crafted())
+                {
                     let s_range = template_ranges(self.mods.entry(single_pos).1.text_or_empty());
-                    let summed: Vec<(f64, f64)> = h_range.iter().zip(&s_range).map(|(a, b)| (a.0 + b.0, a.1 + b.1)).collect();
+                    let summed: Vec<(f64, f64)> = h_range
+                        .iter()
+                        .zip(&s_range)
+                        .map(|(a, b)| (a.0 + b.0, a.1 + b.1))
+                        .collect();
                     if !fits(&value, &summed) {
                         continue;
                     }
                     for &l in &claimed {
-                        if let Some(p) = result.mods.iter().position(|m| m.line_ids.len() == 1 && m.line_ids[0] == l && taken.contains(&l)) {
+                        if let Some(p) = result.mods.iter().position(|m| {
+                            m.line_ids.len() == 1 && m.line_ids[0] == l && taken.contains(&l)
+                        }) {
                             result.mods.remove(p);
                         }
                     }
@@ -529,7 +689,10 @@ impl ModDB {
                             if normalize(&h.lines[j]) == *norm {
                                 line
                             } else {
-                                let first = h_other.iter().position(|&o| h.lines[o] == h.lines[j]).unwrap();
+                                let first = h_other
+                                    .iter()
+                                    .position(|&o| h.lines[o] == h.lines[j])
+                                    .unwrap();
                                 claimed[first]
                             }
                         })
@@ -547,14 +710,18 @@ impl ModDB {
 
     /// Mods with this template that could be on the item, best first.
     fn candidates(&self, key: &[String], ctx: &Ctx, crafted: bool) -> Vec<usize> {
-        let Some(&k) = self.index.pos.get(key) else { return vec![] };
+        let Some(&k) = self.index.pos.get(key) else {
+            return vec![];
+        };
         let mut out: Vec<((bool, bool, i32, i64), usize)> = Vec::new();
         for &i in &self.index.keys[k].1 {
             let m = self.mods.entry(i).1;
             if (m.domain == "crafted") != crafted {
                 continue;
             }
-            if m.domain != ctx.base_domain && !(extra_domain(&m.domain).is_some() && ctx.base_domain == "item") {
+            if m.domain != ctx.base_domain
+                && !(extra_domain(&m.domain).is_some() && ctx.base_domain == "item")
+            {
                 continue;
             }
             out.push((self.rank(i, ctx), i));
@@ -583,8 +750,17 @@ impl ModDB {
         )
     }
 
-    fn best(&self, key: &[String], lines: &[usize], ctx: &Ctx, _norms: &[String]) -> Option<ModMatch> {
-        let values: Vec<Vec<f64>> = lines.iter().map(|&l| line_values(&ctx.item.explicits[l])).collect();
+    fn best(
+        &self,
+        key: &[String],
+        lines: &[usize],
+        ctx: &Ctx,
+        _norms: &[String],
+    ) -> Option<ModMatch> {
+        let values: Vec<Vec<f64>> = lines
+            .iter()
+            .map(|&l| line_values(&ctx.item.explicits[l]))
+            .collect();
         let crafted = lines.iter().any(|&l| ctx.item.explicits[l].crafted());
         let fitting: Vec<usize> = self
             .candidates(key, ctx, crafted)
@@ -603,7 +779,14 @@ impl ModDB {
         Some(self.make(first, lines, ctx, ties.count(), false))
     }
 
-    fn make(&self, i: usize, lines: &[usize], ctx: &Ctx, alternatives: usize, merged: bool) -> ModMatch {
+    fn make(
+        &self,
+        i: usize,
+        lines: &[usize],
+        ctx: &Ctx,
+        alternatives: usize,
+        merged: bool,
+    ) -> ModMatch {
         let (id, m) = self.mods.entry(i);
         let source = self.source_at(i, ctx.item_class, ctx.tags);
         ModMatch {
@@ -611,8 +794,15 @@ impl ModDB {
             kind: m.generation_type.clone(),
             family: m.type_.clone(),
             source,
-            tier: if source == "natural" { self.tier_at(i, ctx.tags) } else { None },
-            lines: lines.iter().map(|&l| ctx.item.explicits[l].clone()).collect(),
+            tier: if source == "natural" {
+                self.tier_at(i, ctx.tags)
+            } else {
+                None
+            },
+            lines: lines
+                .iter()
+                .map(|&l| ctx.item.explicits[l].clone())
+                .collect(),
             line_ids: lines.to_vec(),
             alternatives,
             merged,
@@ -624,7 +814,10 @@ impl ModDB {
 fn claim(key: &[String], lines: &[usize], norms: &[String]) -> Option<Vec<usize>> {
     let mut claimed: Vec<usize> = Vec::with_capacity(key.len());
     for norm in key {
-        let line = lines.iter().copied().find(|l| !claimed.contains(l) && norms[*l] == *norm)?;
+        let line = lines
+            .iter()
+            .copied()
+            .find(|l| !claimed.contains(l) && norms[*l] == *norm)?;
         claimed.push(line);
     }
     Some(claimed)
@@ -645,7 +838,10 @@ pub fn bench_from(options: &[data::BenchOption]) -> Bench {
     for option in options {
         if let Some(mod_id) = option.add_explicit_mod().filter(|m| !m.is_empty()) {
             for class in &option.item_classes {
-                bench.entry(class.clone()).or_default().insert(mod_id.to_string());
+                bench
+                    .entry(class.clone())
+                    .or_default()
+                    .insert(mod_id.to_string());
             }
         }
     }

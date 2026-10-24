@@ -61,7 +61,10 @@ pub struct ModLine {
 
 impl ModLine {
     pub fn new(text: impl Into<String>) -> Self {
-        ModLine { text: text.into(), markers: BTreeMap::new() }
+        ModLine {
+            text: text.into(),
+            markers: BTreeMap::new(),
+        }
     }
 
     /// A line with one marker, e.g. `ModLine::with_marker("+1 to X", "crafted")`.
@@ -82,7 +85,11 @@ impl ModLine {
     /// PoB's position within the roll range (0..1), if it recorded one.
     pub fn roll(&self) -> Option<f64> {
         let value = self.markers.get("range")?;
-        if value.is_empty() { None } else { value.parse().ok() }
+        if value.is_empty() {
+            None
+        } else {
+            value.parse().ok()
+        }
     }
 }
 
@@ -103,8 +110,17 @@ pub struct Item {
 }
 
 impl Item {
-    pub fn new(rarity: impl Into<String>, name: impl Into<String>, base: impl Into<String>) -> Self {
-        Item { rarity: rarity.into(), name: name.into(), base: base.into(), ..Default::default() }
+    pub fn new(
+        rarity: impl Into<String>,
+        name: impl Into<String>,
+        base: impl Into<String>,
+    ) -> Self {
+        Item {
+            rarity: rarity.into(),
+            name: name.into(),
+            base: base.into(),
+            ..Default::default()
+        }
     }
 }
 
@@ -121,7 +137,18 @@ pub(crate) fn py_splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut chars = s.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
             if c == '\r' && matches!(chars.peek(), Some((_, '\n'))) {
@@ -155,17 +182,28 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
         .filter(|l| !l.is_empty())
         .collect();
     if lines.is_empty() || !lines[0].starts_with("Rarity:") {
-        return Err(ItemError(format!("not a PoB item: {:?}", &lines[..lines.len().min(1)])));
+        return Err(ItemError(format!(
+            "not a PoB item: {:?}",
+            &lines[..lines.len().min(1)]
+        )));
     }
     let rarity = py_strip(lines[0].split_once(':').unwrap().1).to_uppercase();
     let (name, base, rest): (String, String, &[String]);
     if matches!(rarity.as_str(), "RARE" | "UNIQUE" | "RELIC") {
-        let get = |i: usize| lines.get(i).cloned().ok_or_else(|| ItemError("item has no name".into()));
+        let get = |i: usize| {
+            lines
+                .get(i)
+                .cloned()
+                .ok_or_else(|| ItemError("item has no name".into()))
+        };
         name = get(1)?;
         base = get(2)?;
         rest = lines.get(3..).unwrap_or(&[]);
     } else {
-        let n = lines.get(1).cloned().ok_or_else(|| ItemError("item has no name".into()))?;
+        let n = lines
+            .get(1)
+            .cloned()
+            .ok_or_else(|| ItemError("item has no name".into()))?;
         name = n.clone();
         base = n;
         rest = &lines[2..];
@@ -194,7 +232,8 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
             }
             item.header.insert(key.to_string(), value.to_string());
             if (key == "Prefix" || key == "Suffix") && value != "None" {
-                item.pob_affixes.push((key.to_lowercase(), strip_markers(value).0));
+                item.pob_affixes
+                    .push((key.to_lowercase(), strip_markers(value).0));
             }
         } else {
             i -= 1; // no Implicits header; the mod lines start here
@@ -216,19 +255,35 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
 
     // The implicit count includes lines of every variant, so split before filtering.
     let n = implicit_count.unwrap_or(0);
-    let cut = if n >= 0 { (n as usize).min(body.len()) } else { (body.len() as i64 + n).max(0) as usize };
+    let cut = if n >= 0 {
+        (n as usize).min(body.len())
+    } else {
+        (body.len() as i64 + n).max(0) as usize
+    };
     item.implicits = mod_lines(&body[..cut], variant.as_deref());
     item.explicits = mod_lines(&body[cut..], variant.as_deref());
     Ok(item)
 }
 
 const SEPARATOR: &str = "--------";
-static COPIED_MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*\((implicit|crafted|fractured|enchant|scourge|crucible)\)$").unwrap());
+static COPIED_MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\s*\((implicit|crafted|fractured|enchant|scourge|crucible)\)$").unwrap()
+});
 // advanced copy: "105(100-109)"
-static COPIED_RANGE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([0-9]+(?:\.[0-9]+)?)\(-?[0-9]+(?:\.[0-9]+)?-[0-9]+(?:\.[0-9]+)?\)").unwrap());
-const COPIED_SKIP: &[&str] = &["Requirements:", "Sockets:", "Item Level:", "Quality", "Note:", "Level:", "Str:", "Dex:", "Int:"];
+static COPIED_RANGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"([0-9]+(?:\.[0-9]+)?)\(-?[0-9]+(?:\.[0-9]+)?-[0-9]+(?:\.[0-9]+)?\)").unwrap()
+});
+const COPIED_SKIP: &[&str] = &[
+    "Requirements:",
+    "Sockets:",
+    "Item Level:",
+    "Quality",
+    "Note:",
+    "Level:",
+    "Str:",
+    "Dex:",
+    "Int:",
+];
 
 /// The game's copy format: sections between "--------" lines.
 ///
@@ -239,11 +294,24 @@ const COPIED_SKIP: &[&str] = &["Requirements:", "Sockets:", "Item Level:", "Qual
 fn parse_copied(text: &str) -> Result<Item, ItemError> {
     let sections: Vec<Vec<&str>> = py_strip(text)
         .split(SEPARATOR)
-        .map(|part| py_splitlines(py_strip(part)).into_iter().map(py_strip).filter(|l| !l.is_empty()).collect())
+        .map(|part| {
+            py_splitlines(py_strip(part))
+                .into_iter()
+                .map(py_strip)
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
         .collect();
-    let head: Vec<&str> = sections[0].iter().copied().filter(|l| !l.starts_with("Item Class:")).collect();
+    let head: Vec<&str> = sections[0]
+        .iter()
+        .copied()
+        .filter(|l| !l.starts_with("Item Class:"))
+        .collect();
     if head.is_empty() || !head[0].starts_with("Rarity:") {
-        return Err(ItemError(format!("not a copied item: {:?}", &head[..head.len().min(1)])));
+        return Err(ItemError(format!(
+            "not a copied item: {:?}",
+            &head[..head.len().min(1)]
+        )));
     }
     let rarity = py_strip(head[0].split_once(':').unwrap().1).to_uppercase();
     let names = &head[1..];
@@ -262,7 +330,9 @@ fn parse_copied(text: &str) -> Result<Item, ItemError> {
                 item.quality = int(Some(&digits)).unwrap_or(0);
             }
         }
-        if section.iter().all(|l| l.contains(':')) || COPIED_SKIP.iter().any(|p| section[0].starts_with(p)) {
+        if section.iter().all(|l| l.contains(':'))
+            || COPIED_SKIP.iter().any(|p| section[0].starts_with(p))
+        {
             continue; // properties, requirements, sockets, item level, notes
         }
         for &line in section {
@@ -273,14 +343,19 @@ fn parse_copied(text: &str) -> Result<Item, ItemError> {
             } else if line.starts_with('{') {
                 continue; // advanced copy: { Prefix Modifier "Virile" (Tier: 1) — Life }
             } else {
-                let kind = COPIED_MARKER.captures(line).map(|c| c.get(1).unwrap().as_str()).unwrap_or("");
+                let kind = COPIED_MARKER
+                    .captures(line)
+                    .map(|c| c.get(1).unwrap().as_str())
+                    .unwrap_or("");
                 let stripped = COPIED_MARKER.replace(line, "");
                 let ranged = COPIED_RANGE.replace_all(&stripped, "$1");
                 let line = ranged.split(" — ").next().unwrap().to_string();
                 match kind {
                     "implicit" => item.implicits.push(ModLine::new(line)),
                     "" => item.explicits.push(ModLine::new(line)),
-                    "crafted" | "fractured" => item.explicits.push(ModLine::with_marker(line, kind)),
+                    "crafted" | "fractured" => {
+                        item.explicits.push(ModLine::with_marker(line, kind))
+                    }
                     _ => {}
                 }
             }
@@ -311,8 +386,31 @@ fn strip_markers(line: &str) -> (String, BTreeMap<String, String>) {
     let mut markers = BTreeMap::new();
     let mut line = line;
     while let Some(m) = MARKER.captures(line) {
-        markers.insert(m[1].to_string(), m.get(2).map_or("", |g| g.as_str()).to_string());
+        markers.insert(
+            m[1].to_string(),
+            m.get(2).map_or("", |g| g.as_str()).to_string(),
+        );
         line = &line[m.get(0).unwrap().end()..];
     }
     (py_strip(line).to_string(), markers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splitlines_like_python() {
+        assert_eq!(
+            py_splitlines("a\nb\r\nc\rd\u{2028}e\n"),
+            ["a", "b", "c", "d", "e"]
+        );
+        assert_eq!(py_splitlines(""), Vec::<&str>::new());
+        assert_eq!(py_splitlines("a\n\nb"), ["a", "", "b"]);
+    }
+
+    #[test]
+    fn strip_like_python() {
+        assert_eq!(py_strip(" \t\x1fx\u{a0}\n"), "x");
+    }
 }

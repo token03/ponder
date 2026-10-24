@@ -42,7 +42,9 @@ pub enum DataError {
 impl fmt::Display for DataError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DataError::Missing(p) => write!(f, "{} missing; run `ponder data fetch` first", p.display()),
+            DataError::Missing(p) => {
+                write!(f, "{} missing; run `ponder data fetch` first", p.display())
+            }
             DataError::Io(p, e) => write!(f, "{}: {e}", p.display()),
             DataError::Parse(p, e) => write!(f, "{}: {e}", p.display()),
         }
@@ -66,7 +68,12 @@ pub fn env(name: &str) -> Option<String> {
         let line = line.strip_prefix("export ").unwrap_or(line);
         let (key, value) = line.split_once('=').unwrap_or((line, ""));
         if key.trim() == name && !value.trim().is_empty() {
-            return Some(value.trim().trim_matches(|c| c == '\'' || c == '"').to_string());
+            return Some(
+                value
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_string(),
+            );
         }
     }
     None
@@ -76,20 +83,27 @@ pub fn env(name: &str) -> Option<String> {
 pub fn data_dir() -> PathBuf {
     match std::env::var_os("PONDER_DATA") {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => std::env::current_dir().unwrap_or_default().join(".cache").join("repoe"),
+        _ => std::env::current_dir()
+            .unwrap_or_default()
+            .join(".cache")
+            .join("repoe"),
     }
 }
 
 /// Are the files matching needs (mods and base items) in `dest` (default: [`data_dir`])?
 pub fn available(dest: Option<&Path>) -> bool {
     let dest = dest.map(Path::to_path_buf).unwrap_or_else(data_dir);
-    ["mods", "base_items"].iter().all(|n| dest.join(format!("{n}.json")).is_file())
+    ["mods", "base_items"]
+        .iter()
+        .all(|n| dest.join(format!("{n}.json")).is_file())
 }
 
 /// The game version the data was exported from, if recorded.
 pub fn version(dest: Option<&Path>) -> Option<String> {
     let dest = dest.map(Path::to_path_buf).unwrap_or_else(data_dir);
-    std::fs::read_to_string(dest.join("version.txt")).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(dest.join("version.txt"))
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 // -- loading --------------------------------------------------------------------------
@@ -105,7 +119,10 @@ pub fn load_from<T: DeserializeOwned>(dir: &Path, name: &str) -> Result<T, DataE
 }
 
 /// `load_from` in [`data_dir`], remembered in `slot` for the life of the process.
-fn cached<T: DeserializeOwned>(slot: &'static OnceLock<Arc<T>>, name: &str) -> Result<Arc<T>, DataError> {
+fn cached<T: DeserializeOwned>(
+    slot: &'static OnceLock<Arc<T>>,
+    name: &str,
+) -> Result<Arc<T>, DataError> {
     if let Some(v) = slot.get() {
         return Ok(v.clone());
     }
@@ -121,7 +138,12 @@ pub fn load(name: &str) -> Result<Arc<serde_json::Value>, DataError> {
         return Ok(v.clone());
     }
     let v = Arc::new(load_from::<serde_json::Value>(&data_dir(), name)?);
-    Ok(cache.lock().unwrap().entry(name.to_string()).or_insert(v).clone())
+    Ok(cache
+        .lock()
+        .unwrap()
+        .entry(name.to_string())
+        .or_insert(v)
+        .clone())
 }
 
 // -- a JSON object that remembers its key order -----------------------------------------
@@ -136,7 +158,10 @@ pub struct OrderedMap<T> {
 
 impl<T> Default for OrderedMap<T> {
     fn default() -> Self {
-        OrderedMap { entries: Vec::new(), index: HashMap::new() }
+        OrderedMap {
+            entries: Vec::new(),
+            index: HashMap::new(),
+        }
     }
 }
 
@@ -199,7 +224,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for OrderedMap<T> {
             }
             fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
                 let n = m.size_hint().unwrap_or(0);
-                let mut out = OrderedMap { entries: Vec::with_capacity(n), index: HashMap::with_capacity(n) };
+                let mut out = OrderedMap {
+                    entries: Vec::with_capacity(n),
+                    index: HashMap::with_capacity(n),
+                };
                 while let Some((k, v)) = m.next_entry::<String, T>()? {
                     out.insert(k, v);
                 }
@@ -370,7 +398,9 @@ pub struct BenchOption {
 impl BenchOption {
     /// The mod id this option adds, if any (Python `(o.get("actions") or {}).get("add_explicit_mod")`).
     pub fn add_explicit_mod(&self) -> Option<&str> {
-        self.actions.as_ref().and_then(|a| a.add_explicit_mod.as_deref())
+        self.actions
+            .as_ref()
+            .and_then(|a| a.add_explicit_mod.as_deref())
     }
 }
 
@@ -459,3 +489,43 @@ typed!(/// `stat_translations.json` (ids and trade stats only).
     stat_translations, "stat_translations", Vec<StatTranslation>);
 typed!(/// `item_classes.json`.
     item_classes, "item_classes", OrderedMap<ItemClass>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordered_map_keeps_file_order_and_first_position() {
+        let m: OrderedMap<i32> =
+            serde_json::from_str(r#"{"b": 1, "a": 2, "c": 3, "b": 4}"#).unwrap();
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["b", "a", "c"]);
+        assert_eq!(m["b"], 4);
+        assert_eq!(m.position("c"), Some(2));
+        assert!(m.get("zzz").is_none());
+    }
+
+    #[test]
+    fn mod_reads_only_what_it_needs() {
+        let m: Mod = serde_json::from_str(
+            r#"{"domain":"item","generation_type":"suffix","groups":["Strength"],"implicit_tags":["attribute"],
+                "is_essence_only":false,"name":"of the Brute","required_level":1,
+                "spawn_weights":[{"tag":"ring","weight":1000}],"stats":[{"id":"additional_strength","max":12,"min":8}],
+                "text":"+(8-12) to Strength","type":"Strength","gold_value":null,"grants_effects":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (m.type_.as_str(), m.stats[0].min, m.spawn_weights[0].weight),
+            ("Strength", 8.0, 1000)
+        );
+        let none: Mod = serde_json::from_str(r#"{"text":null}"#).unwrap();
+        assert_eq!(none.text_or_empty(), "");
+    }
+
+    #[test]
+    fn missing_file_is_a_missing_error() {
+        let err = load_from::<serde_json::Value>(Path::new("/nonexistent-ponder-dir"), "mods")
+            .unwrap_err();
+        assert!(matches!(err, DataError::Missing(_)));
+        assert!(!available(Some(Path::new("/nonexistent-ponder-dir"))));
+    }
+}
