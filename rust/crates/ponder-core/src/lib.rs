@@ -19,3 +19,6 @@ pub use solve::{
 };
 pub use steps::{Exit, Step, describe, describe_parts, recipe, recipe_states, steps};
 pub use types::*;
+
+#[cfg(test)]
+mod tests;
