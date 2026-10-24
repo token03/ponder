@@ -155,6 +155,9 @@ impl App {
                 if let Some(d) = &s.data {
                     ui.label(RichText::new(format!("{} · divine {:.0}c · prices {}", d.report.league, d.report.divine, d.report.prices_source)).weak());
                 }
+                if s.data.is_some() && !s.has_cookie {
+                    ui.separator();
+                }
                 if !s.has_cookie {
                     ui.label(RichText::new("no POESESSID: trade off").weak()).on_hover_text("put POESESSID=... in a git-ignored .env to price on trade");
                 }
@@ -279,7 +282,7 @@ impl eframe::App for App {
             egui::Window::new("About ponder").open(&mut self.about).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
                 ui.label("ponder finds Path of Exile 3.30 market holes: what ladder characters wear, the cheapest way to craft it, and what trade has.");
                 ui.label("Costs are expected chaos per finished item from the solver (currency, bench crafts and clicking time).");
-                ui.label("Click a column header to sort; ↑/↓ and PgUp/PgDn move through the table; drag tabs to rearrange the panes.");
+                ui.label("Click a column header to sort; ⬆/⬇ and PgUp/PgDn move through the table; drag tabs to rearrange the panes.");
             });
         }
     }

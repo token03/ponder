@@ -125,7 +125,7 @@ fn no_run(ui: &mut Ui, s: &State) -> bool {
     } else if s.jobs.is_running("ladder") {
         "running the ladder pipeline…"
     } else if !s.has_ladder {
-        "no ladder data yet: Run → Fetch ladder characters, then Run ladder"
+        "no ladder data yet: Run ➡ Fetch ladder characters, then Run ladder"
     } else {
         "press Run ladder (left) to cost what the ladder wears"
     };
@@ -189,35 +189,37 @@ fn crafts(ui: &mut Ui, s: &mut State) {
                 let i = rows[row.index()];
                 let e = &est[i];
                 row.set_selected(s.selected == Some(i));
-                row.col(|ui| {
-                    ui.label(RichText::new(s.ranks.get(i).copied().unwrap_or(0).to_string()).weak().monospace());
-                });
-                row.col(|ui| {
-                    let t = if e.kind == "cluster" { RichText::new(&e.title).italics() } else { RichText::new(&e.title) };
-                    let r = ui.label(t);
-                    if e.error.is_some() {
-                        r.on_hover_text(e.error.as_deref().unwrap_or_default());
-                    } else {
-                        r.on_hover_text(format!("{} · {} bases", e.base, e.bases));
-                    }
-                });
-                for col in [Col::Craft, Col::Fractured, Col::Recomb, Col::Cheapest, Col::Market] {
-                    row.col(|ui| {
-                        ui.label(money(col.value(e), divine));
+                for col in Col::ALL {
+                    row.col(|ui| match col {
+                        Col::Rank => {
+                            ui.label(RichText::new(s.ranks.get(i).copied().unwrap_or(0).to_string()).weak().monospace());
+                        }
+                        Col::Item => {
+                            let t = if e.kind == "cluster" { RichText::new(&e.title).italics() } else { RichText::new(&e.title) };
+                            let r = ui.label(t);
+                            if e.error.is_some() {
+                                r.on_hover_text(e.error.as_deref().unwrap_or_default());
+                            } else {
+                                r.on_hover_text(format!("{} · {} bases", e.base, e.bases));
+                            }
+                        }
+                        Col::Margin => {
+                            ui.label(signed(e.margin(), divine, dark));
+                        }
+                        Col::Hole => {
+                            ui.label(RichText::new(e.hole().map_or("–".into(), |h| format!("{h:.1}"))).monospace());
+                        }
+                        Col::Demand => {
+                            ui.label(RichText::new(e.demand.to_string()).monospace());
+                        }
+                        Col::Mods => {
+                            ui.label(e.targets.join(" · "));
+                        }
+                        Col::Craft | Col::Fractured | Col::Recomb | Col::Cheapest | Col::Market => {
+                            ui.label(money(col.value(e), divine));
+                        }
                     });
                 }
-                row.col(|ui| {
-                    ui.label(signed(e.margin(), divine, dark));
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(e.hole().map_or("–".into(), |h| format!("{h:.1}"))).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(e.demand.to_string()).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(e.targets.join(" · "));
-                });
                 if row.response().clicked() {
                     clicked_row = Some(i);
                 }
@@ -259,8 +261,9 @@ fn overview(ui: &mut Ui, s: &mut State) {
         ] {
             ui.group(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(k).small().weak());
-                    ui.label(RichText::new(v).strong());
+                    // never wrapped: a card that doesn't fit moves to the next line
+                    ui.add(egui::Label::new(RichText::new(k).small().weak()).extend());
+                    ui.add(egui::Label::new(RichText::new(v).strong()).extend());
                 });
             });
         }
@@ -364,10 +367,10 @@ fn item(ui: &mut Ui, s: &mut State) {
         actions(ui, s, &e);
         ui.separator();
 
-        ui.columns(2, |cols| {
-            costs(&mut cols[0], &e, divine, dark);
-            mods(&mut cols[1], &e, dark);
-        });
+        // mod lines are long: one section above the other
+        mods(ui, &e, dark);
+        ui.add_space(6.0);
+        costs(ui, &e, divine, dark);
         ui.separator();
         currency(ui, &e, divine);
     });
@@ -394,7 +397,7 @@ fn actions(ui: &mut Ui, s: &mut State, e: &Estimate) {
             s.starts_selected();
         }
         if ui
-            .add_enabled(e.kind == "gear" && !busy(s, "recombinator"), egui::Button::new("⚗ Cost recombinator"))
+            .add_enabled(e.kind == "gear" && !busy(s, "recombinator"), egui::Button::new("♻ Cost recombinator"))
             .on_hover_text("cheapest recombinator tree of clean donors (NNN padding included)")
             .clicked()
         {
@@ -414,7 +417,9 @@ fn costs(ui: &mut Ui, e: &Estimate, divine: f64, dark: bool) {
         let line = |ui: &mut Ui, k: &str, v: RichText, note: String| {
             ui.label(RichText::new(k).weak());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(v));
-            ui.label(RichText::new(note).weak().small());
+            if !note.is_empty() {
+                ui.add(egui::Label::new(RichText::new(&note).weak().small()).truncate()).on_hover_text(note);
+            }
             ui.end_row();
         };
         line(ui, "craft", money(e.craft_cost(), divine), "expected".into());
@@ -525,7 +530,7 @@ fn recipe(ui: &mut Ui, s: &mut State) {
                 });
                 for (k, (action, when, per)) in st.actions.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(if k == 0 { "→" } else { "  or" });
+                        ui.label(if k == 0 { "➡" } else { "  or" });
                         ui.label(RichText::new(action).strong());
                         if !when.is_empty() {
                             ui.label(RichText::new(format!("when {when}")).weak());
@@ -547,7 +552,7 @@ fn recipe(ui: &mut Ui, s: &mut State) {
                                 if ui.link(text.clone()).on_hover_text(format!("go to step {to}")).clicked() {
                                     go = Some(to);
                                 }
-                                ui.label(RichText::new(format!("→{to}")).weak().small());
+                                ui.label(RichText::new(format!("➡{to}")).weak().small());
                             }
                             None => {
                                 ui.label(text);
@@ -681,7 +686,7 @@ fn products(ui: &mut Ui, s: &mut State) {
         ui.separator();
         ui.label(RichText::new("Half-done items on trade").strong());
         if e.starts.is_empty() {
-            ui.label(RichText::new("none fetched yet: Item → Find half-done items").weak());
+            ui.label(RichText::new("none fetched yet: Item ➡ Find half-done items").weak());
         } else {
             link_row(ui, "the search", e.starts_url.as_deref());
             finishes_table(ui, "starts", &e.starts, divine, dark);
@@ -697,7 +702,7 @@ fn finishes_table(ui: &mut Ui, id: &str, found: &[Finish], divine: f64, dark: bo
     for (k, f) in found.iter().enumerate() {
         let d = f.to_dict();
         let have = d["have"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ")).unwrap_or_default();
-        let head = format!("{} → {}", if have.is_empty() { "nothing useful" } else { &have }, f.product);
+        let head = format!("{} ➡ {}", if have.is_empty() { "nothing useful" } else { &have }, f.product);
         egui::CollapsingHeader::new(RichText::new(head).strong()).id_salt((id, k)).show(ui, |ui| {
             egui::Grid::new((id, k, "grid")).num_columns(2).show(ui, |ui| {
                 ui.label(RichText::new("targets").weak());
@@ -736,7 +741,7 @@ fn finishes_table(ui: &mut Ui, id: &str, found: &[Finish], divine: f64, dark: bo
             }
             for st in f.steps() {
                 ui.label(format!(
-                    "{}. {} {} → {}",
+                    "{}. {} {} ➡ {}",
                     st.number,
                     rarity(st.rarity),
                     if st.have.is_empty() { "nothing yet".into() } else { st.have.join(" + ") },
@@ -754,7 +759,7 @@ fn recomb(ui: &mut Ui, s: &mut State) {
     let divine = s.divine();
     let e = &s.estimates()[i];
     let Some(r) = &e.recomb else {
-        empty(ui, "no recombinator tree yet: Item → Cost recombinator, or tick recombinators in the run settings");
+        empty(ui, "no recombinator tree yet: Item ➡ Cost recombinator, or tick recombinators in the run settings");
         return;
     };
     ui.horizontal(|ui| {

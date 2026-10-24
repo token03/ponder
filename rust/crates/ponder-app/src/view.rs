@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use ponder::pipeline::{Estimate, cmp_priority};
+use ponder::pipeline::{Estimate, cmp_ladder};
 use serde::{Deserialize, Serialize};
 
 /// Chaos as render.py prints it: divines above one divine, whole chaos above 10.
@@ -169,7 +169,7 @@ pub enum Col {
 
 impl Col {
     pub const ALL: [Col; 11] =
-        [Col::Rank, Col::Item, Col::Craft, Col::Fractured, Col::Recomb, Col::Cheapest, Col::Market, Col::Margin, Col::Hole, Col::Demand, Col::Mods];
+        [Col::Rank, Col::Item, Col::Demand, Col::Cheapest, Col::Market, Col::Margin, Col::Hole, Col::Craft, Col::Fractured, Col::Recomb, Col::Mods];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -189,7 +189,7 @@ impl Col {
 
     pub fn tooltip(self) -> &'static str {
         match self {
-            Col::Rank => "best first: known margins, then the dearest crafts",
+            Col::Rank => "best first: market holes, then what most ladder characters wear",
             Col::Item => "the base group (every base that rolls the same mods)",
             Col::Craft => "expected cost from a fresh base: currency, bench crafts and clicking time",
             Col::Fractured => "cheapest total starting from a base with one target already fractured",
@@ -247,7 +247,7 @@ impl Sort {
 
     fn cmp(&self, a: &Estimate, b: &Estimate) -> Ordering {
         let ord = match self.col {
-            Col::Rank => cmp_priority(a, b),
+            Col::Rank => cmp_ladder(a, b),
             Col::Item => a.title.cmp(&b.title).then_with(|| a.targets.cmp(&b.targets)),
             Col::Mods => a.targets.len().cmp(&b.targets.len()).then_with(|| a.targets.cmp(&b.targets)),
             col => {
@@ -261,7 +261,7 @@ impl Sort {
                     (None, Some(_)) => Ordering::Greater,
                     (None, None) => Ordering::Equal,
                 }
-                .then_with(|| cmp_priority(a, b));
+                .then_with(|| cmp_ladder(a, b));
             }
         };
         if self.descending { ord.reverse() } else { ord }
@@ -278,7 +278,7 @@ pub fn visible(estimates: &[Estimate], filters: &Filters, sort: Sort) -> Vec<usi
 /// Each estimate's place in the pipeline's own ranking (1 = best).
 pub fn ranks(estimates: &[Estimate]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..estimates.len()).collect();
-    idx.sort_by(|&a, &b| cmp_priority(&estimates[a], &estimates[b]));
+    idx.sort_by(|&a, &b| cmp_ladder(&estimates[a], &estimates[b]));
     let mut rank = vec![0; estimates.len()];
     for (r, i) in idx.into_iter().enumerate() {
         rank[i] = r + 1;

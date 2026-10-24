@@ -127,7 +127,7 @@ impl State {
             started: Instant::now(),
         };
         if !s.has_ladder {
-            s.note("no ladder data yet: `ponder ladder fetch` downloads it (or use Run → Fetch ladder)");
+            s.note("no ladder data yet: `ponder ladder fetch` downloads it (or use Run ➡ Fetch ladder)");
         }
         s
     }

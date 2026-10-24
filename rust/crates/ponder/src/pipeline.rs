@@ -35,6 +35,6 @@ pub use run::{LadderOpts, RunOpts, build_name, current_league, expand_sources, l
 pub use solving::{SolveSlot, Solvable, slots_of, solve_all, solve_one, solve_slots};
 pub use tree::{MAX_SALES, MIN_SALE, SALE_SHARE, add_sales, covers, link_products, short_name};
 pub use types::{
-    BuildInfo, Estimate, Fracture, JEWELLERY, Key, LadderReport, ProductRef, RecombInfo, Report, Search, Shared, Slot, cmp_priority, priority,
+    BuildInfo, Estimate, Fracture, JEWELLERY, Key, LadderReport, ProductRef, RecombInfo, Report, Search, Shared, Slot, cmp_ladder, cmp_priority, priority,
     snapshot_products,
 };

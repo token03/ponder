@@ -562,6 +562,12 @@ pub fn cmp_priority(a: &Estimate, b: &Estimate) -> std::cmp::Ordering {
     x.0.cmp(&y.0).then(cmp_f(x.1, y.1)).then(x.2.cmp(&y.2)).then(x.3.cmp(&y.3)).then(cmp_f(x.4, y.4))
 }
 
+/// `LadderReport::ranked`'s order: market holes first (margin x wearers per listing), then
+/// unpriced ones by ladder demand.
+pub fn cmp_ladder(a: &Estimate, b: &Estimate) -> std::cmp::Ordering {
+    (a.hole().is_none()).cmp(&b.hole().is_none()).then(cmp_f(-a.hole().unwrap_or(0.0), -b.hole().unwrap_or(0.0))).then(b.demand.cmp(&a.demand))
+}
+
 #[derive(Clone, Debug)]
 pub struct LadderReport {
     pub characters: usize,
@@ -582,12 +588,7 @@ impl LadderReport {
     /// Market holes first (margin x wearers per listing), then unpriced ones by ladder demand.
     pub fn ranked(&self) -> Vec<&Estimate> {
         let mut v: Vec<&Estimate> = self.estimates.iter().collect();
-        v.sort_by(|a, b| {
-            (a.hole().is_none())
-                .cmp(&b.hole().is_none())
-                .then(cmp_f(-a.hole().unwrap_or(0.0), -b.hole().unwrap_or(0.0)))
-                .then(b.demand.cmp(&a.demand))
-        });
+        v.sort_by(|a, b| cmp_ladder(a, b));
         v
     }
 
