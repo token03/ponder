@@ -11,7 +11,7 @@
 //! (and `serde::Serialize`) give the JSON the CLI prints. Everything outside the process (poe.ninja, the
 //! trade site, share links, the plan cache) comes through a [`Context`].
 //!
-//! The solver's answers are cached on disk under `.cache/plans-rs` (see [`PlanCache`]).
+//! The solver's answers are cached on disk under `.cache/plans` (see [`PlanCache`]).
 
 mod build;
 mod cache;

@@ -2,6 +2,9 @@
 //! results out in tiles you can drag around: the crafts table, the selected item, its recipe,
 //! fractured bases, product tree, recombinator tree, finishing a pasted item.
 
+// No console window behind the app on Windows (release builds; debug keeps it for logs).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod jobs;
 mod panes;
@@ -20,7 +23,17 @@ fn find_project_dir() {
     }
 }
 
+/// Without a console a panic would vanish: also write it to `ponder-crash.log`.
+fn log_panics() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = std::fs::write("ponder-crash.log", format!("{info}\n{}", std::backtrace::Backtrace::force_capture()));
+        default(info);
+    }));
+}
+
 fn main() -> eframe::Result {
+    log_panics();
     if let Some(dir) = std::env::args().nth(1) {
         std::env::set_current_dir(&dir).unwrap_or_else(|e| panic!("can't open {dir}: {e}"));
     } else {

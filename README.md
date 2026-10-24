@@ -31,6 +31,27 @@ from the game files each patch. Set `PONDER_DATA` to keep it somewhere else.
 On Linux the app needs the usual desktop libraries: OpenGL, X11 or Wayland, and
 `libxkbcommon-x11`.
 
+### On Windows
+
+Work from a checkout on the Windows side (say `C:\dev\ponder`), not one inside WSL: builds
+through `\\wsl$` are slow and the app would run under WSLg.
+
+1. Install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+   with "Desktop development with C++" (the MSVC linker and Windows SDK).
+2. Install Rust with [rustup-init.exe](https://rustup.rs) and keep the default
+   `x86_64-pc-windows-msvc` toolchain.
+3. In PowerShell, in the checkout, run the same commands as above
+   (`.\target\release\ponder.exe data fetch`, ..., `cargo run --release -p ponder-app`).
+
+`target\release\ponder-app.exe` opens without a console window; a crash is written to
+`ponder-crash.log` in the project directory. Pin it to the taskbar or make a shortcut whose
+"Start in" is the project directory (or pass the directory as its argument). `.cache\` and
+`.env` can be copied over from another checkout as they are.
+
+To build the Windows binaries from WSL instead:
+`rustup target add x86_64-pc-windows-gnu`, `sudo apt install gcc-mingw-w64-x86-64`, then
+`cargo build --release --target x86_64-pc-windows-gnu -p ponder-app -p ponder-cli`.
+
 ## The desktop app
 
 `ponder-app` runs the ladder pipeline in the background (about 5 s from scratch) and lays
@@ -182,7 +203,7 @@ regal into a rare, exalt, or annul whenever that is cheaper over the whole remai
 set it in the environment or `.env`, and 0 turns it off), so plans don't call for ten
 thousand alterations on a long shot.
 
-**Plan cache.** Solved plans are cached in `.cache/plans-rs`, keyed by the problem and by
+**Plan cache.** Solved plans are cached in `.cache/plans`, keyed by the problem and by
 the prices its actions use (to 3 significant figures).
 
 **Recombinators** (`crates/ponder/src/recomb.rs`): clean donors, then recombinations,

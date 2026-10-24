@@ -7,3 +7,5 @@
 .env
 
 ponder-*.zip
+
+ponder-crash.log

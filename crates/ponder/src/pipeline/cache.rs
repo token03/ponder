@@ -1,6 +1,6 @@
 //! The plan cache: solved plans on disk, keyed by problem and prices.
 //!
-//! Plans live in `.cache/plans-rs` as a small binary layout, zlib-compressed.
+//! Plans live in `.cache/plans` as a small binary layout, zlib-compressed.
 //! The key is a sha1 of the problem's canonical JSON (struct fields in declaration order,
 //! sets and maps sorted, so it is the same across runs), the prices of the actions it uses
 //! rounded to 3 significant figures, the clicking rate and `PLAN_VERSION`.
@@ -49,7 +49,7 @@ pub struct PlanCache {
 
 impl Default for PlanCache {
     fn default() -> PlanCache {
-        PlanCache::new(".cache/plans-rs")
+        PlanCache::new(".cache/plans")
     }
 }
 

@@ -78,7 +78,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 /// The plan cache shared by tests (in the target directory, so reruns are fast).
 fn shared_plans() -> PlanCache {
-    PlanCache::new(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plans-rs"))
+    PlanCache::new(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plans"))
 }
 
 fn fixed_clock() -> Clock {
