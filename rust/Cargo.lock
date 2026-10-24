@@ -767,10 +767,14 @@ name = "ponder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
+ "indexmap",
  "ponder-core",
  "ponder-game",
  "ponder-net",
  "rayon",
+ "regex",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]
