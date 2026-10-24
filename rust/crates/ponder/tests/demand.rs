@@ -14,14 +14,21 @@ use ponder_net::ladder::{Ladder, Lite};
 use serde_json::{Map, Value, json};
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..").canonicalize().unwrap()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap()
 }
 
 fn golden(name: &str) -> Value {
-    let path = repo_root().join("rust/goldens/problems").join(format!("{name}.json.gz"));
+    let path = repo_root()
+        .join("rust/goldens/problems")
+        .join(format!("{name}.json.gz"));
     let file = std::fs::File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut text = String::new();
-    flate2::read::GzDecoder::new(file).read_to_string(&mut text).unwrap();
+    flate2::read::GzDecoder::new(file)
+        .read_to_string(&mut text)
+        .unwrap();
     serde_json::from_str(&text).unwrap()
 }
 
@@ -32,11 +39,17 @@ fn skip() -> bool {
         unsafe { std::env::set_var("PONDER_DATA", repo_root().join(".cache/repoe")) };
     }
     if !data::available(None) {
-        eprintln!("skipping: repoe data not found in {}", data::data_dir().display());
+        eprintln!(
+            "skipping: repoe data not found in {}",
+            data::data_dir().display()
+        );
         return true;
     }
     if world().1.is_empty() {
-        eprintln!("skipping: no cached ladder in {}", repo_root().join(".cache/ladder").display());
+        eprintln!(
+            "skipping: no cached ladder in {}",
+            repo_root().join(".cache/ladder").display()
+        );
         return true;
     }
     false
@@ -50,10 +63,24 @@ fn world() -> &'static (ModDB, Vec<Lite>) {
             unsafe { std::env::set_var("PONDER_DATA", repo_root().join(".cache/repoe")) };
         }
         if !data::available(None) {
-            return (ModDB::new(Some(Default::default()), Some(Default::default()), Some(Default::default())), Vec::new());
+            return (
+                ModDB::new(
+                    Some(Default::default()),
+                    Some(Default::default()),
+                    Some(Default::default()),
+                ),
+                Vec::new(),
+            );
         }
-        let ladder = Ladder::with(ponder_net::http::real(), repo_root().join(".cache/ladder"), ponder_net::env::Clock::real());
-        (ModDB::load().expect("repoe data"), ladder.cached(None).expect("ladder cache"))
+        let ladder = Ladder::with(
+            ponder_net::http::real(),
+            repo_root().join(".cache/ladder"),
+            ponder_net::env::Clock::real(),
+        );
+        (
+            ModDB::load().expect("repoe data"),
+            ladder.cached(None).expect("ladder cache"),
+        )
     })
 }
 
@@ -63,7 +90,12 @@ fn worn() -> &'static Vec<Worn> {
         let (db, chars) = world();
         let t = Instant::now();
         let worn = demand::wear(db, chars, None);
-        eprintln!("wear: {} items from {} characters in {:.2?}", worn.len(), chars.len(), t.elapsed());
+        eprintln!(
+            "wear: {} items from {} characters in {:.2?}",
+            worn.len(),
+            chars.len(),
+            t.elapsed()
+        );
         worn
     })
 }
@@ -132,7 +164,8 @@ impl Diff {
     fn same(&mut self, path: &str, a: &Value, b: &Value, unordered: &[&str]) {
         match (a, b) {
             (Value::Object(x), Value::Object(y)) => {
-                let (mut kx, mut ky): (Vec<&String>, Vec<&String>) = (x.keys().collect(), y.keys().collect());
+                let (mut kx, mut ky): (Vec<&String>, Vec<&String>) =
+                    (x.keys().collect(), y.keys().collect());
                 if unordered.contains(&path) {
                     kx.sort();
                     ky.sort();
@@ -147,7 +180,8 @@ impl Diff {
             }
             (Value::Array(x), Value::Array(y)) => {
                 if x.len() != y.len() {
-                    self.problems.push(format!("{path}: {} entries != {}", x.len(), y.len()));
+                    self.problems
+                        .push(format!("{path}: {} entries != {}", x.len(), y.len()));
                     return;
                 }
                 for (i, (p, q)) in x.iter().zip(y).enumerate() {
@@ -173,9 +207,16 @@ impl Diff {
         for p in self.problems.iter().take(25) {
             eprintln!("  {p}");
         }
-        assert!(self.problems.is_empty(), "{what}: {} differences (first above)", self.problems.len());
+        assert!(
+            self.problems.is_empty(),
+            "{what}: {} differences (first above)",
+            self.problems.len()
+        );
         if self.float_drift > 0 {
-            eprintln!("{what}: {} floats differ in the last digits: {:?}", self.float_drift, self.drifted);
+            eprintln!(
+                "{what}: {} floats differ in the last digits: {:?}",
+                self.float_drift, self.drifted
+            );
         }
     }
 }
@@ -188,8 +229,16 @@ fn worn_matches_python() {
         return;
     }
     let g = golden("archetypes");
-    assert_eq!(world().1.len() as u64, g["characters"].as_u64().unwrap(), "characters");
-    assert_eq!(worn().len() as u64, g["worn"].as_u64().unwrap(), "worn items");
+    assert_eq!(
+        world().1.len() as u64,
+        g["characters"].as_u64().unwrap(),
+        "characters"
+    );
+    assert_eq!(
+        worn().len() as u64,
+        g["worn"].as_u64().unwrap(),
+        "worn items"
+    );
 }
 
 #[test]
@@ -213,7 +262,9 @@ fn archetypes_match_python() {
                     let m = o[f].as_object().unwrap();
                     let mut keys: Vec<&String> = m.keys().collect();
                     keys.sort();
-                    keys.into_iter().map(|k| (k.clone(), m[k].clone())).collect()
+                    keys.into_iter()
+                        .map(|k| (k.clone(), m[k].clone()))
+                        .collect()
                 };
                 o.insert(f.into(), Value::Object(sorted));
             }
@@ -237,14 +288,22 @@ fn cluster_archetypes_match_python() {
     let t_wear = t.elapsed();
     let t = Instant::now();
     let got = demand::cluster_archetypes(&wc, 5, 0.8);
-    eprintln!("wear_clusters: {} in {t_wear:.2?}; cluster_archetypes: {} in {:.2?}", wc.len(), got.len(), t.elapsed());
+    eprintln!(
+        "wear_clusters: {} in {t_wear:.2?}; cluster_archetypes: {} in {:.2?}",
+        wc.len(),
+        got.len(),
+        t.elapsed()
+    );
     assert_eq!(got.len(), want.len(), "cluster archetype count");
     let mut diff = Diff::default();
     for (i, (a, w)) in got.iter().zip(want).enumerate() {
         diff.same(&format!("clusters[{i}]"), &cluster_json(a), w, &[]);
     }
     diff.finish("cluster archetypes");
-    eprintln!("cluster archetypes: all {} agree on every field", want.len());
+    eprintln!(
+        "cluster archetypes: all {} agree on every field",
+        want.len()
+    );
 }
 
 #[test]
@@ -258,7 +317,19 @@ fn archetype_match_matches_python() {
     let mut diff = Diff::default();
     let (mut none, mut some) = (0, 0);
     for (i, (a, row)) in found().iter().zip(rows).enumerate() {
-        assert_eq!((a.group.as_str(), &a.families), (row["group"].as_str().unwrap(), &row["families"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect()), "row {i}");
+        assert_eq!(
+            (a.group.as_str(), &a.families),
+            (
+                row["group"].as_str().unwrap(),
+                &row["families"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|f| f.as_str().unwrap().to_string())
+                    .collect()
+            ),
+            "row {i}"
+        );
         let m = demand::archetype_match(db, a);
         if m.is_some() {
             some += 1;
@@ -270,7 +341,14 @@ fn archetype_match_matches_python() {
         // `finish.families` starts from a frozenset of fillers: its order is arbitrary in Python.
         for v in [&mut got, &mut want].into_iter().filter(|v| v.is_object()) {
             // A tag with two influence suffixes is spelled in Python's set order: compare their number only.
-            const INF: [&str; 6] = ["shaper", "elder", "crusader", "eyrie", "basilisk", "adjudicator"];
+            const INF: [&str; 6] = [
+                "shaper",
+                "elder",
+                "crusader",
+                "eyrie",
+                "basilisk",
+                "adjudicator",
+            ];
             let tags = v["tags"].as_array_mut().unwrap();
             let multi = |t: &Value| {
                 let parts: Vec<&str> = t.as_str().unwrap().rsplitn(3, '_').collect();
@@ -288,7 +366,10 @@ fn archetype_match_matches_python() {
         diff.same(&format!("match[{i}]"), &got, &want, &[]);
     }
     diff.finish("archetype_match");
-    eprintln!("archetype_match: all {} agree ({some} items, {none} none)", some + none);
+    eprintln!(
+        "archetype_match: all {} agree ({some} items, {none} none)",
+        some + none
+    );
 }
 
 #[test]
@@ -314,7 +395,13 @@ fn counter_most_common_keeps_insertion_order_on_ties() {
         c.add(k.to_string());
     }
     c.add("d".to_string());
-    assert_eq!(c.most_common().iter().map(|(k, n)| (k.as_str(), *n)).collect::<Vec<_>>(), [("a", 2), ("c", 2), ("b", 1), ("d", 1)]);
+    assert_eq!(
+        c.most_common()
+            .iter()
+            .map(|(k, n)| (k.as_str(), *n))
+            .collect::<Vec<_>>(),
+        [("a", 2), ("c", 2), ("b", 1), ("d", 1)]
+    );
 }
 
 #[test]
@@ -325,7 +412,9 @@ fn family_stats_match_python() {
     let (db, _) = world();
     let path = repo_root().join("rust/goldens/demand/family_stats.json.gz");
     let mut text = String::new();
-    flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap()).read_to_string(&mut text).unwrap();
+    flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap())
+        .read_to_string(&mut text)
+        .unwrap();
     let want: Value = serde_json::from_str(&text).unwrap();
     let t = Instant::now();
     let got = demand::family_stats(db, worn(), 10);

@@ -39,8 +39,18 @@ pub fn basic() -> Vec<Action> {
         act("annul", "annul", &[("annul", 1.0)], &[RARE]),
         act("alch", "reroll_rare", &[("alch", 1.0)], &[NORMAL]),
         act("chaos", "reroll_rare", &[("chaos", 1.0)], &[RARE]),
-        act("scour+alch", "reroll_rare", &[("scour", 1.0), ("alch", 1.0)], &[RARE]),
-        act("scour+transmute", "reroll_magic", &[("scour", 1.0), ("transmute", 1.0)], &[RARE]),
+        act(
+            "scour+alch",
+            "reroll_rare",
+            &[("scour", 1.0), ("alch", 1.0)],
+            &[RARE],
+        ),
+        act(
+            "scour+transmute",
+            "reroll_magic",
+            &[("scour", 1.0), ("transmute", 1.0)],
+            &[RARE],
+        ),
     ]
 }
 
@@ -63,7 +73,13 @@ pub const HARVEST: [(&str, &str, &str, f64); 11] = [
 ];
 pub const RESONATOR: &str = "primitive-chaotic-resonator";
 /// Chaotic resonators by socket count (index 0 is unused): a reroll with 1-4 fossils.
-pub const RESONATORS: [&str; 5] = ["", RESONATOR, "potent-chaotic-resonator", "powerful-chaotic-resonator", "prime-chaotic-resonator"];
+pub const RESONATORS: [&str; 5] = [
+    "",
+    RESONATOR,
+    "potent-chaotic-resonator",
+    "powerful-chaotic-resonator",
+    "prime-chaotic-resonator",
+];
 pub const FOSSIL_COMBOS_KEPT: usize = 10; // combo profiles handed to the solver
 
 /// Crafting bench costs are game metadata ids; these are their poe.ninja price ids.
@@ -102,7 +118,15 @@ pub fn harvest(pool: &[Mod]) -> (Vec<Action>, Profiles) {
         }
         let profile = format!("harvest:{name}");
         profiles.insert(profile.clone(), tagged);
-        acts.push(act(&format!("harvest {name}"), "reroll_rare", &[(lifeforce, amount)], &[RARE]).with_first_profile(&profile));
+        acts.push(
+            act(
+                &format!("harvest {name}"),
+                "reroll_rare",
+                &[(lifeforce, amount)],
+                &[RARE],
+            )
+            .with_first_profile(&profile),
+        );
     }
     (acts, profiles)
 }
@@ -111,22 +135,46 @@ pub fn harvest(pool: &[Mod]) -> (Vec<Action>, Profiles) {
 ///
 /// On a normal item an essence makes it rare; on a rare it needs a scour first.
 /// Returns the actions and the forced mod id of each (by "<name> essence", in order).
-pub fn essences(item_class: &str, item_level: i64, min_level: i64) -> (Vec<Action>, Vec<(String, String)>) {
+pub fn essences(
+    item_class: &str,
+    item_level: i64,
+    min_level: i64,
+) -> (Vec<Action>, Vec<(String, String)>) {
     let (mut acts, mut forced): (Vec<Action>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     // The raw file: the typed loader rejects the null mods of corruption-only essences.
     let all = loaded(data::load("essences"));
     for essence in all.as_object().into_iter().flat_map(|o| o.values()) {
-        let Some(mod_id) = essence["mods"][item_class].as_str().filter(|m| !m.is_empty()) else { continue };
-        let restricted = essence["item_level_restriction"].as_i64().is_some_and(|r| r != 0 && item_level > r);
+        let Some(mod_id) = essence["mods"][item_class]
+            .as_str()
+            .filter(|m| !m.is_empty())
+        else {
+            continue;
+        };
+        let restricted = essence["item_level_restriction"]
+            .as_i64()
+            .is_some_and(|r| r != 0 && item_level > r);
         let name = essence["name"].as_str().unwrap_or("");
-        if essence["level"].as_i64().unwrap_or(0) < min_level || restricted || essence["type"]["is_corruption_only"].as_bool().unwrap_or(false) {
+        if essence["level"].as_i64().unwrap_or(0) < min_level
+            || restricted
+            || essence["type"]["is_corruption_only"]
+                .as_bool()
+                .unwrap_or(false)
+        {
             continue;
         }
         let pid = slug(name);
         let name = name.replace("Essence of ", "").to_lowercase();
         let label = format!("{name} essence");
         acts.push(act(&label, "reroll_rare", &[(&pid, 1.0)], &[NORMAL]).with_forced(mod_id));
-        acts.push(act(&format!("scour+{name} essence"), "reroll_rare", &[("scour", 1.0), (&pid, 1.0)], &[RARE]).with_forced(mod_id));
+        acts.push(
+            act(
+                &format!("scour+{name} essence"),
+                "reroll_rare",
+                &[("scour", 1.0), (&pid, 1.0)],
+                &[RARE],
+            )
+            .with_forced(mod_id),
+        );
         match forced.iter_mut().find(|(k, _)| *k == label) {
             Some(e) => e.1 = mod_id.to_string(), // a dict: the later essence of that name wins its place
             None => forced.push((label, mod_id.to_string())),
@@ -139,25 +187,64 @@ pub fn essences(item_class: &str, item_level: i64, min_level: i64) -> (Vec<Actio
 pub fn fossils(pool: &[Mod]) -> (Vec<Action>, Profiles) {
     let (mut acts, mut profiles) = (Vec::new(), Profiles::new());
     for fossil in loaded(data::fossils()).values() {
-        let Some(mult) = usable_fossil(fossil) else { continue };
-        let weights: Vec<f64> = pool.iter().map(|m| m.tags.iter().filter_map(|t| mult.get(t.as_str())).fold(m.weight, |w, x| w * x)).collect();
-        if pool.iter().zip(&weights).all(|(m, w)| (w - m.weight).abs() < 1e-9) {
+        let Some(mult) = usable_fossil(fossil) else {
+            continue;
+        };
+        let weights: Vec<f64> = pool
+            .iter()
+            .map(|m| {
+                m.tags
+                    .iter()
+                    .filter_map(|t| mult.get(t.as_str()))
+                    .fold(m.weight, |w, x| w * x)
+            })
+            .collect();
+        if pool
+            .iter()
+            .zip(&weights)
+            .all(|(m, w)| (w - m.weight).abs() < 1e-9)
+        {
             continue; // changes nothing here
         }
         let name = fossil.name.replace(" Fossil", "").to_lowercase();
         let profile = format!("fossil:{name}");
-        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect());
-        acts.push(act(&format!("{name} fossil"), "reroll_rare", &[(&slug(&fossil.name), 1.0), (RESONATOR, 1.0)], &[NORMAL, RARE]).with_profile(&profile));
+        profiles.insert(
+            profile.clone(),
+            pool.iter()
+                .zip(weights)
+                .map(|(m, w)| (m.id.clone(), w))
+                .collect(),
+        );
+        acts.push(
+            act(
+                &format!("{name} fossil"),
+                "reroll_rare",
+                &[(&slug(&fossil.name), 1.0), (RESONATOR, 1.0)],
+                &[NORMAL, RARE],
+            )
+            .with_profile(&profile),
+        );
     }
     (acts, profiles)
 }
 
 /// The weight multiplier per tag of a plain fossil (no added or forced mods, no tricks), if it has any.
 fn usable_fossil(f: &data::Fossil) -> Option<HashMap<&str, f64>> {
-    if f.name.is_empty() || !f.added_mods.is_empty() || !f.forced_mods.is_empty() || f.mirrors || f.rolls_lucky || f.changes_quality {
+    if f.name.is_empty()
+        || !f.added_mods.is_empty()
+        || !f.forced_mods.is_empty()
+        || f.mirrors
+        || f.rolls_lucky
+        || f.changes_quality
+    {
         return None;
     }
-    let mult: HashMap<&str, f64> = f.positive_mod_weights.iter().chain(&f.negative_mod_weights).map(|w| (w.tag.as_str(), w.weight / 100.0)).collect();
+    let mult: HashMap<&str, f64> = f
+        .positive_mod_weights
+        .iter()
+        .chain(&f.negative_mod_weights)
+        .map(|w| (w.tag.as_str(), w.weight / 100.0))
+        .collect();
     (!mult.is_empty()).then_some(mult)
 }
 
@@ -176,12 +263,26 @@ pub struct FossilRow {
 pub fn fossil_rows(pool: &[Mod]) -> Vec<FossilRow> {
     let mut rows = Vec::new();
     for fossil in loaded(data::fossils()).values() {
-        let Some(mult) = usable_fossil(fossil) else { continue };
-        let row: Vec<f64> = pool.iter().map(|m| m.tags.iter().filter_map(|t| mult.get(t.as_str())).fold(1.0, |p, x| p * x)).collect();
+        let Some(mult) = usable_fossil(fossil) else {
+            continue;
+        };
+        let row: Vec<f64> = pool
+            .iter()
+            .map(|m| {
+                m.tags
+                    .iter()
+                    .filter_map(|t| mult.get(t.as_str()))
+                    .fold(1.0, |p, x| p * x)
+            })
+            .collect();
         if row.iter().all(|x| (x - 1.0).abs() <= 1e-8 + 1e-5) {
             continue; // np.allclose(row, 1.0): changes nothing here
         }
-        rows.push(FossilRow { name: fossil.name.replace(" Fossil", "").to_lowercase(), pid: slug(&fossil.name), mult: row });
+        rows.push(FossilRow {
+            name: fossil.name.replace(" Fossil", "").to_lowercase(),
+            pid: slug(&fossil.name),
+            mult: row,
+        });
     }
     rows
 }
@@ -196,7 +297,11 @@ pub struct FossilOpts {
 
 impl Default for FossilOpts {
     fn default() -> FossilOpts {
-        FossilOpts { mods_per_side: 2.3, max_fossils: 4, keep: FOSSIL_COMBOS_KEPT }
+        FossilOpts {
+            mods_per_side: 2.3,
+            max_fossils: 4,
+            keep: FOSSIL_COMBOS_KEPT,
+        }
     }
 }
 
@@ -208,8 +313,17 @@ impl Default for FossilOpts {
 /// combination with the lowest price per hit is kept (a reroll that lands
 /// two prefixes is worth having even when exalts finish the item), largest
 /// subsets first, up to `keep`. The solver then values them exactly.
-pub fn fossil_combos(pool: &[Mod], wants: &[&BTreeSet<String>], prices: &Prices, settings: &Settings, opts: FossilOpts) -> (Vec<Action>, Profiles) {
-    let rows: Vec<FossilRow> = fossil_rows(pool).into_iter().filter(|r| prices.contains_key(&r.pid)).collect();
+pub fn fossil_combos(
+    pool: &[Mod],
+    wants: &[&BTreeSet<String>],
+    prices: &Prices,
+    settings: &Settings,
+    opts: FossilOpts,
+) -> (Vec<Action>, Profiles) {
+    let rows: Vec<FossilRow> = fossil_rows(pool)
+        .into_iter()
+        .filter(|r| prices.contains_key(&r.pid))
+        .collect();
     fossil_combos_with(&rows, pool, wants, prices, settings, opts)
 }
 
@@ -236,12 +350,18 @@ pub fn fossil_combos_with(
     let want_at: Vec<Vec<usize>> = wants
         .iter()
         .map(|w| {
-            let mut v: Vec<usize> = w.iter().filter_map(|m| index.get(m.as_str()).copied()).collect();
+            let mut v: Vec<usize> = w
+                .iter()
+                .filter_map(|m| index.get(m.as_str()).copied())
+                .collect();
             v.sort_unstable();
             v
         })
         .collect();
-    let want_side: Vec<usize> = want_at.iter().map(|v| pool[v.first().copied().unwrap_or(0)].side.index()).collect();
+    let want_side: Vec<usize> = want_at
+        .iter()
+        .map(|v| pool[v.first().copied().unwrap_or(0)].side.index())
+        .collect();
     let is_suffix: Vec<bool> = pool.iter().map(|m| m.side == Side::Suffix).collect();
     let fossil_price: Vec<f64> = rows.iter().map(|r| prices[&r.pid]).collect();
 
@@ -341,7 +461,11 @@ pub fn fossil_combos_with(
 
     let (mut acts, mut profiles) = (Vec::new(), Profiles::new());
     for combo in picked {
-        let name = combo.iter().map(|&i| rows[i].name.as_str()).collect::<Vec<_>>().join("+");
+        let name = combo
+            .iter()
+            .map(|&i| rows[i].name.as_str())
+            .collect::<Vec<_>>()
+            .join("+");
         let weights = (0..pool.len()).map(|j| {
             let mut mult = rows[combo[0]].mult[j];
             for &r in &combo[1..] {
@@ -350,10 +474,22 @@ pub fn fossil_combos_with(
             base[j] * mult
         });
         let profile = format!("fossil:{name}");
-        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect());
+        profiles.insert(
+            profile.clone(),
+            pool.iter()
+                .zip(weights)
+                .map(|(m, w)| (m.id.clone(), w))
+                .collect(),
+        );
         let mut cost: Cost = combo.iter().map(|&i| (rows[i].pid.clone(), 1.0)).collect();
         cost.push((RESONATORS[combo.len()].to_string(), 1.0));
-        let mut a = act(&format!("{name} fossil{}", if combo.len() > 1 { "s" } else { "" }), "reroll_rare", &[], &[NORMAL, RARE]).with_profile(&profile);
+        let mut a = act(
+            &format!("{name} fossil{}", if combo.len() > 1 { "s" } else { "" }),
+            "reroll_rare",
+            &[],
+            &[NORMAL, RARE],
+        )
+        .with_profile(&profile);
         a.cost = cost;
         acts.push(a);
     }
@@ -363,7 +499,9 @@ pub fn fossil_combos_with(
 /// The next k-combination of 0..n in lexicographic order (itertools.combinations); false after the last.
 fn next_combination(c: &mut [usize], n: usize) -> bool {
     let k = c.len();
-    let Some(i) = (0..k).rev().find(|&i| c[i] != i + n - k) else { return false };
+    let Some(i) = (0..k).rev().find(|&i| c[i] != i + n - k) else {
+        return false;
+    };
     c[i] += 1;
     for j in i + 1..k {
         c[j] = c[j - 1] + 1;
@@ -379,18 +517,29 @@ fn bench_index() -> &'static BenchIndex {
     INDEX.get_or_init(|| {
         let mut index: BenchIndex = HashMap::new();
         for option in loaded(data::crafting_bench_options()).iter() {
-            let Some(mod_id) = option.add_explicit_mod() else { continue };
+            let Some(mod_id) = option.add_explicit_mod() else {
+                continue;
+            };
             let cost: Cost = option
                 .cost
                 .iter()
                 .map(|(k, n)| {
                     let id = k.rsplit('/').next().unwrap_or(k);
-                    (BENCH_CURRENCY.iter().find(|(c, _)| *c == id).map_or(id, |(_, p)| p).to_string(), *n)
+                    (
+                        BENCH_CURRENCY
+                            .iter()
+                            .find(|(c, _)| *c == id)
+                            .map_or(id, |(_, p)| p)
+                            .to_string(),
+                        *n,
+                    )
                 })
                 .collect();
             let by_class = index.entry(mod_id.to_string()).or_default();
             for class in &option.item_classes {
-                by_class.entry(class.clone()).or_insert_with(|| cost.clone());
+                by_class
+                    .entry(class.clone())
+                    .or_insert_with(|| cost.clone());
             }
         }
         index
@@ -409,16 +558,34 @@ pub fn bench_cost(item_class: &str, mod_id: &str) -> Option<Cost> {
 pub fn metamods(item_class: &str, rerolls: &[Action]) -> Vec<Action> {
     let mut acts = Vec::new();
     for (mod_id, side) in [(LOCK_PREFIXES, "prefixes"), (LOCK_SUFFIXES, "suffixes")] {
-        let Some(cost) = bench_cost(item_class, mod_id) else { continue };
-        let with = |extra: &[(&str, f64)]| -> Cost { cost.iter().cloned().chain(owned(extra)).collect() };
-        let mut keep = act(&format!("lock {side}+scour"), &format!("keep_{side}"), &[], &[RARE]);
+        let Some(cost) = bench_cost(item_class, mod_id) else {
+            continue;
+        };
+        let with =
+            |extra: &[(&str, f64)]| -> Cost { cost.iter().cloned().chain(owned(extra)).collect() };
+        let mut keep = act(
+            &format!("lock {side}+scour"),
+            &format!("keep_{side}"),
+            &[],
+            &[RARE],
+        );
         keep.cost = with(&[("scour", 1.0)]);
         acts.push(keep);
-        let mut chaos = act(&format!("lock {side}+chaos"), &format!("lockreroll_{side}"), &[], &[RARE]);
+        let mut chaos = act(
+            &format!("lock {side}+chaos"),
+            &format!("lockreroll_{side}"),
+            &[],
+            &[RARE],
+        );
         chaos.cost = with(&[("chaos", 1.0)]);
         acts.push(chaos);
         for r in rerolls {
-            let mut a = act(&format!("lock {side}+{}", r.name), &format!("lockreroll_{side}"), &[], &[RARE]);
+            let mut a = act(
+                &format!("lock {side}+{}", r.name),
+                &format!("lockreroll_{side}"),
+                &[],
+                &[RARE],
+            );
             a.cost = cost.iter().cloned().chain(r.cost.iter().cloned()).collect();
             a.profile = r.profile.clone();
             a.first_profile = r.first_profile.clone();
@@ -440,10 +607,30 @@ pub fn eldritch(item_class: &str, influences: &BTreeSet<String>) -> Vec<Action> 
         return Vec::new();
     }
     vec![
-        act("eldritch exalt (prefix)", "exalt_prefix", &[("eldritch-exalted-orb", 1.0)], &[RARE]),
-        act("eldritch exalt (suffix)", "exalt_suffix", &[("eldritch-exalted-orb", 1.0)], &[RARE]),
-        act("eldritch annul (prefix)", "annul_prefix", &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
-        act("eldritch annul (suffix)", "annul_suffix", &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
+        act(
+            "eldritch exalt (prefix)",
+            "exalt_prefix",
+            &[("eldritch-exalted-orb", 1.0)],
+            &[RARE],
+        ),
+        act(
+            "eldritch exalt (suffix)",
+            "exalt_suffix",
+            &[("eldritch-exalted-orb", 1.0)],
+            &[RARE],
+        ),
+        act(
+            "eldritch annul (prefix)",
+            "annul_prefix",
+            &[("eldritch-orb-of-annulment", 1.0)],
+            &[RARE],
+        ),
+        act(
+            "eldritch annul (suffix)",
+            "annul_suffix",
+            &[("eldritch-orb-of-annulment", 1.0)],
+            &[RARE],
+        ),
     ]
 }
 
@@ -471,7 +658,10 @@ mod tests {
 
     #[test]
     fn slugs() {
-        assert_eq!(slug("Deafening Essence of Greed"), "deafening-essence-of-greed");
+        assert_eq!(
+            slug("Deafening Essence of Greed"),
+            "deafening-essence-of-greed"
+        );
         assert_eq!(slug("Prismatic Fossil"), "prismatic-fossil");
         assert_eq!(slug("Orb of Horizons' (x)"), "orb-of-horizons-x");
     }
@@ -492,8 +682,24 @@ mod tests {
             Mod::new("y", Side::Suffix, 100.0, &["Y"], false, "y", &["cold"]),
         ];
         for i in 0..3 {
-            pool.push(Mod::new(&format!("p{i}"), Side::Prefix, 1000.0, &[&format!("P{i}")], false, "junk", &[]));
-            pool.push(Mod::new(&format!("s{i}"), Side::Suffix, 1000.0, &[&format!("S{i}")], false, "junk", &[]));
+            pool.push(Mod::new(
+                &format!("p{i}"),
+                Side::Prefix,
+                1000.0,
+                &[&format!("P{i}")],
+                false,
+                "junk",
+                &[],
+            ));
+            pool.push(Mod::new(
+                &format!("s{i}"),
+                Side::Suffix,
+                1000.0,
+                &[&format!("S{i}")],
+                false,
+                "junk",
+                &[],
+            ));
         }
         pool
     }
@@ -501,16 +707,49 @@ mod tests {
     #[test]
     fn fossil_combos_pair_up_fossils_that_each_help_one_wanted_mod() {
         let pool = pool();
-        let row = |name: &str, pid: &str, f: &dyn Fn(&Mod) -> f64| FossilRow { name: name.into(), pid: pid.into(), mult: pool.iter().map(f).collect() };
+        let row = |name: &str, pid: &str, f: &dyn Fn(&Mod) -> f64| FossilRow {
+            name: name.into(),
+            pid: pid.into(),
+            mult: pool.iter().map(f).collect(),
+        };
         let rows = [
-            row("hot", "hot-fossil", &|m| if m.tags.iter().any(|t| t == "fire") { 10.0 } else { 1.0 }),
-            row("icy", "icy-fossil", &|m| if m.tags.iter().any(|t| t == "cold") { 10.0 } else { 1.0 }),
-            row("dud", "dud-fossil", &|m| if m.tags.is_empty() { 0.5 } else { 1.0 }),
+            row("hot", "hot-fossil", &|m| {
+                if m.tags.iter().any(|t| t == "fire") {
+                    10.0
+                } else {
+                    1.0
+                }
+            }),
+            row("icy", "icy-fossil", &|m| {
+                if m.tags.iter().any(|t| t == "cold") {
+                    10.0
+                } else {
+                    1.0
+                }
+            }),
+            row("dud", "dud-fossil", &|m| {
+                if m.tags.is_empty() { 0.5 } else { 1.0 }
+            }),
         ];
-        let mut prices: Prices = [("hot-fossil", 1.0), ("icy-fossil", 1.0), ("dud-fossil", 50.0)].iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let mut prices: Prices = [
+            ("hot-fossil", 1.0),
+            ("icy-fossil", 1.0),
+            ("dud-fossil", 50.0),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
         prices.extend(RESONATORS[1..].iter().map(|r| (r.to_string(), 0.5)));
-        let (x, y): (BTreeSet<String>, BTreeSet<String>) = (["x".to_string()].into(), ["y".to_string()].into());
-        let (acts, profiles) = fossil_combos_with(&rows, &pool, &[&x, &y], &prices, &Settings::default(), FossilOpts::default());
+        let (x, y): (BTreeSet<String>, BTreeSet<String>) =
+            (["x".to_string()].into(), ["y".to_string()].into());
+        let (acts, profiles) = fossil_combos_with(
+            &rows,
+            &pool,
+            &[&x, &y],
+            &prices,
+            &Settings::default(),
+            FossilOpts::default(),
+        );
         assert_eq!(acts[0].name, "hot+icy fossils"); // both wants: the pair, cheapest per hit
         assert!(acts[0].cost.contains(&(RESONATORS[2].to_string(), 1.0))); // two fossils take a potent resonator
         assert_eq!(profiles["fossil:hot+icy"]["x"], 1000.0);

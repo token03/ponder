@@ -117,7 +117,11 @@ impl Counter<i64> {
 }
 
 /// `setdefault(key, Counter())` then `+= 1` on a dict of Counters.
-fn tally<K: Hash + Eq + Clone, V: Hash + Eq + Clone>(map: &mut IndexMap<K, Counter<V>>, key: &K, value: V) {
+fn tally<K: Hash + Eq + Clone, V: Hash + Eq + Clone>(
+    map: &mut IndexMap<K, Counter<V>>,
+    key: &K,
+    value: V,
+) {
     if !map.contains_key(key) {
         map.insert(key.clone(), Counter::new());
     }
@@ -155,18 +159,30 @@ impl FamilyStat {
         if total == 0 {
             return 0.0;
         }
-        let n: i64 = self.tiers.iter().filter(|&(&t, _)| t <= tier).map(|(_, n)| n).sum();
+        let n: i64 = self
+            .tiers
+            .iter()
+            .filter(|&(&t, _)| t <= tier)
+            .map(|(_, n)| n)
+            .sum();
         n as f64 / total as f64
     }
 
     pub fn natural_at_or_above(&self, tier: i64) -> f64 {
         // Python's sum() starts from the int 0 and adds in dict order.
-        self.natural.iter().filter(|&(&t, _)| t <= tier).fold(0.0, |s, (_, p)| s + p)
+        self.natural
+            .iter()
+            .filter(|&(&t, _)| t <= tier)
+            .fold(0.0, |s, (_, p)| s + p)
     }
 
     pub fn lift(&self, tier: i64) -> f64 {
         let nat = self.natural_at_or_above(tier);
-        if nat != 0.0 { self.share_at_or_above(tier) / nat } else { 0.0 }
+        if nat != 0.0 {
+            self.share_at_or_above(tier) / nat
+        } else {
+            0.0
+        }
     }
 }
 
@@ -211,7 +227,10 @@ impl Archetype {
             others: Counter::new(),
             fillers: Counter::new(),
             filler_tiers: IndexMap::new(),
-            filled: IndexMap::from([("prefix".to_string(), Counter::new()), ("suffix".to_string(), Counter::new())]),
+            filled: IndexMap::from([
+                ("prefix".to_string(), Counter::new()),
+                ("suffix".to_string(), Counter::new()),
+            ]),
             lift: 0.0,
         }
     }
@@ -239,7 +258,11 @@ impl Archetype {
 /// Every rare gear item and jewel on `characters` (poe.ninja characters, as `Lite`), matched by mod id.
 ///
 /// Characters are matched in parallel; the result is in character order.
-pub fn wear(db: &ModDB, characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>) -> Vec<Worn> {
+pub fn wear(
+    db: &ModDB,
+    characters: &[Lite],
+    skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>,
+) -> Vec<Worn> {
     let per_character: Vec<Vec<Worn>> = characters
         .par_iter()
         .map(|data| {
@@ -252,11 +275,19 @@ pub fn wear(db: &ModDB, characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) ->
             let mut out = Vec::new();
             for it in &data.rares {
                 let m = match_rare(db, it);
-                if m.base_id.is_none() || m.mods.is_empty() || m.item.base.ends_with("Cluster Jewel") {
+                if m.base_id.is_none()
+                    || m.mods.is_empty()
+                    || m.item.base.ends_with("Cluster Jewel")
+                {
                     continue;
                 }
                 let group = group_label(db, &m);
-                out.push(Worn { character: who.clone(), skill: skill.clone(), match_: Arc::new(m), group });
+                out.push(Worn {
+                    character: who.clone(),
+                    skill: skill.clone(),
+                    match_: Arc::new(m),
+                    group,
+                });
             }
             out
         })
@@ -283,13 +314,34 @@ fn truthy(v: &Value) -> bool {
 /// A poe.ninja item's mods by id, matched against the database.
 fn match_rare(db: &ModDB, it: &RareItem) -> ItemMatch {
     let influences: BTreeSet<String> = match it.influences.as_ref().and_then(|v| v.as_ref()) {
-        Some(Value::Object(o)) => o.iter().filter(|(_, v)| truthy(v)).map(|(k, _)| k.clone()).collect(),
+        Some(Value::Object(o)) => o
+            .iter()
+            .filter(|(_, v)| truthy(v))
+            .map(|(k, _)| k.clone())
+            .collect(),
         _ => BTreeSet::new(),
     };
-    let ids = |kind: &str| -> Vec<String> { it.mods_of(kind).iter().map(|e| e.id().unwrap_or("").to_string()).collect() };
-    let mods = IdMods { explicit: ids("explicit"), fractured: ids("fractured"), crafted: ids("crafted") };
+    let ids = |kind: &str| -> Vec<String> {
+        it.mods_of(kind)
+            .iter()
+            .map(|e| e.id().unwrap_or("").to_string())
+            .collect()
+    };
+    let mods = IdMods {
+        explicit: ids("explicit"),
+        fractured: ids("fractured"),
+        crafted: ids("crafted"),
+    };
     let ilvl = it.ilvl.flatten();
-    db.match_ids(it.base_type().unwrap_or(""), &mods, ilvl, &influences, "RARE", "", &BTreeMap::new())
+    db.match_ids(
+        it.base_type().unwrap_or(""),
+        &mods,
+        ilvl,
+        &influences,
+        "RARE",
+        "",
+        &BTreeMap::new(),
+    )
 }
 
 /// The character's main skill: the first active gem of the first skill group with DPS numbers.
@@ -304,14 +356,22 @@ pub fn family_stats(db: &ModDB, worn: &[Worn], min_characters: usize) -> Vec<Fam
     for w in worn {
         example.entry(w.group.as_str()).or_insert(&w.match_);
         for m in &w.match_.mods {
-            let Some(tier) = m.tier.filter(|&t| t != 0) else { continue };
+            let Some(tier) = m.tier.filter(|&t| t != 0) else {
+                continue;
+            };
             if m.source != "natural" {
                 continue;
             }
             let key = (w.group.as_str(), m.family.as_str());
-            let s = stats
-                .entry(key)
-                .or_insert_with(|| FamilyStat { group: w.group.clone(), family: m.family.clone(), side: m.kind.clone(), text: template(db, &m.mod_id), characters: 0, tiers: Counter::new(), natural: IndexMap::new() });
+            let s = stats.entry(key).or_insert_with(|| FamilyStat {
+                group: w.group.clone(),
+                family: m.family.clone(),
+                side: m.kind.clone(),
+                text: template(db, &m.mod_id),
+                characters: 0,
+                tiers: Counter::new(),
+                natural: IndexMap::new(),
+            });
             s.tiers.add(tier);
             who.entry(key).or_default().insert(&w.character);
         }
@@ -342,7 +402,12 @@ pub fn natural_tiers(db: &ModDB, m: &ItemMatch, family: &str) -> IndexMap<i64, f
         None => {
             // one pool scan per base group, every family at once
             let mut weights: IndexMap<String, Counter<i64>> = IndexMap::new();
-            for (id, weight) in pool_weights(db, m.base_id.as_deref().expect("matched item has a base"), &m.tags, NATURAL_LEVEL) {
+            for (id, weight) in pool_weights(
+                db,
+                m.base_id.as_deref().expect("matched item has a base"),
+                &m.tags,
+                NATURAL_LEVEL,
+            ) {
                 if let Some(t) = db.tier(&id, &m.tags).filter(|&t| t != 0) {
                     let family = db.mods[&id].type_.clone();
                     *weights.entry(family).or_default().0.entry(t).or_insert(0) += weight;
@@ -396,7 +461,8 @@ type Packed = u128;
 const SLOT_BITS: u32 = 16;
 
 fn pack(ids: impl IntoIterator<Item = u16>) -> Packed {
-    ids.into_iter().fold(0, |acc, id| (acc << SLOT_BITS) | (id as Packed + 1))
+    ids.into_iter()
+        .fold(0, |acc, id| (acc << SLOT_BITS) | (id as Packed + 1))
 }
 
 fn unpack(mut p: Packed) -> Vec<u16> {
@@ -444,8 +510,17 @@ impl indexmap::Equivalent<(String, String)> for PairRef<'_> {
 /// Mods are keyed by main stat (`stat_key`), resistances folded into one
 /// token. A combination is dropped when one bigger combination is worn by at
 /// least `implied` of its characters: it is mostly that one.
-pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_size: usize, implied: f64) -> Vec<Archetype> {
-    assert!(max_size <= 8, "combinations of more than 8 mods are not supported");
+pub fn archetypes(
+    worn: &[Worn],
+    min_characters: usize,
+    max_size: usize,
+    min_size: usize,
+    implied: f64,
+) -> Vec<Archetype> {
+    assert!(
+        max_size <= 8,
+        "combinations of more than 8 mods are not supported"
+    );
     // pass 1: who wears what (cheap), so pass 2 only details the survivors
     let keys_of: Vec<Vec<&'static str>> = worn.par_iter().map(|w| stat_keys(&w.match_)).collect();
 
@@ -476,7 +551,10 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
     // Are a character's items contiguous? Then "already counted?" is just "same as the last one".
     let contiguous = {
         let mut closed: FxHashSet<u32> = FxHashSet::default();
-        char_of.windows(2).all(|p| p[0] == p[1] || closed.insert(p[0])) && char_of.last().is_none_or(|l| !closed.contains(l))
+        char_of
+            .windows(2)
+            .all(|p| p[0] == p[1] || closed.insert(p[0]))
+            && char_of.last().is_none_or(|l| !closed.contains(l))
     };
 
     type Key = (u32, Packed);
@@ -486,7 +564,9 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
             let ids: Vec<u16> = keys.iter().map(|k| key_ids[k]).collect();
             let mut out = Vec::new();
             for size in min_size..=max_size.min(ids.len()) {
-                each_combination(ids.len(), size, |c| out.push(pack(c.iter().map(|&i| ids[i]))));
+                each_combination(ids.len(), size, |c| {
+                    out.push(pack(c.iter().map(|&i| ids[i])))
+                });
             }
             out
         })
@@ -510,12 +590,20 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
         }
         for &c in &combos_of[i] {
             let v = who.entry((g, c)).or_default();
-            if if contiguous { v.last() != Some(&ch) } else { !v.contains(&ch) } {
+            if if contiguous {
+                v.last() != Some(&ch)
+            } else {
+                !v.contains(&ch)
+            } {
                 v.push(ch);
             }
         }
     }
-    let keys: Vec<&Key> = who.iter().filter(|(_, v)| v.len() >= min_characters).map(|(k, _)| k).collect();
+    let keys: Vec<&Key> = who
+        .iter()
+        .filter(|(_, v)| v.len() >= min_characters)
+        .map(|(k, _)| k)
+        .collect();
     // Support only falls as a combination grows, so the best-supported bigger
     // combination is always one mod bigger: check those alone.
     let mut best_super: FxHashMap<Key, usize> = FxHashMap::default();
@@ -524,7 +612,9 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
         if ids.len() > min_size {
             let n = who[*k].len();
             for sub in combinations(&ids, ids.len() - 1) {
-                let e = best_super.entry((k.0, pack(sub.into_iter().copied()))).or_default();
+                let e = best_super
+                    .entry((k.0, pack(sub.into_iter().copied())))
+                    .or_default();
                 *e = (*e).max(n);
             }
         }
@@ -534,13 +624,24 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
     for k in &keys {
         let n = who[*k].len();
         if (best_super.get(*k).copied().unwrap_or(0) as f64) < implied * n as f64 {
-            let families = unpack(k.1).into_iter().map(|id| key_names[id as usize].to_string()).collect();
+            let families = unpack(k.1)
+                .into_iter()
+                .map(|id| key_names[id as usize].to_string())
+                .collect();
             found_at.insert(**k, found.len());
             found.push(Archetype::new(groups[k.0 as usize], families, n, 0));
         }
     }
     // Pass 2, archetype by archetype (each in worn order): the items an archetype is found on, then its details.
-    let hits_of: Vec<Vec<usize>> = (0..worn.len()).into_par_iter().map(|i| combos_of[i].iter().filter_map(|&c| found_at.get(&(group_of[i], c)).copied()).collect()).collect();
+    let hits_of: Vec<Vec<usize>> = (0..worn.len())
+        .into_par_iter()
+        .map(|i| {
+            combos_of[i]
+                .iter()
+                .filter_map(|&c| found_at.get(&(group_of[i], c)).copied())
+                .collect()
+        })
+        .collect();
     let mut items_of: Vec<Vec<u32>> = vec![Vec::new(); found.len()];
     for (i, hits) in hits_of.iter().enumerate() {
         for &h in hits {
@@ -565,65 +666,102 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
             let w = &worn[i];
             let g = group_of[i];
             let (best, n_res) = best_tiers(&w.match_);
-            let keys: Vec<&'static str> = keys_of[i].iter().copied().filter(|&k| k != RES).collect();
+            let keys: Vec<&'static str> =
+                keys_of[i].iter().copied().filter(|&k| k != RES).collect();
             let group_n = group_items[&g] as f64;
-            let useful: Vec<(&ModMatch, &'static str)> =
-                worn_mods(&w.match_).filter(|m| family_items[&(g, m.family.as_str())] as f64 >= USEFUL_SHARE * group_n).map(|m| (m, stat_key(&m.mod_id))).collect();
-            let filled = ["prefix", "suffix"].map(|side| useful.iter().filter(|(m, _)| m.kind == side).count());
-            Some(Detail { best, n_res, keys, useful, filled })
+            let useful: Vec<(&ModMatch, &'static str)> = worn_mods(&w.match_)
+                .filter(|m| family_items[&(g, m.family.as_str())] as f64 >= USEFUL_SHARE * group_n)
+                .map(|m| (m, stat_key(&m.mod_id)))
+                .collect();
+            let filled = ["prefix", "suffix"]
+                .map(|side| useful.iter().filter(|(m, _)| m.kind == side).count());
+            Some(Detail {
+                best,
+                n_res,
+                keys,
+                useful,
+                filled,
+            })
         })
         .collect();
-    found.par_iter_mut().zip(items_of.par_iter()).for_each(|(a, items)| {
-        for &i in items {
-            let (w, d) = (&worn[i as usize], details[i as usize].as_ref().unwrap());
-            a.items += 1;
-            add_str(&mut a.skills, &w.skill);
-            add_str(&mut a.bases, &w.match_.item.base);
-            for f in &a.families {
-                if let Some(&t) = d.best.get(f.as_str()) {
-                    tally_str(&mut a.tiers, f, t);
+    found
+        .par_iter_mut()
+        .zip(items_of.par_iter())
+        .for_each(|(a, items)| {
+            for &i in items {
+                let (w, d) = (&worn[i as usize], details[i as usize].as_ref().unwrap());
+                a.items += 1;
+                add_str(&mut a.skills, &w.skill);
+                add_str(&mut a.bases, &w.match_.item.base);
+                for f in &a.families {
+                    if let Some(&t) = d.best.get(f.as_str()) {
+                        tally_str(&mut a.tiers, f, t);
+                    }
                 }
-            }
-            a.resistances.add(d.n_res);
-            for &k in d.keys.iter().filter(|k| !a.families.iter().any(|f| f == *k)) {
-                add_str(&mut a.others, k);
-            }
-            for &k in d.keys.iter().filter(|k| !a.families.iter().any(|f| f == *k)) {
-                if let Some(&t) = d.best.get(k) {
-                    tally_str(&mut a.tiers, k, t);
+                a.resistances.add(d.n_res);
+                for &k in d
+                    .keys
+                    .iter()
+                    .filter(|k| !a.families.iter().any(|f| f == *k))
+                {
+                    add_str(&mut a.others, k);
                 }
-            }
-            for (side, n) in ["prefix", "suffix"].iter().zip(d.filled) {
-                a.filled[*side].0.entry(n).and_modify(|c| *c += 1).or_insert(1);
-            }
-            for (m, key) in &d.useful {
-                if !a.families.iter().any(|f| f == key) {
-                    match a.fillers.0.get_mut(&PairRef(&m.family, &m.kind)) {
-                        Some(n) => *n += 1,
-                        None => {
-                            a.fillers.0.insert((m.family.clone(), m.kind.clone()), 1);
+                for &k in d
+                    .keys
+                    .iter()
+                    .filter(|k| !a.families.iter().any(|f| f == *k))
+                {
+                    if let Some(&t) = d.best.get(k) {
+                        tally_str(&mut a.tiers, k, t);
+                    }
+                }
+                for (side, n) in ["prefix", "suffix"].iter().zip(d.filled) {
+                    a.filled[*side]
+                        .0
+                        .entry(n)
+                        .and_modify(|c| *c += 1)
+                        .or_insert(1);
+                }
+                for (m, key) in &d.useful {
+                    if !a.families.iter().any(|f| f == key) {
+                        match a.fillers.0.get_mut(&PairRef(&m.family, &m.kind)) {
+                            Some(n) => *n += 1,
+                            None => {
+                                a.fillers.0.insert((m.family.clone(), m.kind.clone()), 1);
+                            }
+                        }
+                        if let Some(t) = m.tier.filter(|&t| t != 0) {
+                            tally_str(&mut a.filler_tiers, &m.family, t);
                         }
                     }
-                    if let Some(t) = m.tier.filter(|&t| t != 0) {
-                        tally_str(&mut a.filler_tiers, &m.family, t);
-                    }
+                }
+                if a.examples.len() < 20 {
+                    a.examples.push(w.match_.clone());
                 }
             }
-            if a.examples.len() < 20 {
-                a.examples.push(w.match_.clone());
-            }
-        }
-    });
+        });
     for a in &mut found {
         let g = group_ids[a.group.as_str()];
         let n = group_items[&g] as f64;
         let mut independent = n;
         for k in &a.families {
-            independent *= key_items.get(&(g, key_ids[k.as_str()])).copied().unwrap_or(0) as f64 / n;
+            independent *= key_items
+                .get(&(g, key_ids[k.as_str()]))
+                .copied()
+                .unwrap_or(0) as f64
+                / n;
         }
-        a.lift = if independent != 0.0 { a.items as f64 / independent } else { 0.0 };
+        a.lift = if independent != 0.0 {
+            a.items as f64 / independent
+        } else {
+            0.0
+        };
     }
-    found.sort_by(|a, b| b.characters.cmp(&a.characters).then(b.families.len().cmp(&a.families.len())));
+    found.sort_by(|a, b| {
+        b.characters
+            .cmp(&a.characters)
+            .then(b.families.len().cmp(&a.families.len()))
+    });
     found
 }
 
@@ -631,7 +769,9 @@ pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_siz
 pub const USEFUL_SHARE: f64 = 0.05;
 
 fn worn_mods(m: &ItemMatch) -> impl Iterator<Item = &ModMatch> {
-    m.mods.iter().filter(|m| m.source == "natural" || m.source == "essence")
+    m.mods
+        .iter()
+        .filter(|m| m.source == "natural" || m.source == "essence")
 }
 
 fn crafted(m: &ModMatch) -> bool {
@@ -647,14 +787,34 @@ static STAT_KEYS: OnceLock<HashMap<String, String>> = OnceLock::new();
 pub fn stat_key(mod_id: &str) -> &'static str {
     let table = STAT_KEYS.get_or_init(|| {
         let mods = data::mods().unwrap_or_else(|e| panic!("{e}"));
-        mods.iter().map(|(id, m)| (id.to_string(), m.stats.first().map_or(id, |s| s.id.as_str()).to_string())).collect()
+        mods.iter()
+            .map(|(id, m)| {
+                (
+                    id.to_string(),
+                    m.stats.first().map_or(id, |s| s.id.as_str()).to_string(),
+                )
+            })
+            .collect()
     });
-    table.get(mod_id).unwrap_or_else(|| panic!("unknown mod id {mod_id:?}"))
+    table
+        .get(mod_id)
+        .unwrap_or_else(|| panic!("unknown mod id {mod_id:?}"))
 }
 
 /// The item's natural and essence mods by main stat, resistances folded into one token.
 pub fn stat_keys(m: &ItemMatch) -> Vec<&'static str> {
-    let mut keys: Vec<&'static str> = m.mods.iter().filter(|x| !crafted(x)).map(|x| if is_filler(&x.family) { RES } else { stat_key(&x.mod_id) }).collect();
+    let mut keys: Vec<&'static str> = m
+        .mods
+        .iter()
+        .filter(|x| !crafted(x))
+        .map(|x| {
+            if is_filler(&x.family) {
+                RES
+            } else {
+                stat_key(&x.mod_id)
+            }
+        })
+        .collect();
     keys.sort_unstable();
     keys.dedup();
     keys
@@ -679,13 +839,25 @@ pub fn best_tiers(m: &ItemMatch) -> (HashMap<&'static str, i64>, usize) {
 
 /// The item's natural and essence mod families, resistances folded into one token.
 pub fn core_families(m: &ItemMatch) -> Vec<String> {
-    let mut fams: Vec<String> = m.mods.iter().filter(|x| !crafted(x)).map(|x| if is_filler(&x.family) { RES.to_string() } else { x.family.clone() }).collect();
+    let mut fams: Vec<String> = m
+        .mods
+        .iter()
+        .filter(|x| !crafted(x))
+        .map(|x| {
+            if is_filler(&x.family) {
+                RES.to_string()
+            } else {
+                x.family.clone()
+            }
+        })
+        .collect();
     fams.sort();
     fams.dedup();
     fams
 }
 
-static NUMBERS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(?-?\d+(\.\d+)?(-\d+(\.\d+)?)?\)?").unwrap());
+static NUMBERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(?-?\d+(\.\d+)?(-\d+(\.\d+)?)?\)?").unwrap());
 
 /// A mod's text with numbers as #, every line (hybrids show both halves).
 fn template(db: &ModDB, mod_id: &str) -> String {
@@ -700,7 +872,18 @@ fn splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut chars = s.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
             out.push(&s[start..i]);
             let mut end = i + c.len_utf8();
             if c == '\r' && matches!(chars.peek(), Some((_, '\n'))) {
@@ -787,12 +970,20 @@ impl ClusterArchetype {
     }
 
     pub fn usual_passives(&self) -> i64 {
-        *self.passives.most_common().first().expect("archetype with no passives").0
+        *self
+            .passives
+            .most_common()
+            .first()
+            .expect("archetype with no passives")
+            .0
     }
 }
 
 /// Every rare cluster jewel on `characters` with its enchant, passive count and notables.
-pub fn wear_clusters(characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>) -> Vec<WornCluster> {
+pub fn wear_clusters(
+    characters: &[Lite],
+    skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>,
+) -> Vec<WornCluster> {
     let ctx = ClusterCtx::new();
     let per_character: Vec<Vec<WornCluster>> = characters
         .par_iter()
@@ -803,7 +994,10 @@ pub fn wear_clusters(characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) -> St
                 None if c.skill.is_empty() => "?".to_string(),
                 None => c.skill.clone(),
             };
-            c.rares.iter().filter_map(|it| ctx.worn(&who, &skill, it)).collect()
+            c.rares
+                .iter()
+                .filter_map(|it| ctx.worn(&who, &skill, it))
+                .collect()
         })
         .collect();
     per_character.into_iter().flatten().collect()
@@ -824,7 +1018,22 @@ impl ClusterCtx {
     fn new() -> ClusterCtx {
         ClusterCtx {
             mods: data::mods().unwrap_or_else(|e| panic!("{e}")),
-            by_text: cluster_enchants().into_iter().map(|(size, list)| (size, list.into_iter().map(|(short, tag)| (short.split(", ").map(str::to_string).collect(), (short, tag))).collect())).collect(),
+            by_text: cluster_enchants()
+                .into_iter()
+                .map(|(size, list)| {
+                    (
+                        size,
+                        list.into_iter()
+                            .map(|(short, tag)| {
+                                (
+                                    short.split(", ").map(str::to_string).collect(),
+                                    (short, tag),
+                                )
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
             tiers: Mutex::new(HashMap::new()),
         }
     }
@@ -857,10 +1066,15 @@ impl ClusterCtx {
         let passives = it
             .mods_of("enchant")
             .iter()
-            .find_map(|m| m.0.get("stats").map(|s| s.get("local_jewel_expansion_passive_node_count").cloned()))
+            .find_map(|m| {
+                m.0.get("stats")
+                    .map(|s| s.get("local_jewel_expansion_passive_node_count").cloned())
+            })
             .flatten()
             .filter(truthy)?;
-        let passives = passives.as_i64().or_else(|| passives.as_f64().map(|f| f as i64))?;
+        let passives = passives
+            .as_i64()
+            .or_else(|| passives.as_f64().map(|f| f as i64))?;
         let (mut notables, mut fractured, mut small) = (Vec::new(), Vec::new(), Vec::new());
         let tiers = self.tiers(&size, tag);
         for source in ["explicit", "fractured"] {
@@ -912,7 +1126,11 @@ type ClusterKey<'a> = (&'a str, &'a str, Vec<&'a str>);
 /// Martial Prowess" takes a third notable too) down to one fewer than the
 /// size holds (2 of 3 on a large, 1 on a small); a subset is dropped when a
 /// bigger combination covers `implied` of its characters.
-pub fn cluster_archetypes(worn: &[WornCluster], min_characters: usize, implied: f64) -> Vec<ClusterArchetype> {
+pub fn cluster_archetypes(
+    worn: &[WornCluster],
+    min_characters: usize,
+    implied: f64,
+) -> Vec<ClusterArchetype> {
     let mut who: IndexMap<ClusterKey, HashSet<&str>> = IndexMap::new();
     let mut rec: HashMap<ClusterKey, ClusterArchetype> = HashMap::new();
     for w in worn {
@@ -924,7 +1142,14 @@ pub fn cluster_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
             for combo in combinations(&names, size) {
                 let combo: Vec<&str> = combo.into_iter().copied().collect();
                 let key = (w.size.as_str(), w.tag.as_str(), combo);
-                let a = rec.entry(key.clone()).or_insert_with(|| ClusterArchetype::new(&w.size, &w.enchant, &w.tag, key.2.iter().map(|s| s.to_string()).collect()));
+                let a = rec.entry(key.clone()).or_insert_with(|| {
+                    ClusterArchetype::new(
+                        &w.size,
+                        &w.enchant,
+                        &w.tag,
+                        key.2.iter().map(|s| s.to_string()).collect(),
+                    )
+                });
                 a.items += 1;
                 a.full += (size == names.len()) as usize;
                 a.skills.add(w.skill.clone());
@@ -936,13 +1161,26 @@ pub fn cluster_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
     }
     let mut out = keep(&who, &mut rec, min_characters, implied);
     out.extend(passive_archetypes(worn, min_characters, implied));
-    out.sort_by(|a, b| b.characters.cmp(&a.characters).then(b.notables.len().cmp(&a.notables.len())));
+    out.sort_by(|a, b| {
+        b.characters
+            .cmp(&a.characters)
+            .then(b.notables.len().cmp(&a.notables.len()))
+    });
     out
 }
 
 /// Combos worn by enough characters, minus those a bigger combo covers `implied` of.
-fn keep<'a>(who: &IndexMap<ClusterKey<'a>, HashSet<&str>>, rec: &mut HashMap<ClusterKey<'a>, ClusterArchetype>, min_characters: usize, implied: f64) -> Vec<ClusterArchetype> {
-    let keys: Vec<&ClusterKey> = who.iter().filter(|(_, v)| v.len() >= min_characters).map(|(k, _)| k).collect();
+fn keep<'a>(
+    who: &IndexMap<ClusterKey<'a>, HashSet<&str>>,
+    rec: &mut HashMap<ClusterKey<'a>, ClusterArchetype>,
+    min_characters: usize,
+    implied: f64,
+) -> Vec<ClusterArchetype> {
+    let keys: Vec<&ClusterKey> = who
+        .iter()
+        .filter(|(_, v)| v.len() >= min_characters)
+        .map(|(k, _)| k)
+        .collect();
     let mut bigger: HashMap<(&str, &str), Vec<&ClusterKey>> = HashMap::new();
     for k in &keys {
         bigger.entry((k.0, k.1)).or_default().push(k);
@@ -950,7 +1188,11 @@ fn keep<'a>(who: &IndexMap<ClusterKey<'a>, HashSet<&str>>, rec: &mut HashMap<Clu
     let mut out = Vec::new();
     for k in keys {
         let n = who[k].len();
-        let covered = bigger[&(k.0, k.1)].iter().any(|o| o.2.len() > k.2.len() && k.2.iter().all(|x| o.2.contains(x)) && who[*o].len() as f64 >= implied * n as f64);
+        let covered = bigger[&(k.0, k.1)].iter().any(|o| {
+            o.2.len() > k.2.len()
+                && k.2.iter().all(|x| o.2.contains(x))
+                && who[*o].len() as f64 >= implied * n as f64
+        });
         if covered {
             continue;
         }
@@ -969,7 +1211,11 @@ pub const PASSIVE_MIN_MODS: usize = 2;
 /// Mods combine by group (any tier); each archetype then asks for the tier at
 /// least half its wearers have, so "GrantAttributes" worn at T1 by most
 /// becomes "GrantAttributes@1".
-pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: f64) -> Vec<ClusterArchetype> {
+pub fn passive_archetypes(
+    worn: &[WornCluster],
+    min_characters: usize,
+    implied: f64,
+) -> Vec<ClusterArchetype> {
     let mut who: IndexMap<ClusterKey, HashSet<&str>> = IndexMap::new();
     let mut rec: HashMap<ClusterKey, ClusterArchetype> = HashMap::new();
     for w in worn {
@@ -978,7 +1224,9 @@ pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
         }
         let mut by_group: IndexMap<&str, i64> = IndexMap::new();
         for m in &w.mods {
-            let (group, tier) = m.rsplit_once('@').expect("small-passive mods are Group@tier");
+            let (group, tier) = m
+                .rsplit_once('@')
+                .expect("small-passive mods are Group@tier");
             by_group.insert(group, tier.parse().expect("tier is an integer"));
         }
         let mut groups: Vec<&str> = by_group.keys().copied().collect();
@@ -987,7 +1235,14 @@ pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
             for combo in combinations(&groups, size) {
                 let combo: Vec<&str> = combo.into_iter().copied().collect();
                 let key = (w.size.as_str(), w.tag.as_str(), combo.clone());
-                let a = rec.entry(key.clone()).or_insert_with(|| ClusterArchetype::new(&w.size, &w.enchant, &w.tag, combo.iter().map(|s| s.to_string()).collect()));
+                let a = rec.entry(key.clone()).or_insert_with(|| {
+                    ClusterArchetype::new(
+                        &w.size,
+                        &w.enchant,
+                        &w.tag,
+                        combo.iter().map(|s| s.to_string()).collect(),
+                    )
+                });
                 a.items += 1;
                 a.full += (size == groups.len()) as usize;
                 a.skills.add(w.skill.clone());
@@ -1002,7 +1257,11 @@ pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
     }
     let mut out = keep(&who, &mut rec, min_characters, implied);
     for a in &mut out {
-        a.notables = a.notables.iter().map(|g| format!("{g}@{}", a.tiers[g].usual(0.5))).collect();
+        a.notables = a
+            .notables
+            .iter()
+            .map(|g| format!("{g}@{}", a.tiers[g].usual(0.5)))
+            .collect();
     }
     out
 }
@@ -1044,22 +1303,41 @@ fn group_label(db: &ModDB, m: &ItemMatch) -> String {
     crate::gear::group(db, m).label.clone()
 }
 
-fn pool_weights(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, level: i64) -> Vec<(String, i64)> {
-    crate::gear::pool(db, base_id, tags, level).iter().map(|m| (m.id.clone(), m.weight as i64)).collect()
+fn pool_weights(
+    db: &ModDB,
+    base_id: &str,
+    tags: &BTreeSet<String>,
+    level: i64,
+) -> Vec<(String, i64)> {
+    crate::gear::pool(db, base_id, tags, level)
+        .iter()
+        .map(|m| (m.id.clone(), m.weight as i64))
+        .collect()
 }
 
 /// Python's `round()` of a half-integer median: ties go to the even number.
 fn round_half_even(x: f64) -> i64 {
     let r = x.round();
-    if (x - x.trunc()).abs() == 0.5 && r as i64 % 2 != 0 { r as i64 - x.signum() as i64 } else { r as i64 }
+    if (x - x.trunc()).abs() == 0.5 && r as i64 % 2 != 0 {
+        r as i64 - x.signum() as i64
+    } else {
+        r as i64
+    }
 }
 
 /// `statistics.median` of the counter's elements.
 fn median(c: &Counter<usize>) -> f64 {
-    let mut v: Vec<usize> = c.iter().flat_map(|(&k, n)| std::iter::repeat_n(k, n as usize)).collect();
+    let mut v: Vec<usize> = c
+        .iter()
+        .flat_map(|(&k, n)| std::iter::repeat_n(k, n as usize))
+        .collect();
     v.sort_unstable();
     let n = v.len();
-    if n % 2 == 1 { v[n / 2] as f64 } else { (v[n / 2 - 1] + v[n / 2]) as f64 / 2.0 }
+    if n % 2 == 1 {
+        v[n / 2] as f64
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) as f64 / 2.0
+    }
 }
 
 /// The finished item an archetype's wearers have, as `pipeline.estimate_gear` costs it.
@@ -1101,9 +1379,18 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
         if !a.families.contains(&key) && mods.iter().filter(|x| x.kind == m.kind).count() >= 3 {
             continue;
         }
-        let tier = a.usual_tier(&key, 0.5).or(m.tier).expect("a found mod has a tier");
-        let mod_id = pool.get(&(m.family.clone(), Some(tier))).cloned().unwrap_or_else(|| m.mod_id.clone());
-        let lines: Vec<ModLine> = splitlines(db.mods[&mod_id].text_or_empty()).into_iter().map(ModLine::new).collect();
+        let tier = a
+            .usual_tier(&key, 0.5)
+            .or(m.tier)
+            .expect("a found mod has a tier");
+        let mod_id = pool
+            .get(&(m.family.clone(), Some(tier)))
+            .cloned()
+            .unwrap_or_else(|| m.mod_id.clone());
+        let lines: Vec<ModLine> = splitlines(db.mods[&mod_id].text_or_empty())
+            .into_iter()
+            .map(ModLine::new)
+            .collect();
         let mut new = m.clone();
         new.mod_id = mod_id;
         new.tier = Some(tier);
@@ -1118,14 +1405,22 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
         return None;
     }
     let taken: HashSet<&str> = mods.iter().map(|m| m.family.as_str()).collect();
-    let mut families: IndexMap<String, i64> = crate::gear::FILLER_FAMILIES.iter().map(|f| (f.to_string(), crate::gear::FILLER_TIER)).collect();
+    let mut families: IndexMap<String, i64> = crate::gear::FILLER_FAMILIES
+        .iter()
+        .map(|f| (f.to_string(), crate::gear::FILLER_TIER))
+        .collect();
     let mut order: Vec<String> = Vec::new();
     for ((family, _side), n) in a.fillers.most_common() {
         if (n as f64) < FILLER_SHARE * a.items as f64 || taken.contains(family.as_str()) {
             continue;
         }
         if !families.contains_key(family) {
-            let tiers = a.filler_tiers.get(family).filter(|c| !c.is_empty()).cloned().unwrap_or_else(|| Counter::of(crate::gear::FILLER_TIER, 1));
+            let tiers = a
+                .filler_tiers
+                .get(family)
+                .filter(|c| !c.is_empty())
+                .cloned()
+                .unwrap_or_else(|| Counter::of(crate::gear::FILLER_TIER, 1));
             families.insert(family.clone(), tiers.usual(0.8)); // filler: lenient
         }
         if !order.contains(family) {
@@ -1135,7 +1430,11 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
     let mut need = [0i64; 2];
     for (i, side) in ["prefix", "suffix"].iter().enumerate() {
         let c = &a.filled[*side];
-        let usual = if c.is_empty() { 0 } else { round_half_even(median(c)) };
+        let usual = if c.is_empty() {
+            0
+        } else {
+            round_half_even(median(c))
+        };
         need[i] = (usual.min(3) - sides[i] as i64).max(0);
     }
     let finish = json!({"families": families, "sides": need, "order": order});
@@ -1148,7 +1447,18 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
 }
 
 fn cluster_enchants() -> Vec<(&'static str, Vec<(String, String)>)> {
-    ["small", "medium", "large"].into_iter().map(|size| (size, crate::cluster::enchants(size).into_iter().map(|e| (e.short, e.tag)).collect())).collect()
+    ["small", "medium", "large"]
+        .into_iter()
+        .map(|size| {
+            (
+                size,
+                crate::cluster::enchants(size)
+                    .into_iter()
+                    .map(|e| (e.short, e.tag))
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 fn cluster_mod_tiers(size: &str, tag: &str) -> HashMap<String, i64> {
