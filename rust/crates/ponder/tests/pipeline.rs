@@ -166,11 +166,10 @@ fn query_unordered(q: &Value) -> Value {
     let mut q = q.clone();
     if let Some(groups) = q.pointer_mut("/query/stats").and_then(Value::as_array_mut) {
         for g in groups.iter_mut() {
-            if g["type"] == "count" {
-                if let Some(f) = g["filters"].as_array_mut() {
+            if g["type"] == "count"
+                && let Some(f) = g["filters"].as_array_mut() {
                     f.sort_by_key(|x| x.to_string());
                 }
-            }
         }
     }
     q
@@ -585,11 +584,10 @@ fn sales_and_plans_match_python() {
                 (want_cost, g) => d.push(format!("{} #{k}: cost {g:?} != {want_cost:?} (error {err:?} / {})", e.title, w["error"])),
             }
         }
-        if let Some(w) = after["cheapest"].as_f64() {
-            if !close_to(w, e.cheapest().unwrap_or(f64::NAN), 1e-6) {
+        if let Some(w) = after["cheapest"].as_f64()
+            && !close_to(w, e.cheapest().unwrap_or(f64::NAN), 1e-6) {
                 d.push(format!("{}: cheapest {:?} != {w}", e.title, e.cheapest()));
             }
-        }
         if !d.is_empty() {
             d.truncate(4);
             bad.push(d.join("\n    "));
@@ -746,7 +744,7 @@ fn fake_trade(calls: Arc<Mutex<Vec<String>>>) -> Arc<dyn Transport> {
             let h = ponder_net::pyjson::sha1_hex(req.body.as_deref().unwrap());
             calls.lock().unwrap().push(h.clone());
             let n = u32::from_str_radix(&h[..8], 16).unwrap() as u64;
-            if n % 7 == 0 {
+            if n.is_multiple_of(7) {
                 return Ok(Response::json(200, &json!({"id": "none", "total": 0, "result": []})));
             }
             let price = (5 + n % 1000) as f64 / 10.0;
@@ -1095,11 +1093,10 @@ fn finish_matches_python_goldens() {
                 continue;
             }
             let m = db().match_item(&item);
-            if let Some(est) = estimate_item(&cx, db(), &m, &table, "Standard", &GearOpts::default()).unwrap() {
-                if !est.targets.is_empty() && keys.insert(est.key.clone()) {
+            if let Some(est) = estimate_item(&cx, db(), &m, &table, "Standard", &GearOpts::default()).unwrap()
+                && !est.targets.is_empty() && keys.insert(est.key.clone()) {
                     ests.push(est);
                 }
-            }
             items.push((name.clone(), m));
         }
     }
@@ -1255,7 +1252,7 @@ fn sources_expand_and_builds_get_names() {
     assert_eq!(expanded[..2], ["https://pobb.in/aaa", "https://pobb.in/bbb"]);
     assert_eq!(expanded[2..], sources[1..]);
     let build = ponder_game::pob::Build { class_name: "Witch".into(), ascendancy: "Occultist".into(), level: 95, main_skill: Some("Winter Orb".into()), items: vec![] };
-    assert_eq!(build_name(&build), "Occultist lvl 97: Winter Orb");
+    assert_eq!(build_name(&build), "Occultist lvl 95: Winter Orb");
     let bare = ponder_game::pob::Build { ascendancy: String::new(), main_skill: None, ..build };
     assert_eq!(build_name(&bare), "Witch lvl 95: ?");
 }
@@ -1294,7 +1291,7 @@ fn run_turns_builds_into_a_report() {
     let progress = Mutex::new(Vec::new());
     let report = run(&cx, db(), &sources, &opts, Some(&|m: &str| progress.lock().unwrap().push(m.to_string()))).unwrap();
     assert_eq!(report.builds.len(), 2);
-    assert_eq!(report.builds[0].name, "Occultist lvl 97: Winter Orb");
+    assert_eq!(report.builds[0].name, "Occultist lvl 95: Winter Orb");
     assert!(report.builds.iter().all(|b| b.rares > 3));
     assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
     assert!(report.errors[0].starts_with("tests/fixtures/real/no_such_build.txt"));

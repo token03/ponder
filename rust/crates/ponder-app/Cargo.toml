@@ -3,7 +3,20 @@ name = "ponder-app"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "Desktop app (egui)."
+rust-version.workspace = true
+description = "Desktop app (egui): run the ladder pipeline and browse the market holes it finds."
 
 [dependencies]
 ponder.workspace = true
+ponder-core.workspace = true
+ponder-game.workspace = true
+ponder-net.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+# glow (OpenGL) rather than wgpu keeps the build small.
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "x11", "wayland"] }
+egui_extras = { version = "0.37", default-features = false }
+egui_tiles = "0.18"
+egui_plot = "0.38"
+egui = "0.37"

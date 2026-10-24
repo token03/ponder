@@ -6,6 +6,7 @@ members = ["crates/*"]
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+rust-version = "1.99"
 
 [workspace.dependencies]
 ponder-core = { path = "crates/ponder-core" }
@@ -20,13 +21,18 @@ regex = "1"
 ureq = "3"
 anyhow = "1"
 
-# Edit-build loop: our crates unoptimised with light debug info, dependencies optimised
-# (the solver and faer are unusable at opt-level 0).
+# Edit-build loop: light debug info, dependencies optimised, our crates at opt-level 1
+# (tests solve hundreds of real problems; at opt-level 0 that takes minutes), and the
+# solver itself fully optimised since it is the hot loop and rarely edited.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.dev.package.ponder-core]
+opt-level = 3
 
 [profile.release]
 debug = "line-tables-only"

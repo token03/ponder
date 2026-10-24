@@ -3,6 +3,7 @@ name = "ponder-core"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Crafting solver: lumped item states, currency outcomes, policy iteration. No I/O."
 
 [dependencies]

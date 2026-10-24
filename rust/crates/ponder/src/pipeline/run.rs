@@ -314,13 +314,15 @@ pub fn expand_sources(sources: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for source in sources {
         let path = Path::new(source);
-        if source.chars().count() < 1024 && path.is_file() && path.extension().is_some_and(|e| e == "txt") {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                let links: Vec<String> = text.lines().map(|l| l.split('#').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect();
-                if !links.is_empty() && links.iter().all(|l| l.starts_with("http")) {
-                    out.extend(links);
-                    continue;
-                }
+        if source.chars().count() < 1024
+            && path.is_file()
+            && path.extension().is_some_and(|e| e == "txt")
+            && let Ok(text) = std::fs::read_to_string(path)
+        {
+            let links: Vec<String> = text.lines().map(|l| l.split('#').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect();
+            if !links.is_empty() && links.iter().all(|l| l.starts_with("http")) {
+                out.extend(links);
+                continue;
             }
         }
         out.push(source.clone());

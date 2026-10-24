@@ -3,6 +3,7 @@ name = "ponder-game"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Game data (repoe), item parsing and mod matching, currency actions, craft problems."
 
 [dependencies]
@@ -10,6 +11,6 @@ ponder-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 flate2 = "1"
-roxmltree = "0.20"
+roxmltree = "0.21"

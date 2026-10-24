@@ -3,12 +3,16 @@ name = "ponder-cli"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Command line: `ponder ...`, with JSON output for scripts and LLMs."
 
 [dependencies]
 ponder.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+ponder-game.workspace = true
+ponder-net.workspace = true
+clap = { version = "4", features = ["derive"] }
 
 [[bin]]
 name = "ponder"
