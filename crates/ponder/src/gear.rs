@@ -144,7 +144,22 @@ fn side_of(generation_type: &str) -> Side {
 }
 
 /// Every prefix or suffix that can roll on a base with these tags at this item level, in `mods.json` order.
+///
+/// Remembered per (domain, tags, level): recombinator planning asks for the same few bases thousands of times.
 pub fn pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<Mod> {
+    type Key = (String, BTreeSet<String>, i64);
+    static POOLS: OnceLock<std::sync::Mutex<HashMap<Key, std::sync::Arc<Vec<Mod>>>>> = OnceLock::new();
+    let key = (db.bases[base_id].domain.clone(), tags.clone(), item_level);
+    let pools = POOLS.get_or_init(Default::default);
+    if let Some(hit) = pools.lock().unwrap().get(&key) {
+        return hit.as_ref().clone();
+    }
+    let made = std::sync::Arc::new(pool_uncached(db, base_id, tags, item_level));
+    pools.lock().unwrap().insert(key, made.clone());
+    made.as_ref().clone()
+}
+
+fn pool_uncached(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<Mod> {
     let domain = &db.bases[base_id].domain;
     let mut out = Vec::new();
     for (mod_id, m) in db.mods.iter() {
@@ -157,8 +172,8 @@ pub fn pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64)
         if m.required_level > item_level {
             continue;
         }
-        let weight = ModDB::spawn_weight(m, tags);
-        if weight > 0 {
+        let weight = ModDB::generation_weight(m, tags);
+        if weight > 0.0 {
             out.push(to_mod(mod_id, m, weight));
         }
     }
@@ -178,7 +193,7 @@ pub fn spawn_tags() -> &'static BTreeSet<String> {
             .flat_map(|m| {
                 m.spawn_weights
                     .iter()
-                    .filter(|w| w.weight > 0)
+                    .chain(&m.generation_weights)
                     .map(|w| w.tag.clone())
             })
             .collect()
@@ -322,6 +337,8 @@ struct Finish {
     families: HashMap<String, i64>,
     sides: (usize, usize),
     order: Vec<String>,
+    /// mods on the finished item, any mod filling what targets, filler and bench leave
+    full: usize,
 }
 
 impl Finish {
@@ -347,6 +364,7 @@ impl Finish {
             families,
             sides: (side(0), side(1)),
             order,
+            full: v["full"].as_u64().unwrap_or(0) as usize,
         }
     }
 }
@@ -414,7 +432,7 @@ pub fn build(db: &ModDB, m: &ItemMatch, pricing: Pricing, opts: BuildOpts) -> Re
         {
             filler_mods.push((x, text));
         } else if x.fractured() {
-            fixed.push(to_mod(&x.mod_id, dmod(&x.mod_id), 0));
+            fixed.push(to_mod(&x.mod_id, dmod(&x.mod_id), 0.0));
             rows.push(Row::new(
                 "fractured",
                 kind,
@@ -461,7 +479,7 @@ pub fn build(db: &ModDB, m: &ItemMatch, pricing: Pricing, opts: BuildOpts) -> Re
                 notable: false,
             });
         } else if x.source == "essence" {
-            extra.insert(x.mod_id.clone(), to_mod(&x.mod_id, dmod(&x.mod_id), 0));
+            extra.insert(x.mod_id.clone(), to_mod(&x.mod_id, dmod(&x.mod_id), 0.0));
             targets.push(Target {
                 name: format!("{} (essence)", short(&text, 34)),
                 side: kind,
@@ -506,6 +524,7 @@ pub fn build(db: &ModDB, m: &ItemMatch, pricing: Pricing, opts: BuildOpts) -> Re
         .into_iter()
         .collect();
     let filler_need;
+    let mut min_mods = 0;
     let finish = m
         .finish
         .as_ref()
@@ -537,6 +556,17 @@ pub fn build(db: &ModDB, m: &ItemMatch, pricing: Pricing, opts: BuildOpts) -> Re
         }
         filler_sides = Some(sides);
         filler_need = sides.0 + sides.1;
+        min_mods = spec.full;
+        let limit = if JEWEL_CLASSES.contains(&item_class.as_str()) { 2 } else { 3 };
+        for (side, filler_n) in [(Side::Prefix, sides.0), (Side::Suffix, sides.1)] {
+            let used = targets.iter().filter(|t| t.side == side).count()
+                + fixed.iter().filter(|m| m.side == side).count()
+                + reserve.get(&side).copied().unwrap_or(0)
+                + filler_n;
+            for _ in used..limit.min(spec.full / 2) {
+                rows.push(Row::new("any", side, "any mod", "any"));
+            }
+        }
     } else if !filler_mods.is_empty() {
         let worst = FILLER_TIER.max(
             filler_mods
@@ -563,34 +593,26 @@ pub fn build(db: &ModDB, m: &ItemMatch, pricing: Pricing, opts: BuildOpts) -> Re
     } else {
         filler_need = 0;
     }
-    let (harvest, h_profiles) = actions::harvest(&mods);
-    let (fossil, f_profiles) = fossils(&mods, &targets, &filler, filler_need, &item_class, pricing);
-    let (essence, forced) = actions::essences(&item_class, ilvl, 6);
-    for (_, mod_id) in &forced {
-        extra
-            .entry(mod_id.clone())
-            .or_insert_with(|| to_mod(mod_id, dmod(mod_id), 0));
-    }
-    let mut all = actions::basic();
-    all.extend(harvest.iter().cloned());
-    all.extend(fossil);
-    all.extend(essence);
-    all.extend(actions::metamods(
-        &item_class,
-        &lock_rerolls(&harvest, &h_profiles, &targets, &filler),
-    ));
-    all.extend(actions::eldritch(&item_class, &m.item.influences));
     let need = targets.len();
-    let mut problem = Problem::new(mods, targets, need, all, kind_of(&item_class));
+    let mut problem = ponder_core::ProblemSpec::new(mods, targets, need, Vec::new(), kind_of(&item_class));
     problem.fixed = fixed;
-    problem.profiles = h_profiles.into_iter().chain(f_profiles).collect();
+    problem.influences = m.item.influences.clone();
     problem.extra_mods = extra;
     problem.reserve = reserve;
+    problem.bench = bench_ids.iter().map(|id| to_mod(id, dmod(id), 0.0)).filter(|b| mods_conflict(&problem.pool, b)).collect();
     problem.filler = filler;
     problem.filler_need = filler_need;
+    configure_actions(db, &mut problem, &item_class, ilvl, pricing, CatalogOptions::PRODUCT);
+    if let Some(target) = problem.targets.iter().find(|t| t.good.is_empty()) {
+        return Err(anyhow!("the bench crafts conflict with {}", target.name));
+    }
+    if problem.targets.len() + problem.bench.len() > ponder_core::MAX_TARGETS {
+        return Err(anyhow!("too many target and bench modifier groups"));
+    }
     problem.filler_sides = filler_sides;
+    problem.min_mods = min_mods;
     Ok(GearProblem {
-        problem,
+        problem: problem.compile(),
         item_level: ilvl,
         skipped,
         bench,
@@ -738,8 +760,7 @@ fn family_name(db: &ModDB, family: &str, mods: &[Mod]) -> String {
     short(&re.replace_all(&m.label, "#"), 28)
 }
 
-/// A craft of `targets` on a plain base, with every action `build` offers (no bench, no filler).
-pub fn problem_on(
+pub fn problem_spec_on(
     db: &ModDB,
     base_id: &str,
     targets: Vec<Target>,
@@ -747,35 +768,122 @@ pub fn problem_on(
     influences: &BTreeSet<String>,
     junk_cap: Option<(usize, usize)>,
     pricing: Pricing,
-) -> Problem {
+) -> ponder_core::ProblemSpec {
     let item_class = db.bases[base_id].item_class.as_str();
     let tags = db.item_tags(base_id, influences);
     let mods = pool(db, base_id, &tags, item_level);
-    let (harvest, h_profiles) = actions::harvest(&mods);
-    let none = BTreeSet::new();
-    let (fossil, f_profiles) = fossils(&mods, &targets, &none, 0, item_class, pricing);
-    let (essence, forced) = actions::essences(item_class, item_level, 6);
-    let extra = forced
-        .iter()
-        .map(|(_, id)| (id.clone(), to_mod(id, &db.mods[id.as_str()], 0)))
-        .collect();
-    let mut all = actions::basic();
-    all.extend(harvest.iter().cloned());
-    all.extend(fossil);
-    all.extend(essence);
-    all.extend(actions::metamods(
-        item_class,
-        &lock_rerolls(&harvest, &h_profiles, &targets, &none),
-    ));
-    all.extend(actions::eldritch(item_class, influences));
     let need = targets.len();
-    let mut problem = Problem::new(mods, targets, need, all, kind_of(item_class));
-    problem.profiles = h_profiles.into_iter().chain(f_profiles).collect();
-    problem.extra_mods = extra;
+    let mut problem = ponder_core::ProblemSpec::new(mods, targets, need, Vec::new(), kind_of(item_class));
     problem.junk_cap = junk_cap;
+    problem.influences = influences.clone();
+    configure_actions(db, &mut problem, item_class, item_level, pricing, CatalogOptions::COMPONENT);
     problem
 }
 
+pub fn relevel_problem(db: &ModDB, m: &ItemMatch, original: &Problem, item_level: i64, pricing: Pricing) -> Problem {
+    let base_id = m.base_id.as_deref().expect("a matched base");
+    let item_class = db.bases[base_id].item_class.as_str();
+    let mods = pool(db, base_id, &m.tags, item_level);
+    let expand = |good: &mut BTreeSet<String>| {
+        let mut tiers: HashMap<String, i64> = HashMap::new();
+        for id in good.iter() {
+            if ModDB::generation_weight(&db.mods[id], &m.tags) > 0.0
+                && let Some(tier) = db.tier(id, &m.tags)
+            {
+                tiers.entry(db.mods[id].type_.clone()).and_modify(|t| *t = (*t).max(tier)).or_insert(tier);
+            }
+        }
+        for mod_ in &mods {
+            if tiers.get(&db.mods[&mod_.id].type_).is_some_and(|&worst| db.tier(&mod_.id, &m.tags).is_some_and(|t| t <= worst)) {
+                good.insert(mod_.id.clone());
+            }
+        }
+    };
+    let mut problem = original.to_spec();
+    for target in &mut problem.targets {
+        expand(&mut target.good);
+    }
+    expand(&mut problem.filler);
+    problem.pool = mods;
+    configure_actions(db, &mut problem, item_class, item_level, pricing, CatalogOptions::PRODUCT);
+    problem.compile()
+}
+
+#[derive(Clone, Copy)]
+struct CatalogOptions {
+    max_fossils: usize,
+    metamods: bool,
+    harvest_add_remove: bool,
+}
+
+impl CatalogOptions {
+    const PRODUCT: Self = Self { max_fossils: 4, metamods: true, harvest_add_remove: true };
+    const COMPONENT: Self = Self { max_fossils: 2, metamods: false, harvest_add_remove: false };
+}
+
+fn configure_actions(db: &ModDB, p: &mut ponder_core::ProblemSpec, item_class: &str, item_level: i64, pricing: Pricing, opts: CatalogOptions) {
+    let (harvest, mut profiles) = actions::harvest(&p.pool);
+    let (essence, forced) = actions::essences(item_class, item_level, 6);
+    profiles.extend(actions::essence_profiles(&p.pool, &essence));
+    essences_count(db, &p.pool, &forced, &mut p.targets, &mut p.filler);
+    for target in &mut p.targets {
+        target.good.retain(|id| p.bench.iter().all(|b| db.mods[id].groups.iter().all(|g| !b.groups.contains(g))));
+        target.groups = target.good.iter().flat_map(|id| db.mods[id].groups.iter().cloned()).collect();
+    }
+    let (fossil, fossil_profiles) = fossils(&p.pool, &p.targets, &p.filler, p.filler_need, item_class, pricing, opts.max_fossils);
+    let mut all = actions::basic();
+    all.extend(harvest);
+    if opts.harvest_add_remove {
+        all.extend(actions::harvest_add_remove(&profiles, !p.influences.is_empty()));
+    }
+    all.extend(fossil);
+    all.extend(essence);
+    if opts.metamods {
+        all.extend(actions::metamods(item_class, &p.pool));
+    }
+    all.extend(actions::eldritch(item_class, &p.influences));
+    profiles.extend(fossil_profiles);
+    p.actions = all;
+    p.profiles = profiles;
+    for (_, id) in forced {
+        p.extra_mods.entry(id.clone()).or_insert_with(|| to_mod(&id, &db.mods[&id], 0.0));
+    }
+}
+
+fn essences_count(db: &ModDB, pool: &[Mod], forced: &[(String, String)], targets: &mut [Target], filler: &mut BTreeSet<String>) {
+    let family = |id: &str| (&db.mods[id].type_, side_of(&db.mods[id].generation_type));
+    let satisfies = |id: &str, good: &BTreeSet<String>| {
+        let candidate = &db.mods[id];
+        good.iter().filter(|g| family(g) == family(id)).any(|g| {
+            let wanted = &db.mods[g];
+            let mut tiers: Vec<_> = pool.iter().map(|m| &db.mods[&m.id]).filter(|m| m.type_ == wanted.type_).collect();
+            tiers.sort_by_key(|m| m.required_level);
+            !wanted.stats.is_empty() && wanted.stats.iter().all(|stat| {
+                let Some(value) = candidate.stats.iter().find(|s| s.id == stat.id) else { return false };
+                let first = tiers.iter().find_map(|m| m.stats.iter().find(|s| s.id == stat.id));
+                let last = tiers.iter().rev().find_map(|m| m.stats.iter().find(|s| s.id == stat.id));
+                let decreasing = first.zip(last).map_or(value.max < 0.0 && stat.max < 0.0, |(a, b)| b.min + b.max < a.min + a.max);
+                if decreasing { value.max <= stat.max } else { value.min >= stat.min }
+            })
+        })
+    };
+    for (_, id) in forced {
+        let (fam, side) = family(id);
+        for t in targets.iter_mut().filter(|t| t.side == side && t.good.iter().any(|g| family(g).0 == fam) && satisfies(id, &t.good)) {
+            t.good.insert(id.clone());
+            t.groups.extend(db.mods[id.as_str()].groups.iter().cloned());
+        }
+        if satisfies(id, filler) {
+            filler.insert(id.clone());
+        }
+    }
+}
+
+fn mods_conflict(pool: &[Mod], bench: &Mod) -> bool {
+    pool.iter().any(|m| m.groups.iter().any(|g| bench.groups.contains(g)))
+}
+
+/// Fossil rerolls for these wants: combinations of up to `max_fossils` in a resonator.
 fn fossils(
     mods: &[Mod],
     targets: &[Target],
@@ -783,51 +891,23 @@ fn fossils(
     filler_need: usize,
     item_class: &str,
     pricing: Pricing,
+    max_fossils: usize,
 ) -> (Vec<Action>, Profiles) {
+    if JEWEL_CLASSES.contains(&item_class) {
+        return (Vec::new(), Profiles::new()); // resonators don't go on jewels
+    }
     if !FOSSIL_COMBOS {
         return actions::fossils(mods);
     }
     let mut wants: Vec<&BTreeSet<String>> = targets.iter().map(|t| &t.good).collect();
     wants.extend(std::iter::repeat_n(filler, filler_need));
-    // half the mods a rare rolls
-    let per_side = if JEWEL_CLASSES.contains(&item_class) {
-        1.6
-    } else {
-        2.3
-    };
     actions::fossil_combos(
         mods,
         &wants,
         pricing.prices,
         pricing.settings,
-        actions::FossilOpts {
-            mods_per_side: per_side,
-            ..Default::default()
-        },
+        actions::FossilOpts { max_fossils, ..Default::default() },
     )
-}
-
-/// Harvest reforges worth pairing with a side lock: their tag can hit a target or filler mod.
-fn lock_rerolls(
-    harvest: &[Action],
-    profiles: &Profiles,
-    targets: &[Target],
-    filler: &BTreeSet<String>,
-) -> Vec<Action> {
-    harvest
-        .iter()
-        .filter(|h| {
-            let profile = &profiles[h
-                .first_profile
-                .as_deref()
-                .expect("harvest names its profile")];
-            targets
-                .iter()
-                .any(|t| t.good.iter().any(|m| profile.contains_key(m)))
-                || filler.iter().any(|m| profile.contains_key(m))
-        })
-        .cloned()
-        .collect()
 }
 
 /// The craft and its cheapest plan.
@@ -837,8 +917,8 @@ pub fn cost(
     pricing: Pricing,
     opts: BuildOpts,
 ) -> Result<(GearProblem, Plan)> {
-    let mut gp = build(db, m, pricing, opts)?;
-    let plan = solve(&mut gp.problem, pricing.prices, pricing.settings)?;
+    let gp = build(db, m, pricing, opts)?;
+    let plan = solve(&gp.problem, pricing.prices, pricing.settings)?;
     Ok((gp, plan))
 }
 
@@ -848,12 +928,12 @@ pub fn action_cost_of(cost: &[(String, f64)], prices: &Prices) -> f64 {
         .sum()
 }
 
-fn to_mod(mod_id: &str, m: &data::Mod, weight: i64) -> Mod {
+fn to_mod(mod_id: &str, m: &data::Mod, weight: f64) -> Mod {
     let text = m.text_or_empty();
     Mod {
         id: mod_id.to_string(),
         side: side_of(&m.generation_type),
-        weight: weight as f64,
+        weight,
         groups: m.groups.clone(),
         notable: false,
         label: if text.is_empty() {

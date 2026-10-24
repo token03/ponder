@@ -1,11 +1,14 @@
 //! Reading a plan: state descriptions and the policy as numbered steps.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::problem::Problem;
 use crate::solve::Plan;
+use crate::transition::{Distribution, TransitionResult};
 use crate::types::*;
 
 const RARITY: [&str; 3] = ["normal", "magic", "rare"];
@@ -34,6 +37,9 @@ pub fn describe_parts(problem: &Problem, s: &State) -> (&'static str, Vec<(Strin
         if s.junk[slot] != 0 {
             parts.push((format!("{} {label}", s.junk[slot]), if slot >= 4 { "filler" } else { "other" }));
         }
+    }
+    if s.meta != 0 {
+        parts.push((format!("\"{}\"", META_NAMES[s.meta as usize]), "other"));
     }
     (RARITY[s.rarity as usize], parts)
 }
@@ -69,7 +75,7 @@ pub struct Exit {
     pub to: Option<usize>, // step number; None when the item is done or the branch is too rare to list
     pub what: String,      // e.g. "+Life", "lost Life", "done"
     /// "done", "win", "back" (lost a target), "side" (same targets, something else changed),
-    /// "sell" (sold, start over), "rare" (unlisted)
+    /// "rare" (unlisted)
     pub kind: String,
     #[serde(default)]
     pub via: String, // the action that mostly leads here
@@ -93,6 +99,9 @@ impl Step {
     }
 }
 
+/// Where a list of outcomes leads: (next step or done, chance), in first-seen order.
+type Folded = Vec<(Dest, f64)>;
+
 /// Rarity plus which targets are on at a good tier (a bit set).
 type Key = (u8, u8);
 
@@ -115,20 +124,6 @@ fn good_key(problem: &Problem, st: &State) -> Key {
     (st.rarity, mask)
 }
 
-/// `{n:,.0f}`
-fn grouped(x: f64) -> String {
-    let s = format!("{x:.0}");
-    let (sign, digits) = s.strip_prefix('-').map_or(("", s.as_str()), |d| ("-", d));
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    format!("{sign}{out}")
-}
-
 /// The policy as numbered steps ("spam X until Y: a. ... → 3, b. ... → back to 1").
 ///
 /// States are grouped by progress: rarity plus which targets are on at a good
@@ -137,7 +132,6 @@ fn grouped(x: f64) -> String {
 /// leads. Steps reached less than `min_reach` times per item are folded
 /// into their parent's "rare" exit.
 pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
-    let by_name: HashMap<&str, &Action> = problem.actions.iter().map(|a| (a.name.as_str(), a)).collect();
     let open_visits: Vec<(State, f64)> =
         ordered_visits(plan).into_iter().filter(|(s, v)| *v > 1e-9 && plan.policy.contains_key(s)).collect();
     let ov: HashMap<State, f64> = open_visits.iter().copied().collect();
@@ -161,11 +155,42 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
     }
     let mut flow: Vec<Vec<(Dest, f64)>> = vec![Vec::new(); keys.len()]; // group -> next group (or done) -> expected moves
     let mut via: HashMap<(usize, Dest), Vec<(&str, f64)>> = HashMap::new(); // (group, next) -> action -> expected moves
+    // Outcomes folded into where they lead; a reroll's list is the same from every state, so it is folded once.
+    let used: FxHashSet<&str> = open_visits.iter().map(|(s, _)| plan.policy[s].as_str()).collect();
+    let prepared: FxHashMap<&str, _> = problem
+        .actions
+        .iter()
+        .filter(|a| used.contains(a.name.as_str()))
+        .map(|a| {
+            problem.refine(a);
+            (a.name.as_str(), problem.prepare(a))
+        })
+        .collect();
+    let fold = |out: &[Outcome]| {
+        let mut dests = Vec::new();
+        for &(p, nxt) in out {
+            bump(&mut dests, if problem.done(&nxt) { Dest::Done } else { Dest::At(good_key(problem, &nxt)) }, p);
+        }
+        dests
+    };
+    let mut shared: FxHashMap<usize, (Arc<Distribution>, Folded)> = FxHashMap::default();
+    let (mut scratch, mut bounds) = (Vec::new(), Vec::new());
+    let mut fresh;
     for &(st, v) in &open_visits {
         let g = gi[&good_key(problem, &st)];
         let a = plan.policy[&st].as_str();
-        for &(p, nxt) in problem.outcomes(&st, by_name[a]).iter() {
-            let to = if problem.done(&nxt) { Dest::Done } else { Dest::At(good_key(problem, &nxt)) };
+        let dests: &[(Dest, f64)] = match problem.outcomes_into(&st, &prepared[a], &mut scratch, &mut bounds) {
+            TransitionResult::Empty => &[],
+            TransitionResult::Buffered => {
+                fresh = fold(&scratch);
+                &fresh
+            }
+            TransitionResult::Shared(list) => {
+                // the Arc is kept so its address can't be reused for another list
+                &shared.entry(Arc::as_ptr(&list) as usize).or_insert_with(|| (list.clone(), fold(&list))).1
+            }
+        };
+        for &(to, p) in dests {
             if to == Dest::At(keys[g]) {
                 continue;
             }
@@ -229,10 +254,6 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
                     }
                     let what = if got.is_empty() { "done".to_string() } else { format!("got {}", got.join(" + ")) };
                     exits.push(Exit { chance, to: None, what, kind: "done".into(), via: by.into() });
-                }
-                Dest::At(t) if by_name[by].kind == "sell" && number.contains_key(&t) => {
-                    let what = format!("{by} (+{}c)", grouped(by_name[by].credit));
-                    exits.push(Exit { chance, to: Some(number[&t]), what, kind: "sell".into(), via: by.into() });
                 }
                 Dest::At(t) if number.contains_key(&t) => {
                     let (gained, lost) = (t.1 & !have, have & !t.1);

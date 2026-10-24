@@ -10,6 +10,7 @@ use ponder_game::item::parse_item;
 use ponder_game::mods::ModDB;
 use serde::{Deserialize, Serialize};
 
+use crate::filter::ItemCatalog;
 use crate::jobs::{Finished, Jobs, Loaded, Msg};
 use crate::view::{self, Filters, Sort};
 
@@ -39,7 +40,7 @@ impl Default for RunSettings {
             cluster_top: o.cluster_top,
             min_characters: o.min_characters,
             group: String::new(),
-            recombs: false,
+            recombs: o.recombs,
             trade: false,
             trade_budget: o.trade_budget,
             chaos_per_hour: pipeline::settings_from_env().chaos_per_hour,
@@ -72,6 +73,20 @@ pub struct Saved {
     pub sort: Sort,
     pub run: RunSettings,
     pub auto_run: bool,
+    pub donors: DonorSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DonorSettings {
+    pub recomb: [usize; 2],
+    pub fracture: [usize; 2],
+}
+
+impl Default for DonorSettings {
+    fn default() -> Self {
+        Self { recomb: [1, 1], fracture: [1, 6] }
+    }
 }
 
 pub struct State {
@@ -82,7 +97,7 @@ pub struct State {
     /// bumped by every ladder run, so a late job result for an older run is dropped
     pub run: u64,
     pub ranks: Vec<usize>,
-    pub groups: Vec<String>,
+    pub catalog: ItemCatalog,
     /// visible estimates, in display order
     pub rows: Vec<usize>,
     pub selected: Option<usize>,
@@ -90,6 +105,7 @@ pub struct State {
     pub reveal: bool,
     /// recipe step to scroll to
     pub jump: Option<usize>,
+    pub highlighted_step: Option<usize>,
     pub log: Vec<(Instant, String)>,
     pub status: String,
     pub jobs: Jobs,
@@ -101,7 +117,8 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(ctx: &egui::Context, saved: Saved) -> State {
+    pub fn new(ctx: &egui::Context, mut saved: Saved) -> State {
+        saved.filters.migrate_kind();
         let jobs = Jobs::new(ctx.clone());
         jobs.spawn("game data", |_| Msg::Db(ModDB::load().map(Arc::new).map_err(|e| e.to_string())));
         let has_ladder = std::fs::read_dir(ponder_net::ladder::CACHE).is_ok_and(|mut d| d.next().is_some());
@@ -112,11 +129,12 @@ impl State {
             data: None,
             run: 0,
             ranks: Vec::new(),
-            groups: Vec::new(),
+            catalog: ItemCatalog::default(),
             rows: Vec::new(),
             selected: None,
             reveal: false,
             jump: None,
+            highlighted_step: None,
             log: Vec::new(),
             status: "loading game data".into(),
             jobs,
@@ -152,12 +170,21 @@ impl State {
 
     pub fn refilter(&mut self) {
         self.rows = view::visible(self.estimates(), &self.saved.filters, self.saved.sort);
+        if let Some(data) = &self.data {
+            self.rows.retain(|&i| self.catalog.admits(&data.report.estimates[i], &self.saved.filters.items));
+        }
+        if self.selected.is_none_or(|selected| !self.rows.contains(&selected)) {
+            self.selected = self.rows.first().copied();
+            self.jump = None;
+            self.highlighted_step = None;
+        }
     }
 
     pub fn select(&mut self, index: usize) {
         if self.selected != Some(index) {
             self.selected = Some(index);
             self.jump = None;
+            self.highlighted_step = None;
         }
     }
 
@@ -181,6 +208,7 @@ impl State {
                 self.status = s;
             }
             Msg::Db(Ok(db)) => {
+                self.catalog = ItemCatalog::new(&db);
                 self.db = Some(db);
                 self.note("game data loaded");
                 if self.saved.auto_run && self.has_ladder && self.data.is_none() {
@@ -199,7 +227,7 @@ impl State {
                 );
                 let keep = self.selected_estimate().map(|e| (e.title.clone(), e.targets.clone()));
                 self.ranks = view::ranks(&loaded.report.estimates);
-                self.groups = view::groups(&loaded.report.estimates);
+                self.catalog.update_counts(&loaded.report.estimates);
                 self.data = Some(*loaded);
                 self.selected = keep.and_then(|(t, ts)| self.estimates().iter().position(|e| e.title == t && e.targets == ts));
                 self.refilter();
@@ -214,7 +242,12 @@ impl State {
                     && let Some(d) = self.data.as_mut()
                     && index < d.report.estimates.len()
                 {
+                    let route = d.report.estimates[index].cheapest_route();
                     d.report.estimates[index] = *estimate;
+                    if d.report.estimates[index].cheapest_route() != route {
+                        // a priced fractured base can change the recipe, and with it the pivots
+                        d.report.estimates[index].pivots = pipeline::pivots_of(&d.report.estimates, index);
+                    }
                     self.ranks = view::ranks(&d.report.estimates);
                     self.refilter();
                 }
@@ -324,7 +357,7 @@ impl State {
     pub fn recomb_selected(&mut self) {
         self.job_on_selected("recombinator", |cx, db, d, est, reply| {
             let say = |m: &str| reply.status(m);
-            pipeline::add_recombs(cx, db, std::slice::from_mut(est), &d.table, None, Some(&say));
+            pipeline::add_recombs_in_league(cx, db, std::slice::from_mut(est), &d.table, &d.league, None, Some(&say));
             match est.recomb_total() {
                 Some(c) => format!("recombinator tree for {}: {c:.0}c", est.title),
                 None => format!("no recombinator tree for {}", est.title),

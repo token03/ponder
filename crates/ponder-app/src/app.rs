@@ -4,7 +4,7 @@ use egui::{Align, Key, Layout, RichText, Ui};
 
 use crate::panes::{self, Behavior, Pane};
 use crate::state::{Saved, State};
-use crate::view::{Filters, Kind};
+use crate::view::Filters;
 
 const SAVED: &str = "ponder";
 const TILES: &str = "ponder_tiles";
@@ -128,7 +128,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut r.chaos_per_hour).range(0.0..=100_000.0).speed(10.0).suffix("c"));
                     ui.end_row();
                 });
-                ui.checkbox(&mut r.recombs, "recombinator trees").on_hover_text("slow the first time; plans are cached");
+                ui.checkbox(&mut r.recombs, "recombinator trees").on_hover_text("recombine part of an item, then craft the rest");
                 ui.add_enabled_ui(s.has_cookie, |ui| {
                     ui.checkbox(&mut r.trade, "price on trade").on_disabled_hover_text("needs POESESSID in .env");
                     if r.trade {
@@ -192,7 +192,6 @@ impl App {
 
 fn filters(ui: &mut Ui, s: &mut State) {
     let before = s.saved.filters.clone();
-    let groups = s.groups.clone();
     let f = &mut s.saved.filters;
     ui.horizontal(|ui| {
         ui.heading("Filter");
@@ -203,20 +202,13 @@ fn filters(ui: &mut Ui, s: &mut State) {
         });
     });
     ui.add(egui::TextEdit::singleline(&mut f.text).hint_text("🔍 item, base, mod or skill").desired_width(f32::INFINITY));
-    ui.horizontal(|ui| {
-        for k in Kind::ALL {
-            ui.selectable_value(&mut f.kind, k, k.label());
-        }
-    });
-    egui::ComboBox::from_id_salt("group")
-        .width(ui.available_width() - 8.0)
-        .selected_text(if f.group.is_empty() { "every base group" } else { &f.group })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut f.group, String::new(), "every base group");
-            for g in &groups {
-                ui.selectable_value(&mut f.group, g.clone(), g);
-            }
-        });
+    s.catalog.ui(ui, &mut f.items);
+    if f.items != before.items {
+        f.group.clear();
+    }
+    if !f.group.is_empty() && ui.small_button(format!("Group: {} ×", f.group)).on_hover_text("Saved group filter; click to remove").clicked() {
+        f.group.clear();
+    }
     egui::Grid::new("filters").num_columns(2).show(ui, |ui| {
         ui.label("min demand");
         ui.add(egui::DragValue::new(&mut f.min_demand).range(0..=10_000).suffix(" chars"));
@@ -229,7 +221,6 @@ fn filters(ui: &mut Ui, s: &mut State) {
     ui.checkbox(&mut f.only_market, "priced on trade");
     ui.checkbox(&mut f.only_fractures, "has a fractured-base option");
     ui.checkbox(&mut f.only_recomb, "has a recombinator tree");
-    ui.checkbox(&mut f.only_sales, "sells as smaller products");
     ui.checkbox(&mut f.hide_errors, "hide failed estimates");
     if *f != before {
         s.refilter();

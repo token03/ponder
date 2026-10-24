@@ -5,6 +5,7 @@
 
 # Local secrets (POESESSID)
 .env
+mise.local.toml
 
 ponder-*.zip
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use regex::Regex;
 
 use crate::data::{self, BaseItems, DataError, Mod, Mods};
-use crate::item::{Item, ModLine, py_splitlines};
+use crate::item::{Item, ModLine, split_lines};
 
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\((-?[0-9]+(?:\.[0-9]+)?)-(-?[0-9]+(?:\.[0-9]+)?)\)|([0-9]+(?:\.[0-9]+)?)")
@@ -266,7 +266,7 @@ impl ModDB {
             if !is_affix[i] {
                 continue;
             }
-            let key: Vec<String> = py_splitlines(m.text_or_empty())
+            let key: Vec<String> = split_lines(m.text_or_empty())
                 .into_iter()
                 .map(normalize)
                 .collect();
@@ -335,13 +335,13 @@ impl ModDB {
 
     /// The mod `mod_id` if it is one we match (a prefix or suffix with text).
     pub fn affix(&self, mod_id: &str) -> Option<&Mod> {
-        let i = self.mods.position(mod_id)?;
-        self.is_affix[i].then(|| self.mods.entry(i).1)
+        let i = self.mods.get_index_of(mod_id)?;
+        self.is_affix[i].then(|| self.mods.get_index(i).unwrap().1)
     }
 
     fn template(&self, i: usize) -> &Template {
         self.templates[i].get_or_init(|| {
-            let lines: Vec<String> = py_splitlines(self.mods.entry(i).1.text_or_empty())
+            let lines: Vec<String> = split_lines(self.mods.get_index(i).unwrap().1.text_or_empty())
                 .into_iter()
                 .map(String::from)
                 .collect();
@@ -389,12 +389,17 @@ impl ModDB {
             .map_or(0, |e| e.weight)
     }
 
+    pub fn generation_weight(m: &Mod, tags: &BTreeSet<String>) -> f64 {
+        let multiplier = m.generation_weights.iter().find(|w| tags.contains(&w.tag)).map_or(100, |w| w.weight);
+        Self::spawn_weight(m, tags) as f64 * multiplier as f64 / 100.0
+    }
+
     /// Where a mod comes from on an item with these tags.
     pub fn source(&self, m: &Mod, tags: &BTreeSet<String>) -> &'static str {
         if let Some(s) = extra_domain(&m.domain) {
             return s;
         }
-        if Self::spawn_weight(m, tags) > 0 {
+        if Self::generation_weight(m, tags) > 0.0 {
             return "natural";
         }
         if m.is_essence_only {
@@ -406,11 +411,11 @@ impl ModDB {
 
     /// Tier of a mod among its family's natural rolls on these tags (1 = highest required level).
     pub fn tier(&self, mod_id: &str, tags: &BTreeSet<String>) -> Option<i64> {
-        self.tier_at(self.mods.position(mod_id)?, tags)
+        self.tier_at(self.mods.get_index_of(mod_id)?, tags)
     }
 
     fn tier_at(&self, i: usize, tags: &BTreeSet<String>) -> Option<i64> {
-        let m = self.mods.entry(i).1;
+        let m = self.mods.get_index(i).unwrap().1;
         let key = self.tier_key[i];
         let cached = self
             .tiers
@@ -431,8 +436,8 @@ impl ModDB {
                 let mut levels: Vec<i64> = family
                     .into_iter()
                     .flatten()
-                    .map(|&j| self.mods.entry(j).1)
-                    .filter(|f| Self::spawn_weight(f, tags) > 0)
+                    .map(|&j| self.mods.get_index(j).unwrap().1)
+                    .filter(|f| Self::generation_weight(f, tags) > 0.0)
                     .map(|f| f.required_level)
                     .collect();
                 levels.sort_unstable_by(|a, b| b.cmp(a));
@@ -446,7 +451,7 @@ impl ModDB {
                     .clone()
             }
         };
-        if Self::spawn_weight(m, tags) <= 0 {
+        if Self::generation_weight(m, tags) <= 0.0 {
             return None;
         }
         levels
@@ -564,10 +569,10 @@ impl ModDB {
             (Some("crafted"), &mods.crafted),
         ] {
             for id in ids {
-                let Some(i) = self.mods.position(id).filter(|&i| self.is_affix[i]) else {
+                let Some(i) = self.mods.get_index_of(id).filter(|&i| self.is_affix[i]) else {
                     continue;
                 };
-                let m = self.mods.entry(i).1;
+                let m = self.mods.get_index(i).unwrap().1;
                 let text = m.text.as_deref().unwrap_or(id).split('\n').next().unwrap();
                 let line = match marker {
                     Some(k) => ModLine::with_marker(text, k),
@@ -667,7 +672,7 @@ impl ModDB {
                 for single_pos in
                     self.candidates(std::slice::from_ref(norm), ctx, line_ref.crafted())
                 {
-                    let s_range = template_ranges(self.mods.entry(single_pos).1.text_or_empty());
+                    let s_range = template_ranges(self.mods.get_index(single_pos).unwrap().1.text_or_empty());
                     let summed: Vec<(f64, f64)> = h_range
                         .iter()
                         .zip(&s_range)
@@ -715,7 +720,7 @@ impl ModDB {
         };
         let mut out: Vec<((bool, bool, i32, i64), usize)> = Vec::new();
         for &i in &self.index.keys[k].1 {
-            let m = self.mods.entry(i).1;
+            let m = self.mods.get_index(i).unwrap().1;
             if (m.domain == "crafted") != crafted {
                 continue;
             }
@@ -731,7 +736,7 @@ impl ModDB {
     }
 
     fn source_at(&self, i: usize, item_class: &str, tags: &BTreeSet<String>) -> &'static str {
-        let (id, m) = self.mods.entry(i);
+        let (id, m) = self.mods.get_index(i).unwrap();
         let src = self.source(m, tags);
         if src == "crafted" && !self.bench.get(item_class).is_some_and(|b| b.contains(id)) {
             return "legacy-crafted"; // an old master craft, not on today's bench
@@ -740,10 +745,10 @@ impl ModDB {
     }
 
     fn rank(&self, i: usize, ctx: &Ctx) -> (bool, bool, i32, i64) {
-        let (id, m) = self.mods.entry(i);
+        let (id, m) = self.mods.get_index(i).unwrap();
         let too_high = ctx.item.item_level.is_some_and(|l| m.required_level > l);
         (
-            !ctx.pob_ids.contains(id),
+            !ctx.pob_ids.contains(id.as_str()),
             too_high,
             source_rank(self.source_at(i, ctx.item_class, ctx.tags)),
             -m.required_level,
@@ -787,7 +792,7 @@ impl ModDB {
         alternatives: usize,
         merged: bool,
     ) -> ModMatch {
-        let (id, m) = self.mods.entry(i);
+        let (id, m) = self.mods.get_index(i).unwrap();
         let source = self.source_at(i, ctx.item_class, ctx.tags);
         ModMatch {
             mod_id: id.to_string(),

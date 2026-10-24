@@ -51,25 +51,25 @@ fn target(pool: &[Mod], id: &str) -> Target {
 /// The actions every item has (actions.BASIC).
 fn basic() -> Vec<Action> {
     vec![
-        Action::new("transmute", "transmute", &[("transmute", 1.0)], &[NORMAL]),
-        Action::new("alt", "alt", &[("alt", 1.0)], &[MAGIC]),
-        Action::new("aug", "aug", &[("aug", 1.0)], &[MAGIC]),
-        Action::new("regal", "regal", &[("regal", 1.0)], &[MAGIC]),
-        Action::new("exalt", "exalt", &[("exalted", 1.0)], &[RARE]),
-        Action::new("annul", "annul", &[("annul", 1.0)], &[RARE]),
-        Action::new("alch", "reroll_rare", &[("alch", 1.0)], &[NORMAL]),
-        Action::new("chaos", "reroll_rare", &[("chaos", 1.0)], &[RARE]),
-        Action::new("scour+alch", "reroll_rare", &[("scour", 1.0), ("alch", 1.0)], &[RARE]),
-        Action::new("scour+transmute", "reroll_magic", &[("scour", 1.0), ("transmute", 1.0)], &[RARE]),
+        Action::new("transmute", ActionKind::Transmute, &[("transmute", 1.0)], &[NORMAL]),
+        Action::new("alt", ActionKind::Alt, &[("alt", 1.0)], &[MAGIC]),
+        Action::new("aug", ActionKind::Aug, &[("aug", 1.0)], &[MAGIC]),
+        Action::new("regal", ActionKind::Regal, &[("regal", 1.0)], &[MAGIC]),
+        Action::new("exalt", ActionKind::Exalt, &[("exalted", 1.0)], &[RARE]),
+        Action::new("annul", ActionKind::Annul, &[("annul", 1.0)], &[RARE]),
+        Action::new("alch", ActionKind::RerollRare, &[("alch", 1.0)], &[NORMAL]),
+        Action::new("chaos", ActionKind::Reforge, &[("chaos", 1.0)], &[RARE]),
+        Action::new("scour+alch", ActionKind::RerollRare, &[("scour", 1.0), ("alch", 1.0)], &[RARE]),
+        Action::new("scour+transmute", ActionKind::RerollMagic, &[("scour", 1.0), ("transmute", 1.0)], &[RARE]),
     ]
 }
 
 fn eldritch() -> Vec<Action> {
     vec![
-        Action::new("eldritch exalt (prefix)", "exalt_prefix", &[("eldritch-exalted-orb", 1.0)], &[RARE]),
-        Action::new("eldritch exalt (suffix)", "exalt_suffix", &[("eldritch-exalted-orb", 1.0)], &[RARE]),
-        Action::new("eldritch annul (prefix)", "annul_prefix", &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
-        Action::new("eldritch annul (suffix)", "annul_suffix", &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
+        Action::new("eldritch exalt (prefix)", ActionKind::ExaltPrefix, &[("eldritch-exalted-orb", 1.0)], &[RARE]),
+        Action::new("eldritch exalt (suffix)", ActionKind::ExaltSuffix, &[("eldritch-exalted-orb", 1.0)], &[RARE]),
+        Action::new("eldritch annul (prefix)", ActionKind::AnnulPrefix, &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
+        Action::new("eldritch annul (suffix)", ActionKind::AnnulSuffix, &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
     ]
 }
 
@@ -77,12 +77,12 @@ fn toy_with(extra: Vec<Action>, profiles: &[(&str, Vec<(String, f64)>)], fixed: 
     let pool = pool();
     let mut actions = basic();
     actions.extend(extra);
-    let mut p = Problem::new(pool.clone(), targets.iter().map(|t| target(&pool, t)).collect(), targets.len(), actions, Kind::Jewel);
+    let mut p = ProblemSpec::new(pool.clone(), targets.iter().map(|t| target(&pool, t)).collect(), targets.len(), actions, Kind::Jewel);
     p.fixed = pool.iter().filter(|m| fixed.contains(&m.id.as_str())).cloned().collect();
     for (name, w) in profiles {
         p.profiles.insert(name.to_string(), w.iter().cloned().collect());
     }
-    p
+    p.compile()
 }
 
 fn toy() -> Problem {
@@ -101,7 +101,7 @@ fn simulated(p: &Problem, plan: &Plan, prices: &Prices, runs: usize, seed: u64) 
     simulate(p, plan, prices, &FREE, runs, seed, 100_000)
 }
 
-fn solved(p: &mut Problem, prices: &Prices) -> Plan {
+fn solved(p: &Problem, prices: &Prices) -> Plan {
     solve(p, prices, &FREE).unwrap()
 }
 
@@ -109,34 +109,46 @@ fn solved(p: &mut Problem, prices: &Prices) -> Plan {
 fn rolls_are_distributions() {
     let p = toy();
     for rarity in [MAGIC, RARE] {
-        let out = p.roll(rarity, "base", None, None);
+        let out = p
+            .roll(&Action::new(
+                "roll",
+                if rarity == MAGIC { ActionKind::RerollMagic } else { ActionKind::RerollRare },
+                &[],
+                &[NORMAL, RARE],
+            ))
+            .unwrap();
         approx(out.iter().map(|o| o.0).sum(), 1.0, 1e-9);
     }
-    assert!(p.roll(MAGIC, "base", None, None).iter().all(|(_, s)| p.count(s, Side::Prefix) <= 1));
+    assert!(
+        p.roll(&Action::new("roll", ActionKind::RerollMagic, &[], &[NORMAL, RARE]))
+            .unwrap()
+            .iter()
+            .all(|(_, s)| p.count(s, Side::Prefix) <= 1)
+    );
 }
 
 #[test]
 fn solver_matches_simulation() {
-    let mut p = toy();
-    let plan = solved(&mut p, &prices());
+    let p = toy();
+    let plan = solved(&p, &prices());
     approx(simulated(&p, &plan, &prices(), 4000, 1), plan.cost, 0.08);
 }
 
 #[test]
 fn harvest_and_fossil_match_simulation() {
-    let harvest = Action::new("harvest fire", "reroll_rare", &[("lifeforce", 30.0)], &[RARE]).with_first_profile("fire");
-    let fossil = Action::new("fire fossil", "reroll_rare", &[("fossil", 1.0)], &[NORMAL, RARE]).with_profile("fossil");
+    let harvest = Action::new("harvest fire", ActionKind::RerollRare, &[("lifeforce", 30.0)], &[RARE]).with_first_profile("fire");
+    let fossil = Action::new("fire fossil", ActionKind::RerollRare, &[("fossil", 1.0)], &[NORMAL, RARE]).with_profile("fossil");
     let fossil_weights =
         pool().iter().map(|m| (m.id.clone(), m.weight * if m.tags.iter().any(|t| t == "fire") { 10.0 } else { 1.0 })).collect();
-    let mut p = toy_with(vec![harvest, fossil], &[("fire", vec![("A".into(), 100.0)]), ("fossil", fossil_weights)], &[], &["A", "B"]);
-    let plan = solved(&mut p, &prices());
+    let p = toy_with(vec![harvest, fossil], &[("fire", vec![("A".into(), 100.0)]), ("fossil", fossil_weights)], &[], &["A", "B"]);
+    let plan = solved(&p, &prices());
     approx(simulated(&p, &plan, &prices(), 4000, 3), plan.cost, 0.08);
 }
 
 #[test]
 fn policy_beats_alt_spam() {
-    let mut p = toy();
-    let plan = solved(&mut p, &prices());
+    let p = toy();
+    let plan = solved(&p, &prices());
     let policy = plan.policy.keys().map(|s| (*s, ["transmute", "alt", "scour+transmute"][s.rarity as usize].to_string())).collect();
     let alt_only = Plan { policy, ..Plan::default() };
     assert!(plan.cost < simulated(&p, &alt_only, &prices(), 2000, 0));
@@ -144,18 +156,24 @@ fn policy_beats_alt_spam() {
 
 #[test]
 fn magic_with_one_target_augments() {
-    let mut p = toy();
-    let plan = solved(&mut p, &prices());
+    let p = toy();
+    let plan = solved(&p, &prices());
     assert_eq!(plan.policy[&st(MAGIC, &[GOOD, MISSING], &[])], "aug");
 }
 
 #[test]
 fn fractured_mod_survives_and_lowers_cost() {
-    let plain = solved(&mut toy(), &prices()).cost;
-    let mut fractured = toy_with(vec![], &[], &["A"], &["A", "B"]);
+    let plain = solved(&toy(), &prices()).cost;
+    let fractured = toy_with(vec![], &[], &["A"], &["A", "B"]);
     assert_eq!(fractured.start(), st(NORMAL, &[GOOD, MISSING], &[]));
-    assert!(fractured.roll(RARE, "base", None, None).iter().all(|(_, s)| s.status[0] == GOOD));
-    assert!(solved(&mut fractured, &prices()).cost < plain);
+    assert!(
+        fractured
+            .roll(&Action::new("roll", ActionKind::RerollRare, &[], &[NORMAL, RARE]))
+            .unwrap()
+            .iter()
+            .all(|(_, s)| s.status[0] == GOOD)
+    );
+    assert!(solved(&fractured, &prices()).cost < plain);
 }
 
 #[test]
@@ -167,43 +185,136 @@ fn annul_never_removes_fractured() {
 
 #[test]
 fn unpriced_actions_are_dropped_not_free() {
-    let mystery = Action::new("mystery", "reroll_rare", &[("unknown-orb", 1.0)], &[NORMAL, RARE]);
-    let mut p = toy_with(vec![mystery], &[], &[], &["A", "B"]);
-    let plan = solved(&mut p, &prices());
+    let mystery = Action::new("mystery", ActionKind::RerollRare, &[("unknown-orb", 1.0)], &[NORMAL, RARE]);
+    let p = toy_with(vec![mystery], &[], &[], &["A", "B"]);
+    let plan = solved(&p, &prices());
     assert!(plan.unpriced.contains(&"mystery".to_string()) && !plan.usage.contains_key("mystery"));
 }
 
-#[test]
-fn metamod_keeps_one_side_and_matches_simulation() {
-    let lock = Action::new("lock prefixes+scour", "keep_prefixes", &[("divine", 1.0), ("scour", 1.0)], &[RARE]);
-    let mut p = toy_with(vec![lock.clone()], &[], &[], &["A", "B"]);
-    let out = p.outcomes(&st(RARE, &[GOOD, MISSING], &[0, 1, 0, 1]), &lock);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].1, st(RARE, &[GOOD, MISSING], &[0, 1, 0, 0]));
-    assert!(p.outcomes(&st(RARE, &[GOOD, MISSING], &[0, 0, 0, 2]), &lock).is_empty()); // no suffix room for the metamod
-    // The toy pool is too small for the lock to pay off, so force it wherever it applies
-    // and check the solver's exact value for that policy against a replay.
-    let mut prices = prices();
-    prices.insert("divine".into(), 0.5);
-    let mut plan = solved(&mut p, &prices);
+/// Bench a metamod, take it off, scour a locked item.
+fn metamods() -> Vec<Action> {
+    vec![
+        Action::new("lock prefixes", ActionKind::MetaLockPrefixes, &[("divine", 2.0)], &[RARE]),
+        Action::new("lock suffixes", ActionKind::MetaLockSuffixes, &[("divine", 2.0)], &[RARE]),
+        Action::new("no attack mods", ActionKind::MetaNoAttack, &[("divine", 1.0)], &[RARE]),
+        Action::new("remove crafted", ActionKind::RemoveCrafted, &[("scour", 1.0)], &[RARE]),
+        Action::new("scour", ActionKind::Scour, &[("scour", 1.0)], &[RARE]),
+    ]
+}
+
+/// Put `name` into the policy wherever `when` holds and it can be used, so a test can check
+/// the solver's exact value for a policy that uses it against a replay.
+fn force(p: &Problem, plan: &mut Plan, name: &str, when: impl Fn(&State) -> bool) {
+    let a = p.actions.iter().find(|a| a.name == name).unwrap().clone();
     for s in plan.order.clone() {
-        if !p.outcomes(&s, &lock).is_empty() && s.status[1] == MISSING && s.junk[3] != 0 {
-            plan.policy.insert(s, lock.name.clone());
+        if when(&s) && !p.outcomes(&s, &a).is_empty() {
+            plan.policy.insert(s, name.to_string());
         }
     }
+}
+
+#[test]
+fn a_metamod_takes_a_slot_and_must_come_off() {
+    let p = toy_with(metamods(), &[], &[], &["A", "B"]);
+    let lock = p.actions.iter().find(|a| a.name == "lock prefixes").unwrap().clone();
+    let s = st(RARE, &[GOOD, MISSING], &[0, 1, 0, 1]);
+    let out = p.outcomes(&s, &lock);
+    assert_eq!(out[0].1, s.with_meta(META_LOCK_PREFIXES));
+    assert_eq!(p.count(&out[0].1, Side::Suffix), 2); // a suffix
+    assert!(p.outcomes(&st(RARE, &[GOOD, MISSING], &[0, 0, 0, 2]), &lock).is_empty()); // no suffix room
+    assert!(p.outcomes(&out[0].1, &lock).is_empty()); // one at a time
+    assert!(!p.done(&st(RARE, &[GOOD, GOOD], &[]).with_meta(META_NO_ATTACK)));
+    let scour = p.actions.iter().find(|a| a.name == "scour").unwrap().clone();
+    assert_eq!(p.outcomes(&out[0].1, &scour)[0].1, st(RARE, &[GOOD, MISSING], &[0, 1, 0, 0]));
+    assert!(p.outcomes(&s, &scour).is_empty()); // only on a locked item
+    let mut prices = prices();
+    prices.insert("divine".into(), 0.5);
+    let mut plan = solved(&p, &prices);
+    force(&p, &mut plan, "lock prefixes", |s| s.status[1] == MISSING && s.junk[3] != 0 && s.meta == 0);
+    force(&p, &mut plan, "scour", |s| s.meta == META_LOCK_PREFIXES && s.junk[3] != 0);
+    assert!(plan.policy.values().any(|a| a == "scour"));
     let exact = evaluate(&p, &plan.policy, &prices, &FREE).unwrap();
-    assert!(exact > plan.cost); // the solver was right to skip it here
+    assert!(exact >= plan.cost * (1.0 - 1e-9)); // nothing beats the solver's own plan
     approx(simulated(&p, &plan, &prices, 4000, 4), exact, 0.08);
+}
+
+#[test]
+fn essences_and_fossils_cannot_go_on_with_a_metamod() {
+    let essence = Action::new("essence", ActionKind::RerollRare, &[("alch", 1.0)], &[RARE]).with_forced("A");
+    let p = toy_with(vec![essence.clone()], &[], &[], &["A", "B"]);
+    let s = st(RARE, &[MISSING, MISSING], &[0, 1, 0, 0]);
+    assert!(!p.outcomes(&s, &essence).is_empty());
+    assert!(p.outcomes(&s.with_meta(META_LOCK_PREFIXES), &essence).is_empty());
+}
+
+#[test]
+fn annul_keeps_a_locked_side_and_can_take_the_metamod() {
+    let p = toy_with(metamods(), &[], &[], &["A", "B"]);
+    let s = st(RARE, &[GOOD, GOOD], &[0, 1, 0, 0]).with_meta(META_LOCK_PREFIXES);
+    let out = p.annul(&s, None);
+    approx(out.iter().map(|o| o.0).sum(), 1.0, 1e-9);
+    assert_eq!(out.len(), 2); // B or the metamod: the prefixes are locked
+    assert!(out.iter().all(|(_, n)| n.status[0] == GOOD && n.junk[1] == 1));
+    assert!(out.iter().any(|(_, n)| n.meta == 0 && n.status[1] == GOOD));
+}
+
+fn attack_toy(extra: Vec<Action>) -> Problem {
+    // A is an attack mod; x1/x2 are attack junk, y is not.
+    let mut pool = pool();
+    for m in pool.iter_mut().filter(|m| ["A", "x1", "x2"].contains(&m.id.as_str())) {
+        m.tags.push("attack".into());
+    }
+    let mut actions = basic();
+    actions.extend(extra);
+    let targets = ["C", "B"].iter().map(|t| target(&pool, t)).collect();
+    ProblemSpec::new(pool, targets, 2, actions, Kind::Gear).compile()
+}
+
+#[test]
+fn cannot_roll_attack_keeps_attack_mods_off_and_on() {
+    let p = attack_toy(metamods());
+    let exalt = p.actions.iter().find(|a| a.name == "exalt").unwrap().clone();
+    let s = st(RARE, &[GOOD, MISSING], &[1, 0, 0, 0]).with_meta(META_NO_ATTACK); // A on it, as prefix junk
+    for (_, n) in p.outcomes(&s, &exalt).iter() {
+        assert!(n.junk[0] == 1 && n.junk[1] == 0); // no attack prefix (x) rolls; A is junk here
+    }
+    // Annul can't take x (all attack); C, B and the metamod can go.
+    let s = st(RARE, &[GOOD, GOOD], &[0, 1, 0, 0]).with_meta(META_NO_ATTACK);
+    assert!(p.annul(&s, None).iter().all(|(_, n)| n.junk[1] == 1));
+    let mut prices = gear_prices();
+    prices.insert("divine".into(), 1.0);
+    let mut plan = solved(&p, &prices);
+    force(&p, &mut plan, "no attack mods", |s| s.meta == 0 && s.rarity == RARE && s.status[0] == GOOD);
+    force(&p, &mut plan, "exalt", |s| s.meta == META_NO_ATTACK && s.status[1] == MISSING);
+    force(&p, &mut plan, "annul", |s| s.meta == META_NO_ATTACK && s.status[1] == BLOCKED);
+    force(&p, &mut plan, "remove crafted", |s| s.meta == META_NO_ATTACK && s.status[..2] == [GOOD, GOOD]);
+    let exact = evaluate(&p, &plan.policy, &prices, &FREE).unwrap();
+    approx(simulated(&p, &plan, &prices, 4000, 9), exact, 0.08);
+}
+
+#[test]
+fn harvest_add_remove_adds_a_tagged_mod_and_takes_another() {
+    let cold: Vec<(String, f64)> = vec![("B".into(), 100.0), ("y".into(), 500.0)];
+    let augment = Action::new("harvest add/remove cold", ActionKind::Augment, &[("lifeforce", 100.0)], &[RARE]).with_profile("cold");
+    let p = toy_with(vec![augment.clone()], &[("cold", cold)], &[], &["A", "B"]);
+    let s = st(RARE, &[GOOD, MISSING], &[0, 1, 0, 0]);
+    let out = p.outcomes(&s, &augment);
+    approx(out.iter().map(|o| o.0).sum(), 1.0, 1e-9);
+    assert!(out.iter().all(|(_, n)| p.count(n, Side::Suffix) == 1 && p.count(n, Side::Prefix) == 1)); // one suffix in, one prefix out
+    let plan = solved(&p, &prices());
+    approx(simulated(&p, &plan, &prices(), 4000, 10), plan.cost, 0.08);
 }
 
 #[test]
 fn reserved_bench_slot_must_stay_open() {
     let mut p = toy_with(vec![], &[], &[], &["A"]);
-    p.reserve.insert(Side::Prefix, 1);
+    let mut spec = p.to_spec();
+    spec.reserve.insert(Side::Prefix, 1);
+    p = spec.compile();
     assert!(!p.done(&st(RARE, &[GOOD], &[0, 1, 0, 0]))); // jewel: two prefixes, none left
     assert!(p.done(&st(RARE, &[GOOD], &[0, 0, 0, 2])));
-    let reserved = solved(&mut p, &prices()).cost;
-    assert!(reserved > solved(&mut toy_with(vec![], &[], &[], &["A"]), &prices()).cost);
+    let reserved = solved(&p, &prices()).cost;
+    assert!(reserved > solved(&toy_with(vec![], &[], &[], &["A"]), &prices()).cost);
 }
 
 fn gear_toy(extra: Vec<Action>, targets: &[&str], filler_need: usize) -> Problem {
@@ -212,10 +323,10 @@ fn gear_toy(extra: Vec<Action>, targets: &[&str], filler_need: usize) -> Problem
     pool.push(Mod::new("r2", Side::Suffix, 200.0, &["r2"], false, "cold res", &[]));
     let mut actions = basic();
     actions.extend(extra);
-    let mut p = Problem::new(pool.clone(), targets.iter().map(|t| target(&pool, t)).collect(), targets.len(), actions, Kind::Gear);
+    let mut p = ProblemSpec::new(pool.clone(), targets.iter().map(|t| target(&pool, t)).collect(), targets.len(), actions, Kind::Gear);
     p.filler = ["r1", "r2"].into_iter().map(String::from).collect();
     p.filler_need = filler_need;
-    p
+    p.compile()
 }
 
 fn gear_prices() -> Prices {
@@ -226,57 +337,81 @@ fn gear_prices() -> Prices {
 
 #[test]
 fn filler_counts_any_of_its_mods() {
-    let mut p = gear_toy(vec![], &["A", "C"], 1);
+    let p = gear_toy(vec![], &["A", "C"], 1);
     assert_eq!(p.classify("r2"), (-1, 5));
     assert!(!p.done(&st(RARE, &[GOOD, GOOD], &[0, 1, 0, 1, 0, 0])));
     assert!(p.done(&st(RARE, &[GOOD, GOOD], &[0, 0, 0, 0, 0, 1])));
-    let plan = solved(&mut p, &gear_prices());
+    let plan = solved(&p, &gear_prices());
     approx(simulated(&p, &plan, &gear_prices(), 4000, 5), plan.cost, 0.08);
 }
 
 #[test]
 fn eldritch_side_currencies_match_simulation() {
-    let mut p = gear_toy(eldritch(), &["A", "C"], 1);
-    let plan = solved(&mut p, &gear_prices());
-    assert!(plan.cost < solved(&mut gear_toy(vec![], &["A", "C"], 1), &gear_prices()).cost); // cheap side-only slams help
+    let p = gear_toy(eldritch(), &["A", "C"], 1);
+    let plan = solved(&p, &gear_prices());
+    assert!(plan.cost < solved(&gear_toy(vec![], &["A", "C"], 1), &gear_prices()).cost); // cheap side-only slams help
     assert!(plan.usage.iter().any(|(a, n)| a.contains("eldritch") && *n > 0.0));
     approx(simulated(&p, &plan, &gear_prices(), 4000, 6), plan.cost, 0.08);
 }
 
 #[test]
-fn lock_and_reroll_keeps_one_side_and_matches_simulation() {
-    let lock = Action::new("lock prefixes+chaos", "lockreroll_prefixes", &[("divine", 1.0), ("chaos", 1.0)], &[RARE]);
-    let mut p = gear_toy(vec![lock.clone()], &["A", "C"], 2);
-    let out = p.outcomes(&st(RARE, &[GOOD, GOOD], &[0, 0, 0, 1, 0, 1]), &lock);
+fn a_locked_reforge_keeps_its_side_and_can_fill_it() {
+    let p = gear_toy(metamods(), &["A", "C"], 2);
+    let chaos = p.actions.iter().find(|a| a.name == "chaos").unwrap().clone();
+    let s = st(RARE, &[GOOD, GOOD], &[0, 0, 0, 1, 0, 1]).with_meta(META_LOCK_PREFIXES);
+    let out = p.outcomes(&s, &chaos);
     approx(out.iter().map(|o| o.0).sum(), 1.0, 1e-9);
-    assert!(out.iter().all(|(_, n)| n.status[..2] == [GOOD, GOOD] && p.count(n, Side::Suffix) <= 2)); // metamod holds a slot
-    // Force the lock wherever it applies and the prefixes are done, then replay.
-    let mut plan = solved(&mut p, &gear_prices());
-    for s in plan.order.clone() {
-        if !p.outcomes(&s, &lock).is_empty() && s.status[..2] == [GOOD, GOOD] {
-            plan.policy.insert(s, lock.name.clone());
-        }
-    }
-    let exact = evaluate(&p, &plan.policy, &gear_prices(), &FREE).unwrap();
-    approx(simulated(&p, &plan, &gear_prices(), 4000, 7), exact, 0.08);
+    assert!(out.iter().all(|(_, n)| n.status[..2] == [GOOD, GOOD] && n.meta == 0));
+    assert!(out.iter().any(|(_, n)| p.count(n, Side::Prefix) == 3)); // a new prefix on the locked side
+    assert!(out.iter().any(|(_, n)| p.count(n, Side::Suffix) == 3)); // the metamod's slot is free again
+    // Without the lock, chaos rerolls everything.
+    assert!(p.outcomes(&st(RARE, &[GOOD, GOOD], &[0, 0, 0, 1, 0, 1]), &chaos).iter().any(|(_, n)| n.status[0] != GOOD));
+    let mut prices = gear_prices();
+    prices.insert("divine".into(), 1.0);
+    let mut plan = solved(&p, &prices);
+    force(&p, &mut plan, "lock prefixes", |s| s.meta == 0 && s.status[..2] == [GOOD, GOOD]);
+    force(&p, &mut plan, "chaos", |s| s.meta == META_LOCK_PREFIXES);
+    let exact = evaluate(&p, &plan.policy, &prices, &FREE).unwrap();
+    approx(simulated(&p, &plan, &prices, 4000, 7), exact, 0.08);
 }
 
 #[test]
 fn clicking_time_is_charged() {
     // Charging for time makes plans dearer, and `currency` is what's left once the time is taken out.
-    let free = solved(&mut toy(), &prices());
+    let free = solved(&toy(), &prices());
     assert!(free.hours > 0.0 && (free.currency(&FREE) - free.cost).abs() < 1e-9);
     let slow = Settings { chaos_per_hour: 3600.0 };
-    let paid = solve(&mut toy(), &prices(), &slow).unwrap();
+    let paid = solve(&toy(), &prices(), &slow).unwrap();
     assert!(paid.cost > free.cost);
     assert!((paid.cost - paid.currency(&slow) - paid.hours * 3600.0).abs() < 1e-6);
+}
+
+#[test]
+fn iteration_limits_never_return_values_for_another_policy() {
+    assert_eq!(
+        solve_with(&toy(), &prices(), &FREE, SolveOptions { max_rounds: 0, ..Default::default() }).unwrap_err(),
+        SolveError::IterationLimit(0)
+    );
+    let mut limited = false;
+    for rounds in [1, 2, 60] {
+        let p = toy();
+        match solve_with(&p, &prices(), &FREE, SolveOptions { max_rounds: rounds, ..Default::default() }) {
+            Ok(plan) => approx(evaluate(&p, &plan.policy, &prices(), &FREE).unwrap(), plan.cost, 1e-9),
+            Err(SolveError::IterationLimit(n)) => {
+                assert_eq!(n, rounds);
+                limited = true;
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert!(limited);
 }
 
 #[test]
 fn self_fracture_needs_four_mods_and_pays_for_misses() {
     // Fracturing hits the wanted mod 1 time in k (k >= 4 mods); misses start over.
     let pool = pool();
-    let p = Problem::new(pool.clone(), vec![target(&pool, "A"), target(&pool, "B")], 2, basic(), Kind::Gear);
+    let p = ProblemSpec::new(pool.clone(), vec![target(&pool, "A"), target(&pool, "B")], 2, basic(), Kind::Gear).compile();
     let mut prices = prices();
     prices.insert(FRACTURE_ORB.into(), 100.0);
     let f = self_fracture(&p, 0, &prices, &FREE).unwrap();
@@ -284,14 +419,15 @@ fn self_fracture_needs_four_mods_and_pays_for_misses() {
     assert!((1.0 / 6.0..=0.25).contains(&f.fracture_chance));
     let a = p.actions.iter().find(|a| a.name == f.action).unwrap();
     assert!((f.cost - (step_cost(a, &prices, &FREE) / f.hit + 100.0) / f.fracture_chance).abs() < 1e-9);
-    assert!(self_fracture(&toy(), 0, &prices, &FREE).is_none()); // jewels can't be fractured
+    let jewel = self_fracture(&toy(), 0, &prices, &FREE).unwrap(); // a jewel only with all 4 mods
+    assert_eq!((jewel.max_mods, jewel.fracture_chance), (4, 0.25));
 }
 
 #[test]
 fn steps_follow_the_policy_flow() {
     // Steps start at the normal base, every listed exit points at a step or finishes, and the chances add up.
-    let mut p = toy();
-    let plan = solved(&mut p, &prices());
+    let p = toy();
+    let plan = solved(&p, &prices());
     let list = steps(&p, &plan, 0.0);
     assert_eq!(list[0].rarity, NORMAL);
     approx(list[0].reached, 1.0, 1e-9);
@@ -304,53 +440,32 @@ fn steps_follow_the_policy_flow() {
     assert!(list.iter().any(|s| s.exits.iter().any(|x| x.kind == "done")));
 }
 
-fn sale(credit: f64) -> Action {
-    let need = BTreeSet::from([0]);
-    Action::new("sell as A", "sell", &[], &[MAGIC, RARE])
-        .with_sale(credit, Sale { need, prefix: 0, suffix: 0, any: 0, spare: BTreeSet::new() })
-}
-
-#[test]
-fn selling_a_brick_as_a_smaller_product_lowers_the_cost() {
-    // With A alone sellable for a share of what it costs, misses on B are cheaper; a sale worth
-    // more than making the item again would loop for profit, so the solver plans without it.
-    let plain = solved(&mut toy(), &prices());
-    let only_a = solved(&mut toy_with(vec![], &[], &[], &["A"]), &prices());
-    let mut p = toy_with(vec![sale(0.7 * only_a.cost)], &[], &[], &["A", "B"]);
-    let selling = solved(&mut p, &prices());
-    assert!(selling.cost < plain.cost && selling.usage["sell as A"] > 0.0);
-    approx(simulated(&p, &selling, &prices(), 3000, 0), selling.cost, 0.1);
-    for backend in [Backend::Dense, Backend::Split] {
-        let mut greedy = toy_with(vec![sale(100.0 * only_a.cost)], &[], &[], &["A", "B"]);
-        approx(solve_with(&mut greedy, &prices(), &FREE, 60, backend).unwrap().cost, plain.cost, 1e-9);
-        assert!(greedy.actions.iter().all(|a| a.kind != "sell"));
-    }
-}
-
 #[test]
 fn finishing_a_half_done_item() {
     // An item with A already on starts part way: the from-scratch plan already prices its state,
     // and solving from it gives the same number; a junk-filled one is never worse than scouring it.
-    let mut p = toy();
-    let plan = solved(&mut p, &prices());
+    let p = toy();
+    let plan = solved(&p, &prices());
     let pool = pool();
     let (a, y) = (&pool[0], &pool[5]);
     let half = p.state_of(RARE, [a, y]);
     assert_eq!(half.status[..2], [GOOD, MISSING]);
     assert_eq!(half.junk[3], 1);
-    let mut p2 = toy();
+    let mut p2 = toy().to_spec();
     p2.begin = Some(half);
-    let begun = solved(&mut p2, &prices());
+    let p2 = p2.compile();
+    let begun = solved(&p2, &prices());
     assert!(begun.cost <= plan.cost + prices()["scour"] + 1e-9);
     if plan.values.contains_key(&half) {
         approx(plan.to_finish(&p, &half).unwrap(), begun.cost, 1e-6);
     }
     let mut cheap = prices();
     cheap.insert("exalted".into(), 0.5); // so a clean rare with A is worth exalting, not scouring
-    let mut p3 = toy();
+    let mut p3 = toy().to_spec();
     p3.begin = Some(p.state_of(RARE, [a]));
-    let clean = solved(&mut p3, &cheap);
-    assert!(clean.cost < solved(&mut toy(), &cheap).cost);
+    let p3 = p3.compile();
+    let clean = solved(&p3, &cheap);
+    assert!(clean.cost < solved(&toy(), &cheap).cost);
     assert_eq!(steps(&p3, &clean, 0.02)[0].have, vec!["A".to_string()]); // the recipe starts where the item is
     let crafted = Mod::new("bench", Side::Suffix, 0.0, &["B"], false, "crafted B-group", &[]); // outside the pool: blocks B
     assert_eq!(p.state_of(RARE, [&crafted]).status[..2], [MISSING, BLOCKED]);
@@ -360,9 +475,9 @@ fn finishing_a_half_done_item() {
 fn unreachable_targets_are_an_error() {
     // Only an exalt, which needs a rare to start from: nothing makes the base rare.
     let pool = pool();
-    let actions = vec![Action::new("exalt", "exalt", &[("exalted", 1.0)], &[RARE])];
-    let mut p = Problem::new(pool.clone(), vec![target(&pool, "A")], 1, actions, Kind::Jewel);
-    assert_eq!(solve(&mut p, &prices(), &FREE).unwrap_err(), SolveError::Unreachable);
+    let actions = vec![Action::new("exalt", ActionKind::Exalt, &[("exalted", 1.0)], &[RARE])];
+    let p = ProblemSpec::new(pool.clone(), vec![target(&pool, "A")], 1, actions, Kind::Jewel).compile();
+    assert_eq!(solve(&p, &prices(), &FREE).unwrap_err(), SolveError::Unreachable);
 }
 
 #[test]
@@ -370,4 +485,153 @@ fn describe_names_what_is_on_the_item() {
     let p = toy();
     assert_eq!(describe(&p, &st(RARE, &[GOOD, BLOCKED], &[0, 1, 0, 0])), "rare: A + B (blocked) + 1 other prefix");
     assert_eq!(describe(&p, &st(NORMAL, &[], &[])), "normal: nothing useful");
+}
+
+#[test]
+fn a_fractured_mod_blocks_its_group() {
+    // A fractured big "L" (heaviest prefix group) can't roll again: its tiers must not count as junk.
+    use Side::*;
+    let pool = vec![
+        Mod::new("L1", Prefix, 1000.0, &["L"], false, "L1", &[]),
+        Mod::new("L2", Prefix, 1000.0, &["L"], false, "L2", &[]),
+        Mod::new("A", Prefix, 100.0, &["A"], false, "A", &[]),
+        Mod::new("p1", Prefix, 100.0, &["p1"], false, "p1", &[]),
+        Mod::new("p2", Prefix, 100.0, &["p2"], false, "p2", &[]),
+        Mod::new("B", Suffix, 100.0, &["B"], false, "B", &[]),
+        Mod::new("s1", Suffix, 300.0, &["s1"], false, "s1", &[]),
+    ];
+    let mut p = ProblemSpec::new(pool.clone(), vec![target(&pool, "A"), target(&pool, "B")], 2, basic(), Kind::Jewel);
+    p.fixed = vec![Mod { weight: 0.0, ..pool[0].clone() }];
+    let p = p.compile();
+    let plan = solved(&p, &prices());
+    approx(simulated(&p, &plan, &prices(), 6000, 7), plan.cost, 0.05);
+}
+
+#[test]
+fn an_essence_clashing_with_a_fractured_mod_cannot_be_used() {
+    // x1 is fractured; an essence forcing x2 (same group) has no outcome, one forcing y still rolls.
+    let clash = Action::new("x essence", ActionKind::RerollRare, &[("chaos", 1.0)], &[NORMAL, RARE]).with_forced("x2");
+    let fine = Action::new("y essence", ActionKind::RerollRare, &[("chaos", 1.0)], &[NORMAL, RARE]).with_forced("y");
+    let p = toy_with(vec![clash.clone(), fine.clone()], &[], &["x1"], &["A", "B"]);
+    assert!(p.outcomes(&p.start(), &clash).is_empty());
+    assert!(!p.outcomes(&p.start(), &fine).is_empty());
+}
+
+#[test]
+fn a_full_item_needs_every_slot_taken() {
+    // Both targets on a magic item would do; wanting four mods means any two more on a rare.
+    let mut p = toy();
+    let mut spec = p.to_spec();
+    spec.min_mods = 4;
+    p = spec.compile();
+    assert!(!p.done(&st(RARE, &[GOOD, GOOD], &[])));
+    assert!(p.done(&st(RARE, &[GOOD, GOOD], &[1, 0, 0, 1])));
+    let plain = solved(&toy(), &prices());
+    let full = solved(&p, &prices());
+    assert!(full.cost > plain.cost);
+    approx(simulated(&p, &full, &prices(), 4000, 5), full.cost, 0.08);
+}
+
+#[test]
+fn harvest_removal_does_not_protect_attack_modifiers() {
+    let augment = Action::new("harvest cold", ActionKind::Augment, &[("chaos", 1.0)], &[RARE]).with_profile("cold");
+    let mut p = toy_with(vec![augment.clone()], &[("cold", vec![("B".into(), 100.0)])], &[], &["A", "B"]);
+    let mut spec = p.to_spec();
+    spec.pool[0].tags.push("attack".into());
+    p = spec.compile();
+    let s = st(RARE, &[GOOD, MISSING], &[]).with_meta(META_NO_ATTACK);
+    let out = p.outcomes(&s, &augment);
+    let removed: f64 = out.iter().filter(|(_, n)| n.status[0] == MISSING).map(|(p, _)| p).sum();
+    approx(removed, 0.5, 1e-12);
+    assert!(out.iter().all(|(_, n)| n.status[1] == GOOD));
+}
+
+#[test]
+fn harvest_first_modifier_respects_cannot_roll() {
+    let harvest = Action::new("harvest fire", ActionKind::Reforge, &[("chaos", 1.0)], &[RARE]).with_first_profile("fire");
+    let mut p = toy_with(vec![harvest.clone()], &[("fire", vec![("A".into(), 100.0)])], &[], &["A", "B"]);
+    let mut spec = p.to_spec();
+    spec.pool[0].tags.push("attack".into());
+    p = spec.compile();
+    assert!(!p.outcomes(&st(RARE, &[], &[]), &harvest).is_empty());
+    assert!(p.outcomes(&st(RARE, &[], &[]).with_meta(META_NO_ATTACK), &harvest).is_empty());
+}
+
+#[test]
+fn bench_conflicts_must_be_removed_before_finishing() {
+    let mut p = toy();
+    let mut spec = p.to_spec();
+    spec.bench.push(Mod::new("bench x", Side::Prefix, 0.0, &["x"], false, "bench x", &[]));
+    spec.reserve.insert(Side::Prefix, 1);
+    spec.kind = Kind::Gear;
+    p = spec.compile();
+    let mods = pool();
+    let blocked = p.state_of(RARE, [&mods[0], &mods[1], &mods[3]]);
+    assert!(!p.done(&blocked));
+    assert_eq!(p.count(&blocked, Side::Prefix), 2);
+    assert!(p.annul(&blocked, None).iter().any(|(_, s)| p.done(s)));
+    let mut prices = prices();
+    prices.insert("annul".into(), 0.01);
+    let mut spec = p.to_spec();
+    spec.begin = Some(blocked);
+    p = spec.compile();
+    let plan = solved(&p, &prices);
+    assert!(plan.cost > 0.0);
+    assert_eq!(plan.policy[&blocked], "annul");
+}
+
+#[test]
+fn search_limits_report_incomplete_search() {
+    for limits in [
+        SolveLimits { states: 1, ..Default::default() },
+        SolveLimits { transitions: 1, ..Default::default() },
+        SolveLimits { state_actions: 1, ..Default::default() },
+    ] {
+        let error = solve_with(&toy(), &prices(), &FREE, SolveOptions { limits, ..Default::default() }).unwrap_err();
+        assert!(matches!(error, SolveError::ResourceLimit { .. }));
+        assert!(error.to_string().contains("search incomplete"));
+    }
+}
+
+#[test]
+fn solving_with_new_prices_preserves_the_catalogue_and_reuses_rolls() {
+    let mods = pool();
+    let mut actions = vec![
+        Action::new("first", ActionKind::RerollRare, &[("first", 1.0)], &[NORMAL, RARE]),
+        Action::new("second", ActionKind::RerollRare, &[("second", 1.0)], &[NORMAL, RARE]),
+    ];
+    actions.push(Action::new("unpriced", ActionKind::RerollRare, &[("missing", 1.0)], &[NORMAL, RARE]).with_profile("unavailable"));
+    let p = ProblemSpec::new(mods.clone(), vec![target(&mods, "A")], 1, actions, Kind::Gear).compile();
+    let original = serde_json::to_vec(&p).unwrap();
+    let first = solve(&p, &[("first".into(), 1.0), ("second".into(), 10.0)].into(), &FREE).unwrap();
+    let replay = simulate(&p, &first, &[("first".into(), 1.0), ("second".into(), 10.0)].into(), &FREE, 3000, 7, 100_000);
+    approx(replay, first.cost, 0.06);
+    let roll = p.roll(&p.actions[0]).unwrap();
+    let second = solve(&p, &[("first".into(), 10.0), ("second".into(), 1.0)].into(), &FREE).unwrap();
+    assert_eq!(serde_json::to_vec(&p).unwrap(), original);
+    assert!(first.policy.values().all(|a| a == "first"));
+    assert!(second.policy.values().all(|a| a == "second"));
+    approx(first.cost, second.cost, 1e-10);
+    assert!(std::sync::Arc::ptr_eq(&roll, &p.clone().roll(&p.actions[1]).unwrap()));
+    let mut changed = p.to_spec();
+    changed.pool[0].weight *= 10.0;
+    let changed = changed.compile();
+    let cost = solve(&changed, &[("first".into(), 1.0)].into(), &FREE).unwrap().cost;
+    assert!(cost < first.cost);
+    assert_eq!(serde_json::to_vec(&p).unwrap(), original);
+}
+
+#[test]
+fn action_timing_is_independent_of_display_names_and_legacy_json_still_loads() {
+    let raw =
+        serde_json::json!({"name":"any label", "kind":"reroll_rare", "cost":[["scour",1.0],["dense-fossil",1.0]], "from_rarity":[RARE]});
+    let mut action: Action = serde_json::from_value(raw.clone()).unwrap();
+    assert_eq!(action.seconds, 5.0);
+    action.name = "harvest something else".into();
+    assert_eq!(action.seconds, 5.0);
+    let restored: Action = serde_json::from_slice(&serde_json::to_vec(&action.with_seconds(8.0)).unwrap()).unwrap();
+    assert_eq!(restored.seconds, 8.0);
+    let mut unknown = raw;
+    unknown["kind"] = "typo".into();
+    assert!(serde_json::from_value::<Action>(unknown).is_err());
 }

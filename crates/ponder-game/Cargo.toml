@@ -10,6 +10,7 @@ description = "Game data (repoe), item parsing and mod matching, currency action
 ponder-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+indexmap.workspace = true
 regex.workspace = true
 base64 = "0.23"
 flate2 = "1"

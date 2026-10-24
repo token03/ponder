@@ -127,12 +127,12 @@ impl Item {
 // -- Python string semantics ------------------------------------------------------------
 
 /// `str.strip()`: Python also counts the ASCII separators 0x1c-0x1f as whitespace.
-pub(crate) fn py_strip(s: &str) -> &str {
+pub(crate) fn trim_text(s: &str) -> &str {
     s.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c))
 }
 
 /// `str.splitlines()`.
-pub(crate) fn py_splitlines(s: &str) -> Vec<&str> {
+pub fn split_lines(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     let mut chars = s.char_indices().peekable();
@@ -166,7 +166,7 @@ pub(crate) fn py_splitlines(s: &str) -> Vec<&str> {
 
 /// `int(value)` or None.
 fn int(value: Option<&str>) -> Option<i64> {
-    py_strip(value?).replace('_', "").parse().ok()
+    trim_text(value?).replace('_', "").parse().ok()
 }
 
 // -- parsing --------------------------------------------------------------------------------
@@ -176,9 +176,9 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
     if text.contains(SEPARATOR) {
         return parse_copied(text);
     }
-    let lines: Vec<String> = py_splitlines(py_strip(text))
+    let lines: Vec<String> = split_lines(trim_text(text))
         .into_iter()
-        .map(|l| py_strip(&COLOR.replace_all(l, "")).to_string())
+        .map(|l| trim_text(&COLOR.replace_all(l, "")).to_string())
         .filter(|l| !l.is_empty())
         .collect();
     if lines.is_empty() || !lines[0].starts_with("Rarity:") {
@@ -187,7 +187,7 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
             &lines[..lines.len().min(1)]
         )));
     }
-    let rarity = py_strip(lines[0].split_once(':').unwrap().1).to_uppercase();
+    let rarity = trim_text(lines[0].split_once(':').unwrap().1).to_uppercase();
     let (name, base, rest): (String, String, &[String]);
     if matches!(rarity.as_str(), "RARE" | "UNIQUE" | "RELIC") {
         let get = |i: usize| {
@@ -221,10 +221,10 @@ pub fn parse_item(text: &str) -> Result<Item, ItemError> {
             item.flags.insert(f.to_string());
         } else if line.contains(':') && !line.starts_with('{') {
             let (key, value) = line.split_once(':').unwrap();
-            let (key, value) = (py_strip(key), py_strip(value));
+            let (key, value) = (trim_text(key), trim_text(value));
             if key == "Implicits" {
                 implicit_count = Some(
-                    py_strip(value)
+                    trim_text(value)
                         .parse()
                         .map_err(|_| ItemError(format!("invalid literal for int(): {value:?}")))?,
                 );
@@ -292,12 +292,12 @@ const COPIED_SKIP: &[&str] = &[
 /// "(fractured)"; advanced copies (Ctrl+Alt+C) add `{ Prefix Modifier ... }`
 /// headers and roll ranges, which are dropped.
 fn parse_copied(text: &str) -> Result<Item, ItemError> {
-    let sections: Vec<Vec<&str>> = py_strip(text)
+    let sections: Vec<Vec<&str>> = trim_text(text)
         .split(SEPARATOR)
         .map(|part| {
-            py_splitlines(py_strip(part))
+            split_lines(trim_text(part))
                 .into_iter()
-                .map(py_strip)
+                .map(trim_text)
                 .filter(|l| !l.is_empty())
                 .collect()
         })
@@ -313,7 +313,7 @@ fn parse_copied(text: &str) -> Result<Item, ItemError> {
             &head[..head.len().min(1)]
         )));
     }
-    let rarity = py_strip(head[0].split_once(':').unwrap().1).to_uppercase();
+    let rarity = trim_text(head[0].split_once(':').unwrap().1).to_uppercase();
     let names = &head[1..];
     let (name, base) = match (names.first(), names.last()) {
         (Some(a), Some(b)) => (a.to_string(), b.to_string()),
@@ -392,7 +392,7 @@ fn strip_markers(line: &str) -> (String, BTreeMap<String, String>) {
         );
         line = &line[m.get(0).unwrap().end()..];
     }
-    (py_strip(line).to_string(), markers)
+    (trim_text(line).to_string(), markers)
 }
 
 #[cfg(test)]
@@ -402,15 +402,15 @@ mod tests {
     #[test]
     fn splitlines_like_python() {
         assert_eq!(
-            py_splitlines("a\nb\r\nc\rd\u{2028}e\n"),
+            split_lines("a\nb\r\nc\rd\u{2028}e\n"),
             ["a", "b", "c", "d", "e"]
         );
-        assert_eq!(py_splitlines(""), Vec::<&str>::new());
-        assert_eq!(py_splitlines("a\n\nb"), ["a", "", "b"]);
+        assert_eq!(split_lines(""), Vec::<&str>::new());
+        assert_eq!(split_lines("a\n\nb"), ["a", "", "b"]);
     }
 
     #[test]
     fn strip_like_python() {
-        assert_eq!(py_strip(" \t\x1fx\u{a0}\n"), "x");
+        assert_eq!(trim_text(" \t\x1fx\u{a0}\n"), "x");
     }
 }

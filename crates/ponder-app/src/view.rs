@@ -5,6 +5,8 @@ use std::cmp::Ordering;
 use ponder::pipeline::{Estimate, cmp_ladder};
 use serde::{Deserialize, Serialize};
 
+use crate::filter::ItemSelection;
+
 /// Chaos for display: divines above one divine, whole chaos above 10.
 pub fn money(x: Option<f64>, divine: f64) -> String {
     let Some(x) = x else { return "–".into() };
@@ -44,16 +46,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::All, Kind::Gear, Kind::Cluster];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Kind::All => "All",
-            Kind::Gear => "Gear",
-            Kind::Cluster => "Clusters",
-        }
-    }
-
     fn admits(self, e: &Estimate) -> bool {
         match self {
             Kind::All => true,
@@ -68,6 +60,7 @@ impl Kind {
 #[serde(default)]
 pub struct Filters {
     pub kind: Kind,
+    pub items: ItemSelection,
     /// words that must all appear in the title, base, mods or skills
     pub text: String,
     /// one base group (an estimate's title for gear), or every group when empty
@@ -78,7 +71,6 @@ pub struct Filters {
     pub only_market: bool,
     pub only_fractures: bool,
     pub only_recomb: bool,
-    pub only_sales: bool,
     pub hide_errors: bool,
 }
 
@@ -86,6 +78,7 @@ impl Default for Filters {
     fn default() -> Self {
         Filters {
             kind: Kind::All,
+            items: ItemSelection::default(),
             text: String::new(),
             group: String::new(),
             min_demand: 0,
@@ -93,13 +86,24 @@ impl Default for Filters {
             only_market: false,
             only_fractures: false,
             only_recomb: false,
-            only_sales: false,
             hide_errors: true,
         }
     }
 }
 
 impl Filters {
+    pub fn migrate_kind(&mut self) {
+        if self.items.paths.is_empty() {
+            let paths: Vec<Vec<&str>> = match self.kind {
+                Kind::All => Vec::new(),
+                Kind::Gear => vec![vec!["Gear"], vec!["Jewels", "Base jewels"], vec!["Jewels", "Abyss jewels"]],
+                Kind::Cluster => vec![vec!["Jewels", "Clusters"]],
+            };
+            self.items.paths = paths.into_iter().map(|path| path.into_iter().map(String::from).collect()).collect();
+        }
+        self.kind = Kind::All;
+    }
+
     pub fn is_default(&self) -> bool {
         *self == Filters::default()
     }
@@ -124,9 +128,6 @@ impl Filters {
             return false;
         }
         if self.only_recomb && e.recomb_total().is_none() {
-            return false;
-        }
-        if self.only_sales && e.smaller_products.is_empty() {
             return false;
         }
         let words: Vec<String> = self.text.split_whitespace().map(str::to_lowercase).collect();
@@ -286,14 +287,6 @@ pub fn ranks(estimates: &[Estimate]) -> Vec<usize> {
     rank
 }
 
-/// The base groups (gear) and enchants (clusters) present, for the group filter.
-pub fn groups(estimates: &[Estimate]) -> Vec<String> {
-    let mut g: Vec<String> = estimates.iter().map(|e| e.title.clone()).collect();
-    g.sort();
-    g.dedup();
-    g
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,7 +323,6 @@ mod tests {
         assert_eq!(visible(&es, &text, Sort::default()).len(), 3);
         let group = Filters { group: "Ring".into(), ..all };
         assert_eq!(visible(&es, &group, Sort::default()), vec![0]);
-        assert_eq!(groups(&es), vec!["Amulet", "Medium cluster", "Ring"]);
     }
 
     #[test]
@@ -345,5 +337,24 @@ mod tests {
         assert!(s.descending);
         s.click(Col::Margin);
         assert!(!s.descending);
+    }
+
+    #[test]
+    fn saved_legacy_filters_migrate_without_losing_other_constraints() {
+        let mut filters: Filters = serde_json::from_value(serde_json::json!({
+            "kind": "Cluster", "group": "Medium cluster · Area Damage · 4p", "min_demand": 20
+        })).unwrap();
+        filters.migrate_kind();
+        assert_eq!(filters.kind, Kind::All);
+        assert_eq!(filters.items.paths.into_iter().collect::<Vec<_>>(), vec![vec!["Jewels".to_string(), "Clusters".to_string()]]);
+        assert_eq!(filters.min_demand, 20);
+        assert_eq!(filters.group, "Medium cluster · Area Damage · 4p");
+        let mut gear: Filters = serde_json::from_value(serde_json::json!({ "kind": "Gear" })).unwrap();
+        gear.migrate_kind();
+        assert_eq!(gear.items.paths.len(), 3);
+        let saved = serde_json::to_string(&gear).unwrap();
+        let mut restored: Filters = serde_json::from_str(&saved).unwrap();
+        restored.migrate_kind();
+        assert_eq!(restored, gear);
     }
 }

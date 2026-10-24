@@ -4,23 +4,29 @@
 //! state (rarity, each target missing / good / blocked, other mods per slot); every
 //! currency maps a state to a distribution over states; policy iteration finds, for every
 //! state, the action minimising the expected cost to finish.
-
+//!
+mod action;
+mod fracture;
 mod linear;
+mod mechanics;
 mod problem;
+pub mod search;
 mod simulate;
 mod solve;
 mod steps;
+mod transition;
 mod types;
 
+pub use action::{Action, ActionKind, Effect, FOSSIL_SECONDS, action_cost, step_cost};
+pub use fracture::{FRACTURE_MIN_MODS, FRACTURE_ORB, FRACTURE_SECONDS, SelfFracture, self_fracture};
 pub use linear::Backend;
-pub use problem::{Problem, RollKey};
-pub use simulate::{Rng, simulate};
-pub use solve::{
-    FOSSIL_SECONDS, FRACTURE_MIN_MODS, FRACTURE_ORB, FRACTURE_SECONDS, HARVEST_SECONDS, LOCK_SECONDS, Plan, SECONDS, SELL_SECONDS,
-    SelfFracture, SolveError, StateMap, action_cost, evaluate, evaluate_with, seconds, self_fracture, solve, solve_rounds, solve_with,
-    step_cost,
-};
+pub use mechanics::Rng;
+pub use problem::{Problem, ProblemSpec, RollKey};
+pub use search::Options as SolveOptions;
+pub use simulate::{replay, replay_with_meta, simulate};
+pub use solve::{Bounds, Plan, SolveError, SolveLimits, StateMap, evaluate, evaluate_with, solve, solve_with};
 pub use steps::{Exit, Step, describe, describe_parts, recipe, recipe_states, steps};
+pub use transition::{Distribution, ProbabilityRange, TransitionBuffer, TransitionResult};
 pub use types::*;
 
 #[cfg(test)]

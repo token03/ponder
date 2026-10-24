@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use ponder_core::{Plan, Problem, Rng, Side, Target, solve};
+use ponder_core::{GOOD, Plan, Problem, RARE, Rng, Side, State, Target, solve};
 use ponder_game::mods::ModDB;
 use rayon::prelude::*;
 use serde_json::{Value, json};
@@ -398,7 +398,7 @@ fn best_of(db: &ModDB, item_class: &str, domain: &str, signature: &BTreeSet<Stri
                 !has("experimental_base"),
                 has("top_tier_base_item_type"),
                 b.drop_level,
-                bid,
+                bid.as_str(),
             );
             if best.is_none_or(|k| key > k) {
                 best = Some(key);
@@ -644,22 +644,11 @@ impl Step {
 
 /// Every `r`-subset of `items`, in lexicographic index order (`itertools.combinations`).
 fn combinations<T: Clone>(items: &[T], r: usize) -> Vec<Vec<T>> {
-    let n = items.len();
     let mut out = Vec::new();
-    if r > n {
-        return out;
-    }
-    let mut idx: Vec<usize> = (0..r).collect();
-    loop {
+    crate::combinations::for_each(items.len(), r, |idx| {
         out.push(idx.iter().map(|&i| items[i].clone()).collect());
-        let Some(i) = (0..r).rev().find(|&i| idx[i] != i + n - r) else {
-            return out;
-        };
-        idx[i] += 1;
-        for j in i + 1..r {
-            idx[j] = idx[j - 1] + 1;
-        }
-    }
+    });
+    out
 }
 
 type LeafKey = (String, Vec<String>, Vec<(usize, Vec<Vec<String>>)>);
@@ -708,7 +697,7 @@ impl Planner {
     ) -> Planner {
         let want = wants(problem);
         let side = want.iter().map(|w| (w.name.clone(), w.side)).collect();
-        let ok = problem.fixed.is_empty() && (2..=max_wants).contains(&want.len());
+        let ok = problem.fixed.is_empty() && problem.influences.is_empty() && (2..=max_wants).contains(&want.len());
         let mut p = Planner {
             base_id: base_id.to_string(),
             item_level,
@@ -934,7 +923,7 @@ impl Planner {
         if let Some(&i) = self.keys.get(&key) {
             return Some(i);
         }
-        let mut p = gear::problem_on(
+        let mut spec = gear::problem_spec_on(
             db,
             bid,
             targets,
@@ -945,21 +934,20 @@ impl Planner {
         );
         let fillers = carried.iter().filter(|w| w.target.is_none()).count();
         if fillers > 0 {
-            p.filler = self
+            spec.filler = self
                 .filler
                 .iter()
                 .filter(|m| pool.contains(*m))
                 .cloned()
                 .collect();
-            p.filler_need = fillers;
-            p.reset_caches();
+            spec.filler_need = fillers;
         }
         let donor = Donor {
             base: db.bases[bid].name.clone(),
             base_id: bid.to_string(),
             carries: carried.iter().map(|w| w.name.clone()).collect(),
             padding,
-            problem: Some(p),
+            problem: Some(spec.compile()),
             plan: None,
             error: None,
             on_target,
@@ -978,8 +966,27 @@ impl Planner {
 
     /// The cheapest tree that yields every wanted mod, once the leaves are solved.
     pub fn best(&self) -> Option<Step> {
+        let names: BTreeSet<String> = self.want.iter().map(|w| w.name.clone()).collect();
+        self.best_by_set().remove(&names).map(|s| (*s).clone())
+    }
+
+    /// The item a tree for `set` hands over: a clean rare with just those wanted mods, as `problem`
+    /// reads it (a target by name, a filler want as one filler mod on its side).
+    pub fn state_after(&self, problem: &Problem, set: &BTreeSet<String>) -> State {
+        let mut s = State::new(RARE, &[], &[]);
+        for w in self.want.iter().filter(|w| set.contains(&w.name)) {
+            match problem.targets.iter().position(|t| t.name == w.name) {
+                Some(i) => s.status[i] = GOOD,
+                None => s.junk[if w.side == Side::Prefix { 4 } else { 5 }] += 1,
+            }
+        }
+        s
+    }
+
+    /// The cheapest tree for every set of 2+ wanted mods it can make, once the leaves are solved.
+    pub fn best_by_set(&self) -> HashMap<BTreeSet<String>, Arc<Step>> {
         if !self.ok {
-            return None;
+            return HashMap::new();
         }
         let names: Vec<String> = self.want.iter().map(|w| w.name.clone()).collect();
         // options[S]: clean items carrying exactly S (target-base leaves, partner leaves, steps)
@@ -1080,8 +1087,6 @@ impl Planner {
             }
         }
         best_step
-            .get(&names.iter().cloned().collect::<BTreeSet<_>>())
-            .map(|s| (**s).clone())
     }
 
     /// Solve the leaves in parallel (see [`solve_donors`]); plans are not cached here.
@@ -1099,7 +1104,7 @@ pub fn solve_donors(mut donors: Vec<&mut Donor>, pricing: Pricing) {
     donors.sort_by_key(|d| std::cmp::Reverse(d.problem.as_ref().map_or(0, |p| p.targets.len())));
     donors.into_par_iter().for_each(|d| {
         match solve(
-            d.problem.as_mut().expect("filtered"),
+            d.problem.as_ref().expect("filtered"),
             pricing.prices,
             pricing.settings,
         ) {
@@ -1149,10 +1154,14 @@ pub fn draw<'a>(
             r -= p;
         }
         let mut eligible: Vec<&str> = pool.into_iter().filter(|m| legal.contains(m)).collect();
-        for i in 0..k.min(eligible.len()) {
-            let j = i + (rng.random() * (eligible.len() - i) as f64) as usize;
-            eligible.swap(i, j);
-            kept.insert(eligible[i]);
+        for _ in 0..k {
+            if eligible.is_empty() {
+                break;
+            }
+            let j = (rng.random() * eligible.len() as f64) as usize;
+            let picked = eligible.swap_remove(j);
+            kept.insert(picked);
+            eligible.retain(|&m| m != picked);
         }
     }
     Some(kept)

@@ -2,8 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +100,52 @@ pub struct Target {
     pub notable: bool,
 }
 
-/// The lumped item: rarity, each target's status, and the count of other mods per slot.
+/// Bench metamods an item can carry (`State.meta`; 0 is none). Each is a crafted mod holding a
+/// slot (`meta_side`). What respects them (Craft of Exile's table, poedb.tw/metamods):
+/// - "Prefixes/Suffixes Cannot Be Changed": chaos, Harvest reforges, scour, annul and Harvest
+///   add/remove leave the locked side alone. A reforge still adds mods to the locked side if it
+///   has room, and removes the metamod with the rest of the other side.
+/// - "Cannot roll Attack/Caster Modifiers": exalts, regals, augments and Harvest add/remove
+///   don't add mods with the tag, and annuls can't remove them.
+/// - Essences and fossils can't be used on an item with any metamod.
+pub const META_LOCK_PREFIXES: u8 = 1;
+pub const META_LOCK_SUFFIXES: u8 = 2;
+pub const META_NO_ATTACK: u8 = 3;
+pub const META_NO_CASTER: u8 = 4;
+pub const META_NAMES: [&str; 5] =
+    ["", "Prefixes Cannot Be Changed", "Suffixes Cannot Be Changed", "Cannot roll Attack Modifiers", "Cannot roll Caster Modifiers"];
+/// The mod tags "Cannot roll Attack/Caster Modifiers" keep off the item, by `meta_tag`.
+pub const META_TAGS: [&str; 2] = ["attack", "caster"];
+
+/// The side a metamod's slot is on.
+pub fn meta_side(meta: u8) -> Option<Side> {
+    match meta {
+        0 => None,
+        META_LOCK_SUFFIXES => Some(Side::Prefix),
+        _ => Some(Side::Suffix),
+    }
+}
+
+/// The side a lock metamod keeps.
+pub fn meta_locks(meta: u8) -> Option<Side> {
+    match meta {
+        META_LOCK_PREFIXES => Some(Side::Prefix),
+        META_LOCK_SUFFIXES => Some(Side::Suffix),
+        _ => None,
+    }
+}
+
+/// Which of `META_TAGS` a "cannot roll" metamod keeps off.
+pub fn meta_tag(meta: u8) -> Option<usize> {
+    match meta {
+        META_NO_ATTACK => Some(0),
+        META_NO_CASTER => Some(1),
+        _ => None,
+    }
+}
+
+/// The lumped item: rarity, each target's status, the count of other mods per slot, and the
+/// bench metamod on it (`META_*`, 0 for none).
 ///
 /// `junk` slots: prefix notable, prefix other, suffix notable, suffix other, prefix
 /// filler, suffix filler (filler: wanted, but any will do). Unused status entries are 0.
@@ -111,16 +154,22 @@ pub struct State {
     pub rarity: u8,
     pub status: [u8; MAX_TARGETS],
     pub junk: [u8; JUNK_SLOTS],
+    pub meta: u8,
 }
 
 impl State {
     pub fn new(rarity: u8, status: &[u8], junk: &[u8]) -> State {
         assert!(status.len() <= MAX_TARGETS, "at most {MAX_TARGETS} targets");
         assert!(junk.len() <= JUNK_SLOTS, "at most {JUNK_SLOTS} junk slots");
-        let mut s = State { rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS] };
+        let mut s = State { rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS], meta: 0 };
         s.status[..status.len()].copy_from_slice(status);
         s.junk[..junk.len()].copy_from_slice(junk); // short junk is padded with zeros
         s
+    }
+
+    pub fn with_meta(mut self, meta: u8) -> State {
+        self.meta = meta;
+        self
     }
 }
 
@@ -130,9 +179,14 @@ impl Hash for State {
         let mut j = [0u8; 8];
         j[..JUNK_SLOTS].copy_from_slice(&self.junk);
         j[JUNK_SLOTS] = self.rarity;
+        j[JUNK_SLOTS + 1] = self.meta;
         h.write_u64(u64::from_le_bytes(self.status));
         h.write_u64(u64::from_le_bytes(j));
     }
+}
+
+fn is_zero(x: &u8) -> bool {
+    *x == 0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,97 +195,24 @@ struct StateRepr {
     status: Vec<u8>,
     #[serde(default)]
     junk: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    meta: u8,
 }
 
 impl Serialize for State {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         // Trailing status zeros can't be told from missing targets, so all slots are written.
-        StateRepr { rarity: self.rarity, status: self.status.to_vec(), junk: self.junk.to_vec() }.serialize(ser)
+        StateRepr { rarity: self.rarity, status: self.status.to_vec(), junk: self.junk.to_vec(), meta: self.meta }.serialize(ser)
     }
 }
 
 impl<'de> Deserialize<'de> for State {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<State, D::Error> {
         let r = StateRepr::deserialize(de)?;
-        if r.status.len() > MAX_TARGETS || r.junk.len() > JUNK_SLOTS {
-            return Err(serde::de::Error::custom("state has too many targets or junk slots"));
+        if r.status.len() > MAX_TARGETS || r.junk.len() > JUNK_SLOTS || r.meta as usize >= META_NAMES.len() {
+            return Err(serde::de::Error::custom("state has too many targets or junk slots, or an unknown metamod"));
         }
-        Ok(State::new(r.rarity, &r.status, &r.junk))
-    }
-}
-
-/// What a bricked item must have to sell as a smaller product: its targets on, and its
-/// filler (prefix, suffix, any) from the filler slots and the `spare` targets that count as filler.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Sale {
-    pub need: BTreeSet<usize>,
-    pub prefix: usize,
-    pub suffix: usize,
-    pub any: usize,
-    pub spare: BTreeSet<usize>,
-}
-
-fn base_profile() -> String {
-    "base".into()
-}
-
-/// One currency use. `cost` is [(price id, quantity)].
-///
-/// `kind`: transmute alt aug regal exalt annul reroll_magic reroll_rare keep_prefixes
-/// keep_suffixes lockreroll_{prefixes,suffixes} exalt_{prefix,suffix} annul_{prefix,suffix} sell.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Action {
-    pub name: String,
-    pub kind: String,
-    pub cost: Vec<(String, f64)>,
-    pub from_rarity: Vec<u8>,
-    #[serde(default = "base_profile")]
-    pub profile: String, // weight profile for rolled mods
-    #[serde(default)]
-    pub first_profile: Option<String>, // Harvest: the first mod comes from a tag-filtered pool
-    #[serde(default)]
-    pub forced: Option<String>, // essence: this mod is always added
-    /// Selling a bricked item as a smaller product and starting over: chaos back, and what it must have.
-    #[serde(default)]
-    pub credit: f64,
-    #[serde(default)]
-    pub sale: Option<Sale>,
-}
-
-impl Action {
-    pub fn new(name: &str, kind: &str, cost: &[(&str, f64)], from_rarity: &[u8]) -> Action {
-        Action {
-            name: name.into(),
-            kind: kind.into(),
-            cost: cost.iter().map(|(p, q)| (p.to_string(), *q)).collect(),
-            from_rarity: from_rarity.to_vec(),
-            profile: base_profile(),
-            first_profile: None,
-            forced: None,
-            credit: 0.0,
-            sale: None,
-        }
-    }
-
-    pub fn with_profile(mut self, profile: &str) -> Action {
-        self.profile = profile.into();
-        self
-    }
-
-    pub fn with_first_profile(mut self, profile: &str) -> Action {
-        self.first_profile = Some(profile.into());
-        self
-    }
-
-    pub fn with_forced(mut self, mod_id: &str) -> Action {
-        self.forced = Some(mod_id.into());
-        self
-    }
-
-    pub fn with_sale(mut self, credit: f64, sale: Sale) -> Action {
-        self.credit = credit;
-        self.sale = Some(sale);
-        self
+        Ok(State::new(r.rarity, &r.status, &r.junk).with_meta(r.meta))
     }
 }
 
@@ -254,21 +235,3 @@ pub type Prices = std::collections::HashMap<String, f64>;
 
 /// One entry of an outcome distribution: (probability, next state).
 pub type Outcome = (f64, State);
-
-/// An action's outcomes from one state: owned, or shared with every state that rolls the same.
-#[derive(Clone, Debug)]
-pub enum Out {
-    Fresh(Vec<Outcome>),
-    Shared(Arc<Vec<Outcome>>),
-}
-
-impl Deref for Out {
-    type Target = [Outcome];
-
-    fn deref(&self) -> &[Outcome] {
-        match self {
-            Out::Fresh(v) => v,
-            Out::Shared(v) => v,
-        }
-    }
-}

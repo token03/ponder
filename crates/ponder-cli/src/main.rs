@@ -168,9 +168,9 @@ struct CraftsArgs {
     trade: bool,
     #[arg(long, default_value_t = 40)]
     trade_budget: usize,
-    /// also cost recombinator trees
+    /// skip recombinator trees (recombining part of an item, then crafting the rest)
     #[arg(long)]
-    recomb: bool,
+    no_recomb: bool,
     /// only the best N estimates (all by default)
     #[arg(long)]
     top: Option<usize>,
@@ -263,12 +263,12 @@ fn run(cli: &Cli) -> Result<Value> {
     };
     let v = match &cli.command {
         Command::Data { action } => {
-            let dir = ponder_net::repoe::data_dir();
+            let dir = ponder_game::data::data_dir();
             if action == "fetch" {
-                let version = ponder_net::repoe::fetch(&*ponder_net::http::real(), &dir)?;
+                let version = ponder_net::repoe::fetch(&*ponder_net::http::real(), &dir, ponder_game::data::SOURCE, ponder_game::data::FILES)?;
                 json!({"version": version, "dir": dir})
             } else {
-                json!({"version": ponder_net::repoe::version(&dir), "dir": dir})
+                json!({"version": ponder_game::data::version(Some(&dir)), "dir": dir})
             }
         }
         Command::Prices { action, league } => {
@@ -330,7 +330,7 @@ fn run(cli: &Cli) -> Result<Value> {
                 group: a.group.clone(),
                 trade_lookup: a.trade,
                 trade_budget: a.trade_budget,
-                recombs: a.recomb,
+                recombs: !a.no_recomb,
                 workers: a.workers,
             };
             let mut r = pipeline::ladder(&cx, &db, None, &opts, Some(progress))?;

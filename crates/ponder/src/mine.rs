@@ -23,32 +23,11 @@ pub struct Candidate {
 
 /// `itertools.combinations(items, size)`, in lexicographic index order.
 pub fn combinations<T>(items: &[T], size: usize) -> Vec<Vec<&T>> {
-    let n = items.len();
     let mut out = Vec::new();
-    if size > n {
-        return out;
-    }
-    let mut idx: Vec<usize> = (0..size).collect();
-    loop {
+    crate::combinations::for_each(items.len(), size, |idx| {
         out.push(idx.iter().map(|&i| &items[i]).collect());
-        let mut i = size;
-        loop {
-            if i == 0 {
-                return out;
-            }
-            i -= 1;
-            if idx[i] != i + n - size {
-                break;
-            }
-            if i == 0 {
-                return out;
-            }
-        }
-        idx[i] += 1;
-        for j in i + 1..size {
-            idx[j] = idx[j - 1] + 1;
-        }
-    }
+    });
+    out
 }
 
 type Key = (String, Vec<String>);

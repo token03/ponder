@@ -8,6 +8,7 @@ use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{Value, json};
 
 use super::finish::Finish;
+use super::pivots::Pivot;
 use crate::gear::Row;
 use crate::mine::Candidate;
 
@@ -40,6 +41,7 @@ pub enum Key {
         filler_need: usize,
         filler: BTreeSet<String>,
         filler_sides: Option<(usize, usize)>,
+        min_mods: usize,
     },
 }
 
@@ -87,10 +89,15 @@ impl Serialize for Search {
 }
 
 /// A recombinator plan, as far as an estimate needs it: its cost and its JSON.
+///
+/// The tree may make only part of the item (`part`); crafting the rest from there costs `finish`
+/// (in `cost` already).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecombInfo {
     pub cost: Option<f64>,
     pub json: Value,
+    pub part: Vec<String>,
+    pub finish: f64,
 }
 
 /// What an estimate says about another in the product tree.
@@ -101,12 +108,6 @@ pub struct ProductRef {
     pub cheapest: Option<f64>,
 }
 
-impl ProductRef {
-    fn to_value(&self) -> Value {
-        json!({"title": self.title, "targets": self.targets, "cheapest": self.cheapest})
-    }
-}
-
 /// Buy a base with one target already fractured on it, then craft the rest.
 #[derive(Clone, Debug, Default)]
 pub struct Fracture {
@@ -114,8 +115,11 @@ pub struct Fracture {
     pub mod_id: String,
     pub problem: Option<Problem>,
     pub plan: Option<Plan>,
+    pub bench_cost: f64,
     pub query: Option<Value>,
     pub trade_url: Option<String>,
+    pub donor_query: Option<Value>,
+    pub donor_url: Option<String>,
     pub base_price: Option<(f64, i64)>,
     pub base_error: Option<String>,
     pub error: Option<String>,
@@ -129,7 +133,7 @@ impl Fracture {
     }
 
     pub fn craft_cost(&self) -> Option<f64> {
-        self.plan.as_ref().map(|p| p.cost)
+        self.plan.as_ref().map(|p| p.cost + self.bench_cost)
     }
 
     /// The cheaper of buying the fractured base and making it.
@@ -142,7 +146,7 @@ impl Fracture {
     }
 
     pub fn total(&self) -> Option<f64> {
-        Some(self.plan.as_ref()?.cost + self.base_cost()?)
+        Some(self.craft_cost()? + self.base_cost()?)
     }
 
     pub fn to_dict(&self) -> Value {
@@ -154,6 +158,8 @@ impl Fracture {
             "self_made": self.made,
             "total": self.total(),
             "trade_url": self.trade_url,
+            "donor_query": self.donor_query,
+            "donor_url": self.donor_url,
             "error": non_empty(&self.error).or(non_empty(&self.base_error)),
         })
     }
@@ -163,6 +169,13 @@ impl Serialize for Fracture {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         self.to_dict().serialize(s)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftRoute {
+    Craft,
+    Fracture(usize),
+    Recomb,
 }
 
 /// Expected cost of crafting one item, and what it sells for when known.
@@ -196,6 +209,7 @@ pub struct Estimate {
     /// fractured mods the base must already have
     pub fixed: Vec<String>,
     pub fixed_ids: Vec<String>,
+    pub can_fracture: bool,
     /// (chaos, listings)
     pub base_price: Option<(f64, i64)>,
     /// "poe.ninja", "trade"
@@ -222,13 +236,8 @@ pub struct Estimate {
     pub recomb: Option<RecombInfo>,
     /// their most common main skills
     pub skills: Vec<String>,
-    /// products this one contains (ladder runs): what a brick sells as; indices into the list it was linked in
-    pub smaller: Vec<usize>,
-    /// products that contain this one: where it leads
-    pub bigger: Vec<usize>,
-    /// `smaller` and `bigger` as of the last `snapshot_products` (what `to_dict` writes)
-    pub smaller_products: Vec<ProductRef>,
-    pub bigger_products: Vec<ProductRef>,
+    /// clicks along this one's recipe that land a good start on another product of its base group (`add_pivots`)
+    pub pivots: Vec<Pivot>,
     /// half-done items for sale worth finishing (`find_starts`)
     pub starts: Vec<Finish>,
     pub starts_url: Option<String>,
@@ -256,6 +265,7 @@ impl Estimate {
             skipped: Vec::new(),
             fixed: Vec::new(),
             fixed_ids: Vec::new(),
+            can_fracture: true,
             base_price: None,
             base_source: String::new(),
             base_query: None,
@@ -272,10 +282,7 @@ impl Estimate {
             demand: 0,
             recomb: None,
             skills: Vec::new(),
-            smaller: Vec::new(),
-            bigger: Vec::new(),
-            smaller_products: Vec::new(),
-            bigger_products: Vec::new(),
+            pivots: Vec::new(),
             starts: Vec::new(),
             starts_url: None,
             settings: Settings::default(),
@@ -296,16 +303,15 @@ impl Estimate {
     }
 
     pub fn total(&self) -> Option<f64> {
+        if self.needs_base_price() {
+            return None;
+        }
         let plan = self.plan.as_ref()?;
         Some(plan.cost + self.bench_cost() + self.base_price.map_or(0.0, |b| b.0))
     }
 
     pub fn margin(&self) -> Option<f64> {
-        let market = self.market?;
-        if self.total().is_none() || self.needs_base_price() {
-            return None;
-        }
-        Some(market.0 - self.cheapest()?)
+        Some(self.market?.0 - self.cheapest()?)
     }
 
     /// How much of a market hole this is: margin times ladder wearers per listing.
@@ -351,7 +357,32 @@ impl Estimate {
 
     /// The cheapest of crafting from scratch, the best priced fracture and recombining.
     pub fn cheapest(&self) -> Option<f64> {
-        [self.total(), self.best_fracture().and_then(Fracture::total), self.recomb_total()].into_iter().flatten().reduce(f64::min)
+        match self.cheapest_route()? {
+            CraftRoute::Craft => self.total(),
+            CraftRoute::Fracture(i) => self.fractures[i].total(),
+            CraftRoute::Recomb => self.recomb_total(),
+        }
+    }
+
+    pub fn cheapest_route(&self) -> Option<CraftRoute> {
+        self.total()
+            .map(|cost| (CraftRoute::Craft, cost))
+            .into_iter()
+            .chain(self.fractures.iter().enumerate().filter_map(|(i, f)| Some((CraftRoute::Fracture(i), f.total()?))))
+            .chain(self.recomb_total().map(|cost| (CraftRoute::Recomb, cost)))
+            .min_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(route, _)| route)
+    }
+
+    pub fn cheapest_plan(&self) -> Option<(&Problem, &Plan)> {
+        match self.cheapest_route()? {
+            CraftRoute::Craft => Some((self.problem.as_ref()?, self.plan.as_ref()?)),
+            CraftRoute::Fracture(i) => {
+                let f = &self.fractures[i];
+                Some((f.problem.as_ref()?, f.plan.as_ref()?))
+            }
+            CraftRoute::Recomb => None,
+        }
     }
 
     pub fn recipe(&self, rows: usize) -> Vec<(String, String, f64)> {
@@ -404,6 +435,8 @@ impl Estimate {
             "builds": self.builds,
             "item_level": self.item_level,
             "craft_cost": self.craft_cost(),
+            // certified range of the crafting plan's expected chaos (the solver's model, base and bench excluded)
+            "craft_bounds": self.plan.as_ref().and_then(|p| p.bounds).map(|b| json!({"lower": b.lower, "upper": b.upper})),
             "bench": self.bench.iter().map(|(label, c)| json!({"mod": label, "chaos": c})).collect::<Vec<_>>(),
             "base_price": self.base_price.map(|b| b.0),
             "base_source": if self.base_source.is_empty() { None } else { Some(&self.base_source) },
@@ -426,8 +459,7 @@ impl Estimate {
             "skills": self.skills,
             "hole": self.hole(),
             "fracture_worth": fracture_worth,
-            "smaller_products": self.smaller_products.iter().map(ProductRef::to_value).collect::<Vec<_>>(),
-            "bigger_products": self.bigger_products.iter().map(ProductRef::to_value).collect::<Vec<_>>(),
+            "pivots": self.pivots.iter().map(Pivot::to_dict).collect::<Vec<_>>(),
             "half_done_for_sale": self.starts.iter().map(Finish::to_dict).collect::<Vec<_>>(),
             "error": non_empty(&self.error).or(non_empty(&self.market_error)).or(non_empty(&self.base_error)),
         })
@@ -444,18 +476,6 @@ impl Estimate {
 impl Serialize for Estimate {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         self.to_dict().serialize(s)
-    }
-}
-
-/// Refresh every estimate's `smaller_products` and `bigger_products` from the current costs.
-///
-/// `to_dict` writes the snapshot, so call this after anything that changes costs (solving,
-/// trade prices, recombinators). `ladder` and `run` do.
-pub fn snapshot_products(estimates: &mut [Estimate]) {
-    let products: Vec<ProductRef> = estimates.iter().map(Estimate::product).collect();
-    for e in estimates.iter_mut() {
-        e.smaller_products = e.smaller.iter().map(|&i| products[i].clone()).collect();
-        e.bigger_products = e.bigger.iter().map(|&i| products[i].clone()).collect();
     }
 }
 

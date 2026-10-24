@@ -13,12 +13,12 @@ Both sit on one Rust library.
 Needs Rust 1.99 or newer.
 
 ```sh
-cargo build --release
-./target/release/ponder data fetch        # ~60 MB of repoe-fork game data into .cache/repoe
-./target/release/ponder prices fetch      # current league prices from poe.ninja into .cache/ninja
-./target/release/ponder ladder fetch      # top characters of every popular skill and class, cached
-cargo run --release -p ponder-app         # the desktop app
-cargo test                                # the tests (some need the data and ladder caches)
+cargo build
+./target/debug/ponder data fetch          # ~60 MB of repoe-fork game data into .cache/repoe
+./target/debug/ponder prices fetch        # current league prices from poe.ninja into .cache/ninja
+./target/debug/ponder ladder fetch        # top characters of every popular skill and class, cached
+cargo run -p ponder-app                   # the desktop app
+cargo test                                # offline tests using fixed fixtures
 ```
 
 `cargo install --path crates/ponder-cli` and `cargo install --path crates/ponder-app` put
@@ -30,6 +30,21 @@ from the game files each patch. Set `PONDER_DATA` to keep it somewhere else.
 
 On Linux the app needs the usual desktop libraries: OpenGL, X11 or Wayland, and
 `libxkbcommon-x11`.
+
+For screenshots and UI checks under WSLg, see [desktop visual verification](docs/visual-verification.md).
+
+### Build times
+
+Use `cargo run -p ponder-app` while developing. The development profile leaves the UI
+unoptimized for faster rebuilds, keeps dependencies optimized, and fully optimizes
+`ponder-core` so solving stays fast. Release builds do more optimization and do not
+reuse incremental compilation by default; save `cargo build --release` for binaries
+you intend to distribute or benchmark. A profile change rebuilds affected crates once.
+
+Use `cargo check -p ponder-app` for compiler feedback without generating a binary.
+`cargo build -p ponder-app --timings` writes a report under `target/cargo-timings` to
+show which crates take the time. Keep `target/` between builds, and avoid changing
+toolchains or compiler flags during the edit loop because those invalidate cached work.
 
 ### On Windows
 
@@ -64,8 +79,9 @@ The layout, filters and run settings are remembered.
 - **Overview**: run totals, plus a plot of cheapest cost against demand. Click a point to
   select that craft.
 - **Item**: the selected craft's mods (target, filler, bench), its costs and the expected
-  currency. Buttons price it on trade, find half-done items for sale, cost a recombinator
-  tree, or copy its JSON.
+  currency, with the certified range the crafting cost lies in (see
+  [solver design](docs/solver-design.md)). Buttons price it on trade, find half-done items
+  for sale, cost a recombinator tree, or copy its JSON.
 - **Recipe**: the plan as numbered steps. Each outcome links to the step it leads to.
 - **Fractured bases**, **Products & starts**, **Recombinator**: the alternatives to
   crafting from scratch.
@@ -73,8 +89,14 @@ The layout, filters and run settings are remembered.
   what it can become and what finishing it costs.
 
 The left panel holds the run settings (how many archetypes, niche combos and clusters to
-cost, the chaos-per-hour charge, recombinators, trade) and the filters (text, gear or
-clusters, base group, minimum demand, maximum cost, has-a-fracture, and more).
+cost, the chaos-per-hour charge, recombinators, trade) and the filters. The item picker
+drills from Gear into weapons, armour or accessories, and from Jewels into clusters by
+size, base jewels or abyss jewels. Armour drills into slot, defence and individual
+RePoE bases, such as Gloves → ES → Sage Gloves. Search the tree, select several branches
+or bases, and remove selections with their chips; Everything clears the item selection.
+Choosing a child narrows its selected parent. A named base shows crafts sharing its
+mod pool; costs still use the displayed best base. Text, demand, cost and route filters
+apply to the combined selection.
 
 ## The command line
 
@@ -87,7 +109,7 @@ ponder ladder archetypes --group Bow         # mod combinations many characters 
 ponder ladder tiers --group "Gloves (ES)"    # how often each mod is worn, and how much its tier matters
 ponder ladder prices --group Bow --top 3     # fit what each tier is worth from trade listings
 ponder ladder crafts                         # cost what the ladder wears (gear + clusters), rank market holes
-ponder ladder crafts --trade --recomb        # ... priced on trade, with recombinator trees
+ponder ladder crafts --trade                 # ... priced on trade (--no-recomb skips recombinator trees)
 ponder ladder crafts --starts 10 --top 20    # ... and half-done items for sale for the best 10
 ponder ladder finish item.txt                # what an item you have can become, and the recipe from it
 ponder run https://pobb.in/XXXX build.txt    # cost every rare in some builds (--fractures, --trade, --recomb)
@@ -207,7 +229,9 @@ thousand alterations on a long shot.
 the prices its actions use (to 3 significant figures).
 
 **Recombinators** (`crates/ponder/src/recomb.rs`): clean donors, then recombinations,
-cheapest first over every split of the wanted mods.
+cheapest first over every split of the wanted mods. A tree may make only part of the item
+(a side, a pair): the rest is crafted from the clean rare it hands over, at what the item's
+own plan says finishing from there costs (`pipeline::recombs::best_part`).
 - The output takes either input's base, 50/50.
 - Per side, how many mods the output keeps depends only on that side's pool size
   (`recomb::SIDE_COUNTS`; edit it when a patch changes the odds).
@@ -252,12 +276,11 @@ The API allows only a few dozen searches per five minutes, so:
 crates/
   ponder-core/  the solver: lumped item states, currency outcomes, policy iteration, recipes (no I/O)
   ponder-game/  repoe game data, item text and PoB parsing, matching mod lines to mod ids
-  ponder-net/   poe.ninja ladder and prices, the trade site, share links, .env; every call cached
+  ponder-net/   poe.ninja ladder and prices, the trade site, downloads, .env; every call cached
   ponder/       the library: actions, gear and cluster problems, demand, recombinators, the pipeline
   ponder-cli/   `ponder`: JSON command line
   ponder-app/   `ponder-app`: egui desktop app
-goldens/        frozen reference answers the tests compare against (see goldens/README.md)
-fixtures/       PoB exports and builds used by the tests
+fixtures/       fixed test inputs, parsing expectations and a pinned RePoE snapshot
 builds/         lists of build links
 docs/           design notes
 ```

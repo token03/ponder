@@ -8,11 +8,10 @@
 //! `Ladder::sample` takes the top characters of every main skill with enough
 //! players, so many classes, skills and weapon types are covered, and caches
 //! each character's main skill, class and rare items and jewels (nothing else)
-//! under .cache/ladder/<snapshot>/, in the same files the Python writes.
+//! under .cache/ladder/<snapshot>/.
 
 use crate::env::Clock;
 use crate::http::{self, Transport};
-use crate::pyjson::{self, truthy, with_suffix};
 use anyhow::{Context, Result, anyhow, bail};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -120,7 +119,6 @@ impl RareItem {
 }
 
 /// What crafting analysis needs from a character: who, class, main skill, and rare items and jewels by mod id.
-/// Serialises to exactly the JSON the Python writes to `.lite` files.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lite {
     pub v: u32,
@@ -132,9 +130,8 @@ pub struct Lite {
 }
 
 impl Lite {
-    /// `json.dumps(self)`: the bytes of a `.lite` file.
     pub fn to_json(&self) -> String {
-        pyjson::dumps(&serde_json::to_value(self).expect("lite is plain data"))
+        serde_json::to_string(self).expect("lite is plain data")
     }
 }
 
@@ -196,7 +193,11 @@ impl Ladder {
     pub fn search(&self, snap: &Snapshot, filters: &[(&str, &str)]) -> Result<(Vec<Row>, Dims)> {
         let mut pairs = vec![("overview", snap.overview.as_str()), ("type", "exp")];
         pairs.extend_from_slice(filters);
-        let body = self.get(&format!("{API}/builds/{}/search?{}", snap.version, pyjson::urlencode(&pairs)))?;
+        let body = self.get(&format!(
+            "{API}/builds/{}/search?{}",
+            snap.version,
+            form_urlencoded::Serializer::new(String::new()).extend_pairs(&pairs).finish()
+        ))?;
         let outer = fields(&body)?;
         let inner = fields(outer.first().and_then(|f| f.2.bytes()).context("empty search answer")?)?;
         fn sub_fields<'a>(f: &Field<'a>) -> Result<Vec<Field<'a>>> {
@@ -269,11 +270,18 @@ impl Ladder {
     /// uniques, gems) is ~100x bigger and nothing reads it.
     pub fn character(&self, snap: &Snapshot, row: &Row) -> Result<Option<Lite>> {
         let dir = self.cache.join(&snap.version).join(safe(&row.account));
-        let small = dir.join(with_suffix(&safe(&row.name), ".lite"));
+        let small = dir.join(safe(&row.name)).with_added_extension("lite");
         if let Some(data) = read_lite(&small) {
             return Ok(Some(data));
         }
-        let query = pyjson::urlencode(&[("account", &row.account), ("name", &row.name), ("overview", &snap.overview), ("type", "exp")]);
+        let query = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs([
+                ("account", row.account.as_str()),
+                ("name", row.name.as_str()),
+                ("overview", snap.overview.as_str()),
+                ("type", "exp"),
+            ])
+            .finish();
         let data = match self.get_json(&format!("{API}/builds/{}/character?{query}", snap.version)).and_then(|doc| lite(&doc)) {
             Ok(data) => data,
             Err(_) => return Ok(None),
@@ -351,14 +359,14 @@ impl Ladder {
             for f in std::fs::read_dir(&account).into_iter().flatten().filter_map(|e| e.ok()) {
                 let name = f.file_name().to_string_lossy().into_owned();
                 if name.ends_with(".json") || name.ends_with(".lite") {
-                    stems.insert(account.join(with_suffix(&name, "")));
+                    stems.insert(account.join(&name).with_extension(""));
                 }
             }
         }
         let mut out = Vec::new();
         for stem in stems {
             let (dir, name) = (stem.parent().unwrap(), stem.file_name().unwrap().to_string_lossy().into_owned());
-            let (path, small) = (dir.join(with_suffix(&name, ".json")), dir.join(with_suffix(&name, ".lite")));
+            let (path, small) = (dir.join(&name).with_added_extension("json"), dir.join(&name).with_added_extension("lite"));
             if let Some(data) = read_lite(&small) {
                 let _ = std::fs::remove_file(&path);
                 out.push(data);
@@ -426,7 +434,8 @@ pub fn lite(data: &Value) -> Result<Lite> {
 pub fn main_skill(data: &Value) -> String {
     let empty = Vec::new();
     let groups = data.get("skills").and_then(Value::as_array).unwrap_or(&empty);
-    let (with_dps, without): (Vec<&Value>, Vec<&Value>) = groups.iter().partition(|g| g.get("dps").is_some_and(truthy));
+    let (with_dps, without): (Vec<&Value>, Vec<&Value>) =
+        groups.iter().partition(|g| g.get("dps").and_then(Value::as_array).is_some_and(|dps| !dps.is_empty()));
     for group in with_dps.into_iter().chain(without) {
         for gem in group.get("allGems").and_then(Value::as_array).unwrap_or(&empty) {
             let name = gem.get("name").and_then(Value::as_str).unwrap_or("");
@@ -447,7 +456,7 @@ pub fn rare_items(data: &Value) -> Vec<&Value> {
     list("items")
         .chain(list("jewels"))
         .filter_map(|entry| entry.get("itemData"))
-        .filter(|item| item.get("frameType") == Some(&Value::from(2)) && item.get("identified").is_none_or(truthy))
+        .filter(|item| item.get("frameType") == Some(&Value::from(2)) && item.get("identified").is_none_or(|v| v.as_bool() == Some(true)))
         .collect()
 }
 
@@ -696,12 +705,12 @@ mod tests {
         assert_eq!(got.rares[0].mods_of("explicit")[0].id(), Some("IncreasedLife7"));
         let files: Vec<_> = walk(&dir.path().join("v1"));
         assert_eq!(files, ["lite"]);
-        let old = dir.path().join("v1/b/m.json");
+        let old = dir.path().join("v1/b/m.with.dots.json");
         std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, json!({"account": "b", "name": "m", "class": "Witch", "skills": [], "items": []}).to_string()).unwrap();
+        std::fs::write(&old, json!({"account": "b", "name": "m.with.dots", "class": "Witch", "skills": [], "items": []}).to_string()).unwrap();
         let mut names: Vec<_> = ladder.cached(Some(&snap)).unwrap().into_iter().filter_map(|c| c.name).collect();
         names.sort();
-        assert_eq!(names, ["m", "n"]);
+        assert_eq!(names, ["m.with.dots", "n"]);
         assert!(!old.exists() && old.with_extension("lite").is_file());
         // newest snapshot on disk when none is named
         assert_eq!(ladder.cached(None).unwrap().len(), 2);
@@ -733,12 +742,12 @@ mod tests {
     }
 
     #[test]
-    fn lite_round_trips_the_python_json() {
+    fn lite_preserves_missing_and_null_fields() {
         let text = r#"{"v": 2, "account": "a", "name": null, "class": "Witch", "skill": "Cyclone", "rares": [{"baseType": "Bone Ring", "ilvl": null, "influences": {"shaper": true}, "mods": {"explicit": [{"tier": 1.5, "id": "X", "magnitudes": [{"min": 1, "max": 2}]}], "enchant": []}, "enchantMods": ["a"]}, {}]}"#;
         let lite: Lite = serde_json::from_str(text).unwrap();
         assert_eq!(lite.rares[0].ilvl, Some(None)); // present and null stays so
         assert_eq!(lite.rares[1].ilvl, None); // absent stays absent
-        assert_eq!(lite.to_json(), text);
+        assert_eq!(serde_json::from_str::<Value>(&lite.to_json()).unwrap(), serde_json::from_str::<Value>(text).unwrap());
     }
 
     #[test]

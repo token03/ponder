@@ -6,15 +6,15 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use ponder_core::{self as craft, GOOD, MAGIC, NORMAL, Plan, Prices, Problem, RARE, Side, State};
 use ponder_game::data;
-use ponder_game::item::{Item, ModLine};
+
 use ponder_game::mods::{ItemMatch, ModDB};
-use ponder_net::trade::{self, ItemQuery, ListingItem, Stat};
+use ponder_net::trade::{self, ItemQuery, Stat};
 use serde_json::{Value, json};
 
 use super::context::Context;
 use super::solving::solve_one;
 use super::types::Estimate;
-use crate::gear;
+use crate::{gear, item::listing_to_item};
 
 /// Finishing one real item (dropped, bought or half-crafted) into an Estimate's product.
 ///
@@ -132,7 +132,7 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
         f.error = Some(est.error.clone().unwrap_or_else(|| "not solved".into()));
         return f;
     };
-    if ["corrupted", "mirrored", "split"].iter().any(|k| item.flags.contains(*k)) {
+    if ["corrupted", "mirrored"].iter().any(|k| item.flags.contains(*k)) {
         f.error = Some("corrupted or mirrored: can't be crafted".into());
         return f;
     }
@@ -141,7 +141,7 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
         return f;
     }
     if let Some(line) = m.unmatched.iter().find(|l| !l.crafted()) {
-        f.error = Some(format!("can't read {}: the item's state would be wrong", py_repr(&line.text)));
+        f.error = Some(format!("can't read {:?}: the item's state would be wrong", line.text));
         return f;
     }
     let mods_db = data::mods().unwrap_or_else(|e| panic!("{e}"));
@@ -160,39 +160,41 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
         }
     }
     let ilvl = item.item_level.filter(|l| *l != 0).unwrap_or(est.item_level);
-    for t in &est_problem.targets {
-        let can_roll = t.good.iter().any(|g| mods_db.get(g).is_some_and(|d| d.required_level <= ilvl));
+    if !est.fixed_ids.iter().all(|id| fractured.contains(id)) {
+        f.error = Some("the item lacks this product's required fractured modifiers".into());
+        return f;
+    }
+    let mut fixed = fractured.clone();
+    fixed.extend(est.fixed_ids.iter().cloned());
+    let Some((mut problem, mut plan)) = fixed_problem(est, &fixed, &on) else {
+        f.error = Some("its fractured mods aren't ones this product can keep".into());
+        return f;
+    };
+    if ilvl != est.item_level {
+        problem = Cow::Owned(gear::relevel_problem(db, m, &problem, ilvl, gear::Pricing::new(table, &cx.settings)));
+        plan = None;
+    }
+    for t in &problem.targets {
+        let can_roll = problem.pool.iter().any(|m| t.good.contains(&m.id)) || problem.actions.iter().any(|a| a.forced.as_ref().is_some_and(|id| t.good.contains(id)));
         if !can_roll && !on.iter().any(|x| t.good.contains(&x.id)) {
             f.error = Some(format!("item level {ilvl} can't roll {}", t.name));
             return f;
         }
     }
-    let mut fixed = fractured.clone();
-    fixed.extend(est.fixed_ids.iter().cloned());
-    let Some((problem, plan)) = fixed_problem(est, &fixed, &on) else {
-        f.error = Some("its fractured mods aren't ones this product can keep".into());
-        return f;
-    };
-    let mut rarity = match item.rarity.as_str() {
+    let rarity = match item.rarity.as_str() {
         "NORMAL" => NORMAL,
         "MAGIC" => MAGIC,
         _ => RARE,
     };
-    if rarity == RARE && on.is_empty() {
-        rarity = NORMAL; // every mod would be scoured anyway
-    }
     let state = problem.state_of(rarity, &on);
     f.have = problem.targets.iter().zip(&state.status).filter(|(_, v)| **v == GOOD).map(|(t, _)| t.name.clone()).collect();
     f.have.extend(problem.fixed.iter().filter(|m| fractured.contains(&m.id)).map(|m| m.label.clone()));
     let mut cost = plan.and_then(|p| p.to_finish(&problem, &state));
     f.state = Some(state);
     if solve || cost.is_none() {
-        let mut begun = problem.clone().into_owned();
+        let mut begun = problem.to_spec();
         begun.begin = Some(state);
-        if plan.is_none() || fractured.iter().any(|x| !est.fixed_ids.contains(x)) {
-            begun.actions.retain(|a| a.kind != "sell"); // sold, it can't be bought again
-        }
-        let mut holder = Finish { problem: Some(begun), ..Finish::default() };
+        let mut holder = Finish { problem: Some(begun.compile()), ..Finish::default() };
         solve_one(cx, &mut holder, table);
         let Some(solved) = holder.plan.take() else {
             f.problem = Some(problem.into_owned());
@@ -207,11 +209,6 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
     }
     f.craft_cost = cost.map(|c| c + est.bench_cost());
     f
-}
-
-/// Python's `repr` of a string, close enough for an error message.
-fn py_repr(s: &str) -> String {
-    if s.contains('\'') && !s.contains('"') { format!("\"{s}\"") } else { format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")) }
 }
 
 /// `est`'s problem with these mods fractured (and its plan, when `est` or a fracture of it has one).
@@ -233,11 +230,11 @@ fn fixed_problem<'a>(est: &'a Estimate, fixed: &BTreeSet<String>, on: &[craft::M
     if blocks {
         return None; // a fractured mod blocks a target for good
     }
-    let mut q = p.clone();
+    let mut q = p.to_spec();
     q.need = p.need.saturating_sub(p.targets.len() - targets.len());
     q.targets = targets;
     q.fixed.extend(extra);
-    Some((Cow::Owned(q), None))
+    Some((Cow::Owned(q.compile()), None))
 }
 
 /// What `m` can become: every product of its base group it can be finished into, the most chaos
@@ -262,29 +259,6 @@ pub fn finishes(cx: &Context, db: &ModDB, m: &ItemMatch, estimates: &[Estimate],
         }
     });
     found.into_iter().take(top).map(|(e, _)| finish(cx, db, e, m, table, true)).collect()
-}
-
-/// A trade listing's item as an `Item`, its mod lines marked fractured or crafted, for `ModDB::match_item`.
-pub fn listing_to_item(l: &ListingItem) -> Item {
-    let mut item = Item::new(l.rarity.as_str(), l.name.as_str(), l.base.as_str());
-    item.item_level = l.ilvl;
-    item.influences = l.influences.clone();
-    item.flags = l.flags.iter().cloned().collect();
-    item.implicits = l.implicits.iter().map(ModLine::new).collect();
-    item.explicits = l
-        .explicits
-        .iter()
-        .map(|e| {
-            if e.fractured {
-                ModLine::with_marker(&e.text, "fractured")
-            } else if e.crafted {
-                ModLine::with_marker(&e.text, "crafted")
-            } else {
-                ModLine::new(&e.text)
-            }
-        })
-        .collect();
-    item
 }
 
 /// Half-done items for sale that save grinding: rares of `est`'s bases with any of its targets.

@@ -32,14 +32,9 @@ fn main() {
         t.elapsed().as_secs_f64() * 1e3
     );
 
-    // 30k ladder-style items by id, 6k item texts
-    let dir = std::env::var("PONDER_GOLDENS").unwrap_or_default();
-    if dir.is_empty() {
-        println!("set PONDER_GOLDENS to a big golden dir for match timings");
-        return;
-    }
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/expected/items");
     let read = |name: &str| -> serde_json::Value {
-        let f = std::fs::File::open(format!("{dir}/{name}.json.gz")).unwrap();
+        let f = std::fs::File::open(dir.join(format!("{name}.json.gz"))).unwrap();
         serde_json::from_reader(flate2::read::GzDecoder::new(f)).unwrap()
     };
     let ladder = read("ladder");

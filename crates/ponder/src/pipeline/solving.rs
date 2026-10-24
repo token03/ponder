@@ -54,26 +54,18 @@ pub fn slots_of<'a>(estimates: &'a mut [Estimate], which: &[usize]) -> Vec<Solve
     out
 }
 
-/// A worker solved a copy; drop the same unpriced actions here so recipe and simulate agree.
-fn attach(slot: &mut SolveSlot, plan: Plan) {
-    if let Some(p) = slot.problem.as_mut() {
-        p.actions.retain(|a| !plan.unpriced.contains(&a.name));
-    }
-    *slot.plan = Some(plan);
-}
-
 /// Solve one slot in place (from the plan cache when it has it).
 fn solve_slot(cx: &Context, slot: &mut SolveSlot, table: &Prices, key: Option<String>) {
-    let Some(problem) = slot.problem.as_mut() else { return };
+    let Some(problem) = slot.problem.as_ref() else { return };
     let key = key.unwrap_or_else(|| plan_key(problem, table, &cx.settings));
     if let Some(plan) = cx.plans.get(&key) {
-        attach(slot, plan);
+        *slot.plan = Some(plan);
         return;
     }
     match craft::solve(problem, table, &cx.settings) {
         Ok(plan) => {
             cx.plans.put(&key, &plan);
-            attach(slot, plan);
+            *slot.plan = Some(plan);
         }
         Err(e) => *slot.error = Some(e.to_string()),
     }
@@ -110,7 +102,7 @@ pub fn solve_slots(cx: &Context, slots: Vec<SolveSlot>, table: &Prices, workers:
             let key = plan_key(s.problem.as_ref().expect("filtered"), table, &cx.settings);
             match cx.plans.get(&key) {
                 Some(plan) => {
-                    attach(s, plan);
+                    *s.plan = Some(plan);
                     hits.fetch_add(1, Ordering::Relaxed);
                     (None, true)
                 }

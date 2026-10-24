@@ -6,7 +6,7 @@
 
 use crate::env::Clock;
 use crate::http::{self, Transport};
-use crate::pyjson::{self, Dumps, quote};
+use crate::http::encode_component;
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -66,16 +66,16 @@ impl Prices {
         let mut table = Map::new();
         table.insert("chaos".into(), json!(1.0));
         for kind in EXCHANGE_TYPES {
-            let body = self.get(&format!("{API}/exchange/current/overview?league={}&type={kind}", quote(&league)))?;
+            let body = self.get(&format!("{API}/exchange/current/overview?league={}&type={kind}", encode_component(&league)))?;
             for line in body["lines"].as_array().context("no lines")? {
                 table.insert(line["id"].as_str().context("line without id")?.to_string(), line["primaryValue"].clone());
             }
             self.clock.sleep(1.0); // be gentle; the data only refreshes every ~15 minutes anyway
         }
-        let clusters = self.get(&format!("{API}/stash/current/item/overview?league={}&type=ClusterJewel", quote(&league)))?;
+        let clusters = self.get(&format!("{API}/stash/current/item/overview?league={}&type=ClusterJewel", encode_component(&league)))?;
         let saved = json!({"league": league, "fetched": self.clock.now(), "prices": table});
-        std::fs::write(self.cache.join("prices.json"), pyjson::dumps_with(&saved, Dumps { indent: Some(1), ..Dumps::default() }))?;
-        std::fs::write(self.cache.join("clusters.json"), pyjson::dumps(&clusters["lines"]))?;
+        std::fs::write(self.cache.join("prices.json"), serde_json::to_vec(&saved)?)?;
+        std::fs::write(self.cache.join("clusters.json"), serde_json::to_vec(&clusters["lines"])?)?;
         Ok((league, table.len()))
     }
 
@@ -178,7 +178,6 @@ mod tests {
         let (table, note) = p.load().unwrap();
         assert_eq!((table["alt"], table["divine"], table["scour"]), (0.1, 300.0, 0.35));
         assert_eq!(note, "poe.ninja Test League, 0h old");
-        assert_eq!(std::fs::read_to_string(dir.path().join("prices.json")).unwrap().lines().next(), Some("{"));
         assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 75), Some((12.5, 5)));
         assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 85), None);
         assert_eq!(p.enchant_option("Added Small Passive Skills grant: X"), None); // option is a number here; ids are strings on the real site

@@ -17,7 +17,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use indexmap::IndexMap;
 use ponder_game::data;
-use ponder_game::item::ModLine;
+use ponder_game::item::{ModLine, split_lines};
 use ponder_game::mods::{IdMods, ItemMatch, ModDB, ModMatch};
 use ponder_net::ladder::{Lite, RareItem};
 use rayon::prelude::*;
@@ -26,6 +26,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde_json::{Value, json};
 
 use crate::mine::combinations;
+use crate::combinations::for_each as each_combination;
 
 pub const RES: &str = "resistances";
 pub const NATURAL_LEVEL: i64 = 86;
@@ -299,28 +300,9 @@ fn py_str(s: &Option<String>) -> &str {
     s.as_deref().unwrap_or("None")
 }
 
-/// Python truthiness of a JSON value.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
 /// A poe.ninja item's mods by id, matched against the database.
 fn match_rare(db: &ModDB, it: &RareItem) -> ItemMatch {
-    let influences: BTreeSet<String> = match it.influences.as_ref().and_then(|v| v.as_ref()) {
-        Some(Value::Object(o)) => o
-            .iter()
-            .filter(|(_, v)| truthy(v))
-            .map(|(k, _)| k.clone())
-            .collect(),
-        _ => BTreeSet::new(),
-    };
+    let influences = ponder_net::trade::influences(it.influences.as_ref().and_then(|v| v.as_ref()));
     let ids = |kind: &str| -> Vec<String> {
         it.mods_of(kind)
             .iter()
@@ -429,33 +411,6 @@ pub fn natural_tiers(db: &ModDB, m: &ItemMatch, family: &str) -> IndexMap<i64, f
 }
 
 /// Calls `f` with each `size`-subset of `0..n` as sorted indexes, in `itertools.combinations` order.
-fn each_combination(n: usize, size: usize, mut f: impl FnMut(&[usize])) {
-    if size > n {
-        return;
-    }
-    let mut idx: Vec<usize> = (0..size).collect();
-    loop {
-        f(&idx);
-        let mut i = size;
-        loop {
-            if i == 0 {
-                return;
-            }
-            i -= 1;
-            if idx[i] != i + n - size {
-                break;
-            }
-            if i == 0 {
-                return;
-            }
-        }
-        idx[i] += 1;
-        for j in i + 1..size {
-            idx[j] = idx[j - 1] + 1;
-        }
-    }
-}
-
 /// A combination of interned stat keys, 16 bits each (key id + 1), in a u128.
 type Packed = u128;
 const SLOT_BITS: u32 = 16;
@@ -791,7 +746,7 @@ pub fn stat_key(mod_id: &str) -> &'static str {
             .map(|(id, m)| {
                 (
                     id.to_string(),
-                    m.stats.first().map_or(id, |s| s.id.as_str()).to_string(),
+                    m.stats.first().map_or(id.as_str(), |s| s.id.as_str()).to_string(),
                 )
             })
             .collect()
@@ -878,41 +833,8 @@ pub fn archetype_names(db: &ModDB, a: &Archetype) -> Vec<String> {
 /// A mod's text with numbers as #, every line (hybrids show both halves).
 fn template(db: &ModDB, mod_id: &str) -> String {
     let text = db.mods[mod_id].text.as_deref().unwrap_or(mod_id);
-    let joined = splitlines(text).join(" / ");
+    let joined = split_lines(text).join(" / ");
     NUMBERS.replace_all(&joined, "#").into_owned()
-}
-
-/// `str.splitlines()`.
-fn splitlines(s: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = s.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if matches!(
-            c,
-            '\n' | '\r'
-                | '\x0b'
-                | '\x0c'
-                | '\x1c'
-                | '\x1d'
-                | '\x1e'
-                | '\u{85}'
-                | '\u{2028}'
-                | '\u{2029}'
-        ) {
-            out.push(&s[start..i]);
-            let mut end = i + c.len_utf8();
-            if c == '\r' && matches!(chars.peek(), Some((_, '\n'))) {
-                chars.next();
-                end += 1;
-            }
-            start = end;
-        }
-    }
-    if start < s.len() {
-        out.push(&s[start..]);
-    }
-    out
 }
 
 // -- cluster jewels ---------------------------------------------------------------------
@@ -953,6 +875,10 @@ pub struct ClusterArchetype {
     pub full: usize,
     /// passive jewels: group -> tiers worn
     pub tiers: IndexMap<String, Counter<i64>>,
+    /// passive jewels: the other groups their wearers fill the open slots with -> tiers worn
+    pub others: IndexMap<String, Counter<i64>>,
+    /// passive jewels: "Group@tier" mods worn in the open slots by `FILLER_SHARE` of the items
+    pub filler: Vec<String>,
 }
 
 impl ClusterArchetype {
@@ -969,6 +895,8 @@ impl ClusterArchetype {
             item_levels: Counter::new(),
             full: 0,
             tiers: IndexMap::new(),
+            others: IndexMap::new(),
+            filler: Vec::new(),
         }
     }
 
@@ -1074,7 +1002,7 @@ impl ClusterCtx {
             .iter()
             .flatten()
             .flatten()
-            .flat_map(|text| splitlines(text))
+            .flat_map(|text| split_lines(text))
             .filter_map(|ln| ln.strip_prefix(ENCHANT_PREFIX)) // line order varies
             .map(str::to_string)
             .collect();
@@ -1087,7 +1015,7 @@ impl ClusterCtx {
                     .map(|s| s.get("local_jewel_expansion_passive_node_count").cloned())
             })
             .flatten()
-            .filter(truthy)?;
+            .filter(|v| v.as_f64().is_some_and(|n| n != 0.0))?;
         let passives = passives
             .as_i64()
             .or_else(|| passives.as_f64().map(|f| f as i64))?;
@@ -1138,10 +1066,10 @@ type ClusterKey<'a> = (&'a str, &'a str, Vec<&'a str>);
 
 /// Notable combinations per (size, enchant) that several characters wear.
 ///
-/// Every subset of a jewel's notables counts (a buyer of "Feed the Fury +
-/// Martial Prowess" takes a third notable too) down to one fewer than the
-/// size holds (2 of 3 on a large, 1 on a small); a subset is dropped when a
-/// bigger combination covers `implied` of its characters.
+/// Only full jewels count: as many notables as the size holds (3 on a large, 2 on a medium).
+/// Fewer is a step on the way to one of those, not a product: the ladder wears 2-notable
+/// mediums thirty times as often as 1-notable ones. A combination is dropped when a bigger
+/// one covers `implied` of its characters.
 pub fn cluster_archetypes(
     worn: &[WornCluster],
     min_characters: usize,
@@ -1154,7 +1082,7 @@ pub fn cluster_archetypes(
             continue;
         }
         let names: Vec<&str> = w.notables.iter().map(String::as_str).collect();
-        for size in 1.max(notable_cap(&w.size).saturating_sub(1))..=names.len() {
+        for size in notable_cap(&w.size)..=names.len() {
             for combo in combinations(&names, size) {
                 let combo: Vec<&str> = combo.into_iter().copied().collect();
                 let key = (w.size.as_str(), w.tag.as_str(), combo);
@@ -1267,6 +1195,9 @@ pub fn passive_archetypes(
                 for g in &combo {
                     tally(&mut a.tiers, &g.to_string(), by_group[g]);
                 }
+                for g in groups.iter().filter(|g| !combo.contains(g)) {
+                    tally(&mut a.others, &g.to_string(), by_group[g]);
+                }
                 who.entry(key).or_default().insert(&w.character);
             }
         }
@@ -1276,7 +1207,13 @@ pub fn passive_archetypes(
         a.notables = a
             .notables
             .iter()
-            .map(|g| format!("{g}@{}", a.tiers[g].usual(0.5)))
+            .map(|g| format!("{g}@{}", a.tiers[g].usual(TARGET_SHARE)))
+            .collect();
+        a.filler = a
+            .others
+            .iter()
+            .filter(|(_, tiers)| tiers.total() as f64 >= FILLER_SHARE * a.items as f64)
+            .map(|(g, tiers)| format!("{g}@{}", tiers.usual(0.8))) // filler: lenient
             .collect();
     }
     out
@@ -1291,6 +1228,12 @@ pub fn usual(tiers: &Counter<i64>, share: f64) -> i64 {
 pub const COMPLETE_SHARE: f64 = 0.5;
 /// Other mods on this share of its items are acceptable filler for the open slots.
 pub const FILLER_SHARE: f64 = 0.1;
+/// A target's tier: the worst that this share of its wearers have or beat (a product most buyers take).
+pub const TARGET_SHARE: f64 = 0.75;
+/// Filler slots on a finished item at most: the rest of its open slots take any mod.
+pub const MAX_FILLER: usize = 2;
+/// The commonest bench craft is part of the finished item when this share of its examples have it.
+pub const CRAFTED_SHARE: f64 = 0.1;
 /// Wanted mods per item, filler aside.
 pub const MAX_KEYS: usize = 4;
 
@@ -1331,39 +1274,14 @@ fn pool_weights(
         .collect()
 }
 
-/// Python's `round()` of a half-integer median: ties go to the even number.
-fn round_half_even(x: f64) -> i64 {
-    let r = x.round();
-    if (x - x.trunc()).abs() == 0.5 && r as i64 % 2 != 0 {
-        r as i64 - x.signum() as i64
-    } else {
-        r as i64
-    }
-}
-
-/// `statistics.median` of the counter's elements.
-fn median(c: &Counter<usize>) -> f64 {
-    let mut v: Vec<usize> = c
-        .iter()
-        .flat_map(|(&k, n)| std::iter::repeat_n(k, n as usize))
-        .collect();
-    v.sort_unstable();
-    let n = v.len();
-    if n % 2 == 1 {
-        v[n / 2] as f64
-    } else {
-        (v[n / 2 - 1] + v[n / 2]) as f64 / 2.0
-    }
-}
-
 /// The finished item an archetype's wearers have, as `pipeline.estimate_gear` costs it.
 ///
-/// Its wanted mods are the archetype's plus those most of its wearers also
-/// have (`finished_keys`), each at the tier most of them reach. The open
-/// slots are filler: on each side, as many as its wearers' items usually
-/// have useful mods there, from any mod at least `FILLER_SHARE` of them wear
-/// (resistances always count), at their usual tier. That goes in
-/// `ItemMatch::finish` for `gear::build`.
+/// Its wanted mods are the archetype's own and those most of its wearers also have
+/// (`finished_keys`), each at the tier `TARGET_SHARE` of them reach or beat. The commonest bench craft takes its slot when enough wear one. The open
+/// slots are filler, up to a full item (3 a side, 2 on jewels), from any mod at least
+/// `FILLER_SHARE` of its wearers wear (resistances always count), at their usual tier:
+/// a finished item for sale has every slot taken. That goes in `ItemMatch::finish` for
+/// `gear::build`, which leaves a side open when nothing can fill it.
 pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
     let ex = &a.examples[0];
     let mut pool: HashMap<(String, Option<i64>), String> = HashMap::new();
@@ -1392,18 +1310,18 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
                 m = c;
             }
         }
+        let tier = a
+            .usual_tier(&key, TARGET_SHARE)
+            .or(m.tier)
+            .expect("a found mod has a tier");
         if !a.families.contains(&key) && mods.iter().filter(|x| x.kind == m.kind).count() >= 3 {
             continue;
         }
-        let tier = a
-            .usual_tier(&key, 0.5)
-            .or(m.tier)
-            .expect("a found mod has a tier");
         let mod_id = pool
             .get(&(m.family.clone(), Some(tier)))
             .cloned()
             .unwrap_or_else(|| m.mod_id.clone());
-        let lines: Vec<ModLine> = splitlines(db.mods[&mod_id].text_or_empty())
+        let lines: Vec<ModLine> = split_lines(db.mods[&mod_id].text_or_empty())
             .into_iter()
             .map(ModLine::new)
             .collect();
@@ -1414,6 +1332,19 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
             new.lines = lines;
         }
         mods.push(new);
+    }
+    // The bench craft its wearers use most, when enough of them have one: it takes its slot.
+    let mut benched: Counter<&str> = Counter::new();
+    for m in a.examples.iter().flat_map(|e| e.mods.iter()).filter(|m| crafted(m)) {
+        benched.add(m.mod_id.as_str());
+    }
+    if let Some((&id, n)) = benched.most_common().into_iter().next()
+        && n as f64 >= CRAFTED_SHARE * a.examples.len() as f64
+        && let Some(m) = a.examples.iter().flat_map(|e| e.mods.iter()).find(|m| crafted(m) && m.mod_id == id)
+    {
+        let mut m = m.clone();
+        m.source = "crafted"; // legacy crafts are made with today's bench
+        mods.push(m);
     }
     let side_count = |side: &str| mods.iter().filter(|m| m.kind == side).count();
     let sides = [side_count("prefix"), side_count("suffix")];
@@ -1443,17 +1374,21 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
             order.push(family.clone());
         }
     }
+    // A full item, but only one slot (two when three or more are open) is filler, where there's most
+    // room, suffixes first: the rest just need a mod, whatever it is.
+    let full = if ex.item_class.as_deref().is_some_and(|c| crate::gear::JEWEL_CLASSES.contains(&c)) { 2 } else { 3 };
+    let open = sides.map(|n| (full - n as i64).max(0));
     let mut need = [0i64; 2];
-    for (i, side) in ["prefix", "suffix"].iter().enumerate() {
-        let c = &a.filled[*side];
-        let usual = if c.is_empty() {
-            0
-        } else {
-            round_half_even(median(c))
-        };
-        need[i] = (usual.min(3) - sides[i] as i64).max(0);
+    let mut slots = if open[0] + open[1] >= 3 { MAX_FILLER } else { 1 };
+    while slots > 0 {
+        let i = if open[1] - need[1] >= open[0] - need[0] { 1 } else { 0 };
+        if open[i] - need[i] <= 0 {
+            break;
+        }
+        need[i] += 1;
+        slots -= 1;
     }
-    let finish = json!({"families": families, "sides": need, "order": order});
+    let finish = json!({"families": families, "sides": need, "order": order, "full": 2 * full});
     let mut out = (**ex).clone();
     out.mods = mods;
     out.unmatched = Vec::new();

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{db, skip_without_data};
+use common::{db};
 use ponder_game::item::parse_item;
 use ponder_game::pob;
 use std::collections::HashSet;
@@ -14,9 +14,7 @@ fn real(name: &str) -> pob::Build {
 
 #[test]
 fn rare_mod_lines_match() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     for name in ["occultist_winter_orb.txt", "marauder_rf_leveling.txt"] {
         let build = real(name);
         let (mut matched, mut missed) = (0usize, 0usize);

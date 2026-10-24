@@ -22,8 +22,7 @@
 //! `ModDB` can instead implement `StatIds` itself, as one method.
 
 use crate::env::{self, Clock};
-use crate::http::{self, Headers, Method, Request, Transport};
-use crate::pyjson::{self, quote, truthy};
+use crate::http::{self, Headers, Method, Request, Transport, encode_component};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use serde_json::{Number, Value, json};
@@ -62,6 +61,11 @@ pub fn category(item_class: &str) -> Option<&'static str> {
 }
 
 /// Chaos value per currency id (poe.ninja's ids).
+fn cache_key(mut value: Value) -> String {
+    value.sort_all_objects();
+    blake3::hash(&serde_json::to_vec(&value).unwrap()).to_hex().to_string()
+}
+
 pub type Rates = HashMap<String, f64>;
 
 /// A wanted stat: trade stat id and the minimum value (`None`: any roll).
@@ -262,13 +266,13 @@ pub fn cluster_query(
 
 /// The trade site's search page for a query (the `q=` JSON is compact, like `json.dumps(.., separators=(",", ":"))`).
 pub fn search_url(league: &str, query: &Value) -> String {
-    let q = quote(&pyjson::dumps_compact(&json!({"query": query["query"]})));
-    format!("{SITE}/trade/search/{}?q={q}", quote(league))
+    let q = encode_component(&serde_json::to_string(&json!({"query": query["query"]})).unwrap());
+    format!("{SITE}/trade/search/{}?q={q}", encode_component(league))
 }
 
 pub fn chaos_price(listing: &Value, rates: &Rates) -> Option<f64> {
     let p = &listing["listing"]["price"];
-    let amount = p.get("amount").filter(|a| truthy(a))?.as_f64()?;
+    let amount = p.get("amount")?.as_f64().filter(|a| *a != 0.0)?;
     let rate = *rates.get(currency_id(p.get("currency").and_then(Value::as_str).unwrap_or("")))?;
     (rate != 0.0).then_some(amount * rate)
 }
@@ -315,18 +319,22 @@ pub struct ListingItem {
     pub explicits: Vec<ListedLine>,
 }
 
+pub fn influences(value: Option<&Value>) -> BTreeSet<String> {
+    match value {
+        Some(Value::Object(m)) => m.iter().filter(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k.clone()).collect(),
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
 /// A trade listing's item, its mod lines marked fractured or crafted.
 pub fn listing_item(listing: &Value) -> ListingItem {
     let empty = json!({});
-    let it = listing.get("item").filter(|i| truthy(i)).unwrap_or(&empty);
+    let it = listing.get("item").unwrap_or(&empty);
     let str_of = |k: &str| it.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
     let frame = ["NORMAL", "MAGIC", "RARE", "UNIQUE"].get(it.get("frameType").and_then(Value::as_u64).unwrap_or(99) as usize).copied().unwrap_or("");
-    let influences = match it.get("influences") {
-        Some(Value::Object(m)) => m.keys().cloned().collect(),
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-        _ => BTreeSet::new(),
-    };
-    let flags = ["corrupted", "fractured", "mirrored", "split"].iter().filter(|k| it.get(**k).is_some_and(truthy)).map(|k| k.to_string()).collect();
+    let influences = influences(it.get("influences"));
+    let flags = ["corrupted", "fractured", "mirrored", "split"].iter().filter(|k| it.get(**k).and_then(Value::as_bool) == Some(true)).map(|k| k.to_string()).collect();
     let lines = |key: &str| -> Vec<String> { it.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect() };
     let mut explicits = Vec::new();
     for (key, fractured, crafted) in [("fracturedMods", true, false), ("explicitMods", false, false), ("craftedMods", false, true)] {
@@ -397,21 +405,21 @@ impl Trade {
     ///
     /// Answers younger than `max_age` seconds (default `ttl`) come from the disk cache.
     pub fn price(&self, league: &str, query: &Value, rates: &Rates, listings: usize, max_age: Option<f64>) -> Result<Option<(f64, i64)>> {
-        let key = pyjson::sha1_hex(pyjson::dumps_sorted(&json!([league, query, listings])).as_bytes());
+        let key = cache_key(json!([1, "price", league, query, listings]));
         let path = self.cache.join(format!("{key}.json"));
         if let Some(saved) = self.fresh(&path, max_age) {
             let asks: Vec<(Number, String)> = saved["asks"].as_array().into_iter().flatten().filter_map(|a| Some((a[0].as_number()?.clone(), a[1].as_str()?.to_string()))).collect();
             return Ok(priced(&asks, saved["total"].as_i64().unwrap_or(0), rates));
         }
         self.searches.fetch_add(1, Ordering::SeqCst);
-        let found = self.call(&format!("{SITE}/api/trade/search/{}", quote(league)), Some(query), "search", 2)?;
+        let found = self.call(&format!("{SITE}/api/trade/search/{}", encode_component(league)), Some(query), "search", 2)?;
         let ids: Vec<&str> = found["result"].as_array().into_iter().flatten().filter_map(Value::as_str).take(listings).collect();
         let mut asks: Vec<(Number, String)> = Vec::new();
         if !ids.is_empty() {
             let fetched = self.call(&format!("{SITE}/api/trade/fetch/{}?query={}", ids.join(","), query_id(&found)), None, "fetch", 2)?;
             for r in fetched["result"].as_array().into_iter().flatten() {
                 let p = &r["listing"]["price"];
-                if let (Some(a), Some(c)) = (p.get("amount").filter(|a| truthy(a)).and_then(Value::as_number), p.get("currency").and_then(Value::as_str).filter(|c| !c.is_empty())) {
+                if let (Some(a), Some(c)) = (p.get("amount").and_then(Value::as_number).filter(|n| n.as_f64() != Some(0.0)), p.get("currency").and_then(Value::as_str).filter(|c| !c.is_empty())) {
                     asks.push((a.clone(), c.to_string()));
                 }
             }
@@ -426,18 +434,18 @@ impl Trade {
     ///
     /// One search plus one fetch per 10 listings.
     pub fn listings(&self, league: &str, query: &Value, count: usize, max_age: Option<f64>) -> Result<Vec<Value>> {
-        let key = pyjson::sha1_hex(pyjson::dumps_sorted(&json!(["listings", league, query, count])).as_bytes());
+        let key = cache_key(json!([1, "listings", league, query, count]));
         let path = self.cache.join(format!("{key}.json"));
         if let Some(saved) = self.fresh(&path, max_age) {
             return Ok(saved["results"].as_array().cloned().unwrap_or_default());
         }
         self.searches.fetch_add(1, Ordering::SeqCst);
-        let found = self.call(&format!("{SITE}/api/trade/search/{}", quote(league)), Some(query), "search", 2)?;
+        let found = self.call(&format!("{SITE}/api/trade/search/{}", encode_component(league)), Some(query), "search", 2)?;
         let ids: Vec<&str> = found["result"].as_array().into_iter().flatten().filter_map(Value::as_str).take(count).collect();
         let mut results = Vec::new();
         for chunk in ids.chunks(10) {
             let fetched = self.call(&format!("{SITE}/api/trade/fetch/{}?query={}", chunk.join(","), query_id(&found)), None, "fetch", 2)?;
-            results.extend(fetched["result"].as_array().into_iter().flatten().filter(|r| truthy(r)).cloned());
+            results.extend(fetched["result"].as_array().into_iter().flatten().filter(|r| r.is_object()).cloned());
         }
         self.save(&path, &json!({"time": self.clock.now(), "results": results}))?;
         Ok(results)
@@ -451,7 +459,7 @@ impl Trade {
 
     fn save(&self, path: &std::path::Path, doc: &Value) -> Result<()> {
         std::fs::create_dir_all(&self.cache)?;
-        std::fs::write(path, pyjson::dumps(doc))?;
+        std::fs::write(path, serde_json::to_vec(doc)?)?;
         Ok(())
     }
 
@@ -464,7 +472,7 @@ impl Trade {
             if let Some(c) = (self.cookie)() {
                 headers.push(("Cookie".into(), format!("POESESSID={c}")));
             }
-            let body = body.filter(|b| truthy(b)).map(|b| pyjson::dumps(b).into_bytes());
+            let body = body.map(serde_json::to_vec).transpose()?;
             let req = Request { method: if body.is_some() { Method::Post } else { Method::Get }, url: url.to_string(), headers, body, timeout: Duration::from_secs(30) };
             let resp = self.http.send(&req)?;
             self.remember_limits(endpoint, &resp.headers);
@@ -540,6 +548,15 @@ mod tests {
     use super::*;
     use crate::http::Response;
     use crate::testing::TempDir;
+
+    #[test]
+    fn cache_keys_ignore_object_order_and_distinguish_requests() {
+        let a = json!([1, "price", "Standard", {"b": 1, "a": {"d": 2, "c": 3}}, 10]);
+        let mut b = json!([1, "price", "Standard", {"a": {"c": 3, "d": 2}, "b": 1}, 10]);
+        assert_eq!(cache_key(a.clone()), cache_key(b.clone()));
+        b[1] = json!("listings");
+        assert_ne!(cache_key(a), cache_key(b));
+    }
 
     fn clock_at(now: f64) -> (Clock, Arc<Mutex<Vec<f64>>>) {
         let slept = Arc::new(Mutex::new(Vec::new()));
@@ -686,12 +703,14 @@ mod tests {
 
     #[test]
     fn listing_item_marks_fractured_and_crafted_lines() {
-        let listing = json!({"item": {"rarity": "Rare", "name": "Gale Loop", "baseType": "Bone Ring", "ilvl": 84, "influences": {"shaper": true},
+        let mut listing = json!({"item": {"rarity": "Rare", "name": "Gale Loop", "baseType": "Bone Ring", "ilvl": 84, "influences": {"shaper": true, "elder": false},
             "fracturedMods": ["+40 to maximum Energy Shield"], "explicitMods": ["+105 to maximum Life"], "craftedMods": ["+12 to Dexterity"]}});
         let item = listing_item(&listing);
         assert_eq!((item.rarity.as_str(), item.base.as_str(), item.ilvl, item.influences), ("RARE", "Bone Ring", Some(84), BTreeSet::from(["shaper".to_string()])));
         let lines: Vec<_> = item.explicits.iter().map(|m| (m.text.as_str(), m.fractured, m.crafted)).collect();
         assert_eq!(lines, [("+40 to maximum Energy Shield", true, false), ("+105 to maximum Life", false, false), ("+12 to Dexterity", false, true)]);
+        listing["item"]["influences"] = json!(["shaper"]);
+        assert_eq!(listing_item(&listing).influences, BTreeSet::from(["shaper".to_string()]));
     }
 
     #[test]

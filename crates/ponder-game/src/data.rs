@@ -8,11 +8,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use serde::de::{DeserializeOwned, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 /// Where repoe-fork publishes its exports (`{SOURCE}/data/{name}.json`, `{SOURCE}/exported-version.txt`).
 pub const SOURCE: &str = "https://raw.githubusercontent.com/repoe-fork/repoe-fork.github.io/master";
@@ -55,39 +56,19 @@ impl std::error::Error for DataError {}
 
 // -- settings -------------------------------------------------------------------------
 
-/// A setting from the environment, else from `.env` in the working directory.
-pub fn env(name: &str) -> Option<String> {
-    if let Ok(v) = std::env::var(name)
-        && !v.is_empty()
-    {
-        return Some(v);
-    }
-    let text = std::fs::read_to_string(".env").ok()?;
-    for line in text.lines() {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (key, value) = line.split_once('=').unwrap_or((line, ""));
-        if key.trim() == name && !value.trim().is_empty() {
-            return Some(
-                value
-                    .trim()
-                    .trim_matches(|c| c == '\'' || c == '"')
-                    .to_string(),
-            );
-        }
-    }
-    None
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_data_dir(dir: PathBuf) -> Result<(), PathBuf> {
+    DATA_DIR.set(dir)
 }
 
-/// Where the data files live: `$PONDER_DATA`, else `.cache/repoe` under the working directory.
 pub fn data_dir() -> PathBuf {
-    match std::env::var_os("PONDER_DATA") {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => std::env::current_dir()
-            .unwrap_or_default()
-            .join(".cache")
-            .join("repoe"),
-    }
+    DATA_DIR
+        .get_or_init(|| match std::env::var_os("PONDER_DATA") {
+            Some(p) if !p.is_empty() => PathBuf::from(p),
+            _ => std::env::current_dir().unwrap_or_default().join(".cache").join("repoe"),
+        })
+        .clone()
 }
 
 /// Are the files matching needs (mods and base items) in `dest` (default: [`data_dir`])?
@@ -95,7 +76,7 @@ pub fn available(dest: Option<&Path>) -> bool {
     let dest = dest.map(Path::to_path_buf).unwrap_or_else(data_dir);
     ["mods", "base_items"]
         .iter()
-        .all(|n| dest.join(format!("{n}.json")).is_file())
+        .all(|n| dest.join(format!("{n}.json")).is_file() || dest.join(format!("{n}.json.gz")).is_file())
 }
 
 /// The game version the data was exported from, if recorded.
@@ -111,10 +92,18 @@ pub fn version(dest: Option<&Path>) -> Option<String> {
 /// Parse `{dir}/{name}.json` into `T`, uncached.
 pub fn load_from<T: DeserializeOwned>(dir: &Path, name: &str) -> Result<T, DataError> {
     let path = dir.join(format!("{name}.json"));
+    let path = if path.is_file() { path } else { path.with_added_extension("gz") };
     if !path.is_file() {
         return Err(DataError::Missing(path));
     }
     let bytes = std::fs::read(&path).map_err(|e| DataError::Io(path.clone(), e))?;
+    let bytes = if path.extension().is_some_and(|e| e == "gz") {
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(bytes.as_slice()).read_to_end(&mut raw).map_err(|e| DataError::Io(path.clone(), e))?;
+        raw
+    } else {
+        bytes
+    };
     serde_json::from_slice(&bytes).map_err(|e| DataError::Parse(path, e))
 }
 
@@ -146,97 +135,7 @@ pub fn load(name: &str) -> Result<Arc<serde_json::Value>, DataError> {
         .clone())
 }
 
-// -- a JSON object that remembers its key order -----------------------------------------
-
-/// A JSON object kept in file order, like a Python dict. Order matters: mod ties
-/// break by the order mods appear in `mods.json`.
-#[derive(Debug, Clone)]
-pub struct OrderedMap<T> {
-    entries: Vec<(String, T)>,
-    index: HashMap<String, usize>,
-}
-
-impl<T> Default for OrderedMap<T> {
-    fn default() -> Self {
-        OrderedMap {
-            entries: Vec::new(),
-            index: HashMap::new(),
-        }
-    }
-}
-
-impl<T> OrderedMap<T> {
-    pub fn get(&self, key: &str) -> Option<&T> {
-        self.index.get(key).map(|&i| &self.entries[i].1)
-    }
-    /// Position of `key` in file order.
-    pub fn position(&self, key: &str) -> Option<usize> {
-        self.index.get(key).copied()
-    }
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.index.contains_key(key)
-    }
-    /// The entry at a file-order position.
-    pub fn entry(&self, i: usize) -> (&str, &T) {
-        let (k, v) = &self.entries[i];
-        (k, v)
-    }
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &T)> {
-        self.entries.iter().map(|(k, v)| (k.as_str(), v))
-    }
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.entries.iter().map(|(k, _)| k.as_str())
-    }
-    pub fn values(&self) -> impl ExactSizeIterator<Item = &T> {
-        self.entries.iter().map(|(_, v)| v)
-    }
-    pub fn insert(&mut self, key: String, value: T) {
-        match self.index.get(&key) {
-            Some(&i) => self.entries[i].1 = value, // a repeated key keeps its first position
-            None => {
-                self.index.insert(key.clone(), self.entries.len());
-                self.entries.push((key, value));
-            }
-        }
-    }
-}
-
-impl<T> std::ops::Index<&str> for OrderedMap<T> {
-    type Output = T;
-    fn index(&self, key: &str) -> &T {
-        self.get(key).unwrap_or_else(|| panic!("no entry {key:?}"))
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for OrderedMap<T> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V<T>(std::marker::PhantomData<T>);
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for V<T> {
-            type Value = OrderedMap<T>;
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a JSON object")
-            }
-            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
-                let n = m.size_hint().unwrap_or(0);
-                let mut out = OrderedMap {
-                    entries: Vec::with_capacity(n),
-                    index: HashMap::with_capacity(n),
-                };
-                while let Some((k, v)) = m.next_entry::<String, T>()? {
-                    out.insert(k, v);
-                }
-                Ok(out)
-            }
-        }
-        d.deserialize_map(V(std::marker::PhantomData))
-    }
-}
+pub type OrderedMap<T> = indexmap::IndexMap<String, T>;
 
 // -- typed files -------------------------------------------------------------------------
 
@@ -278,6 +177,8 @@ pub struct Mod {
     pub required_level: i64,
     #[serde(default)]
     pub spawn_weights: Vec<SpawnWeight>,
+    #[serde(default)]
+    pub generation_weights: Vec<SpawnWeight>,
     #[serde(default)]
     pub stats: Vec<ModStat>,
     /// Display template, lines joined by `\n`; `None` for mods without text.
@@ -458,6 +359,8 @@ pub struct ItemClass {
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
+    pub category_id: Option<String>,
+    #[serde(default)]
     pub name: String,
 }
 
@@ -500,7 +403,7 @@ mod tests {
             serde_json::from_str(r#"{"b": 1, "a": 2, "c": 3, "b": 4}"#).unwrap();
         assert_eq!(m.keys().collect::<Vec<_>>(), ["b", "a", "c"]);
         assert_eq!(m["b"], 4);
-        assert_eq!(m.position("c"), Some(2));
+        assert_eq!(m.get_index_of("c"), Some(2));
         assert!(m.get("zzz").is_none());
     }
 

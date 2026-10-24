@@ -1,0 +1,455 @@
+{
+  "repoe": {
+    "mods": {
+      "AfflictionNotableA": {
+        "stats": [
+          {
+            "id": "stat_a",
+            "min": 1,
+            "max": 1
+          }
+        ]
+      },
+      "AfflictionNotableB": {
+        "stats": [
+          {
+            "id": "stat_b",
+            "min": 1,
+            "max": 1
+          }
+        ]
+      },
+      "AfflictionNotableNoTrade": {
+        "stats": [
+          {
+            "id": "stat_c",
+            "min": 1,
+            "max": 1
+          }
+        ]
+      },
+      "SmallPassive1": {
+        "stats": [
+          {
+            "id": "stat_d",
+            "min": 8,
+            "max": 10
+          }
+        ]
+      },
+      "SmallPassive2": {
+        "stats": [
+          {
+            "id": "stat_d",
+            "min": 0.5,
+            "max": 1
+          }
+        ]
+      },
+      "Orphan": {
+        "stats": [
+          {
+            "id": "stat_e",
+            "min": 3,
+            "max": 4
+          }
+        ]
+      }
+    },
+    "stat_translations": [
+      {
+        "ids": [
+          "stat_a"
+        ],
+        "trade_stats": [
+          {
+            "type": "explicit",
+            "id": "explicit.stat_111"
+          },
+          {
+            "type": "fractured",
+            "id": "fractured.stat_111"
+          }
+        ]
+      },
+      {
+        "ids": [
+          "stat_b",
+          "stat_other"
+        ],
+        "trade_stats": [
+          {
+            "type": "explicit",
+            "id": "explicit.stat_222"
+          }
+        ]
+      },
+      {
+        "ids": [
+          "stat_c"
+        ],
+        "trade_stats": null
+      },
+      {
+        "ids": [
+          "stat_d"
+        ],
+        "trade_stats": [
+          {
+            "type": "explicit",
+            "id": "explicit.stat_444"
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "input": {
+        "size": "large",
+        "enchant_option": "3",
+        "passives": 8,
+        "notables": [
+          "AfflictionNotableA",
+          "AfflictionNotableB"
+        ],
+        "item_level": 84,
+        "fractured_ids": []
+      },
+      "output": {
+        "query": {
+          "status": {
+            "option": "available"
+          },
+          "stats": [
+            {
+              "type": "and",
+              "filters": [
+                {
+                  "id": "explicit.stat_111",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "explicit.stat_222",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3948993189",
+                  "value": {
+                    "option": "3"
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3086156145",
+                  "value": {
+                    "min": 8,
+                    "max": 8
+                  },
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "filters": {
+            "type_filters": {
+              "filters": {
+                "rarity": {
+                  "option": "nonunique"
+                }
+              }
+            },
+            "misc_filters": {
+              "filters": {
+                "ilvl": {
+                  "min": 84
+                }
+              }
+            }
+          },
+          "type": "Large Cluster Jewel"
+        },
+        "sort": {
+          "price": "asc"
+        }
+      }
+    },
+    {
+      "input": {
+        "size": "medium",
+        "enchant_option": null,
+        "passives": null,
+        "notables": [
+          "AfflictionNotableA"
+        ],
+        "item_level": null,
+        "fractured_ids": [
+          "AfflictionNotableA"
+        ]
+      },
+      "output": {
+        "query": {
+          "status": {
+            "option": "available"
+          },
+          "stats": [
+            {
+              "type": "and",
+              "filters": [
+                {
+                  "id": "explicit.stat_111",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "fractured.stat_111",
+                  "value": {},
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "filters": {
+            "type_filters": {
+              "filters": {
+                "rarity": {
+                  "option": "nonunique"
+                }
+              }
+            },
+            "misc_filters": {
+              "filters": {
+                "fractured_item": {
+                  "option": "true"
+                }
+              }
+            }
+          },
+          "type": "Medium Cluster Jewel"
+        },
+        "sort": {
+          "price": "asc"
+        }
+      }
+    },
+    {
+      "input": {
+        "size": "small",
+        "enchant_option": "12",
+        "passives": 3,
+        "notables": [
+          [
+            "SmallPassive1",
+            8
+          ],
+          [
+            "SmallPassive2",
+            0.5
+          ]
+        ],
+        "item_level": 50,
+        "fractured_ids": []
+      },
+      "output": {
+        "query": {
+          "status": {
+            "option": "available"
+          },
+          "stats": [
+            {
+              "type": "and",
+              "filters": [
+                {
+                  "id": "explicit.stat_444",
+                  "value": {
+                    "min": 8
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "explicit.stat_444",
+                  "value": {
+                    "min": 0.5
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3948993189",
+                  "value": {
+                    "option": "12"
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3086156145",
+                  "value": {
+                    "min": 3,
+                    "max": 3
+                  },
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "filters": {
+            "type_filters": {
+              "filters": {
+                "rarity": {
+                  "option": "nonunique"
+                }
+              }
+            },
+            "misc_filters": {
+              "filters": {
+                "ilvl": {
+                  "min": 50
+                }
+              }
+            }
+          },
+          "type": "Small Cluster Jewel"
+        },
+        "sort": {
+          "price": "asc"
+        }
+      }
+    },
+    {
+      "input": {
+        "size": "large",
+        "enchant_option": "7",
+        "passives": 12,
+        "notables": [
+          "AfflictionNotableNoTrade",
+          "Orphan",
+          [
+            "Orphan",
+            2.0
+          ]
+        ],
+        "item_level": 75,
+        "fractured_ids": [
+          "Orphan",
+          "AfflictionNotableB"
+        ]
+      },
+      "output": {
+        "query": {
+          "status": {
+            "option": "available"
+          },
+          "stats": [
+            {
+              "type": "and",
+              "filters": [
+                {
+                  "id": "AfflictionNotableNoTrade",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "Orphan",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "Orphan",
+                  "value": {
+                    "min": 2.0
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "Orphan",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "AfflictionNotableB",
+                  "value": {},
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3948993189",
+                  "value": {
+                    "option": "7"
+                  },
+                  "disabled": false
+                },
+                {
+                  "id": "enchant.stat_3086156145",
+                  "value": {
+                    "min": 12,
+                    "max": 12
+                  },
+                  "disabled": false
+                }
+              ]
+            }
+          ],
+          "filters": {
+            "type_filters": {
+              "filters": {
+                "rarity": {
+                  "option": "nonunique"
+                }
+              }
+            },
+            "misc_filters": {
+              "filters": {
+                "ilvl": {
+                  "min": 75
+                },
+                "fractured_item": {
+                  "option": "true"
+                }
+              }
+            }
+          },
+          "type": "Large Cluster Jewel"
+        },
+        "sort": {
+          "price": "asc"
+        }
+      }
+    },
+    {
+      "input": {
+        "size": "LARGE",
+        "enchant_option": "",
+        "passives": 0,
+        "notables": [],
+        "item_level": 0,
+        "fractured_ids": []
+      },
+      "output": {
+        "query": {
+          "status": {
+            "option": "available"
+          },
+          "stats": [
+            {
+              "type": "and",
+              "filters": []
+            }
+          ],
+          "filters": {
+            "type_filters": {
+              "filters": {
+                "rarity": {
+                  "option": "nonunique"
+                }
+              }
+            }
+          },
+          "type": "Large Cluster Jewel"
+        },
+        "sort": {
+          "price": "asc"
+        }
+      }
+    }
+  ]
+}

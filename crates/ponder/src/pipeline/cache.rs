@@ -1,24 +1,15 @@
-//! The plan cache: solved plans on disk, keyed by problem and prices.
-//!
-//! Plans live in `.cache/plans` as a small binary layout, zlib-compressed.
-//! The key is a sha1 of the problem's canonical JSON (struct fields in declaration order,
-//! sets and maps sorted, so it is the same across runs), the prices of the actions it uses
-//! rounded to 3 significant figures, the clicking rate and `PLAN_VERSION`.
-
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
-use ponder_core::{Plan, Prices, Problem, Settings, State};
-use ponder_net::pyjson::sha1_hex;
+use indexmap::IndexMap;
+use ponder_core::{Bounds, JUNK_SLOTS, MAX_TARGETS, Plan, Prices, Problem, Settings, State};
+use serde::{Deserialize, Serialize};
 
 /// Bump when the solver's answers (or this file format) change, to drop cached plans.
-pub const PLAN_VERSION: u32 = 1;
-
-const MAGIC: &[u8; 4] = b"PLN1";
+pub const PLAN_VERSION: u32 = 10;
 
 /// `float(f"{x:.{sig}g}")`: `x` to `sig` significant figures.
 pub fn round_sig(x: f64, sig: usize) -> f64 {
@@ -38,7 +29,7 @@ pub fn plan_key(problem: &Problem, table: &Prices, settings: &Settings) -> Strin
         }
     }
     bytes.extend_from_slice(format!("|{}|v{PLAN_VERSION}", settings.chaos_per_hour).as_bytes());
-    sha1_hex(&bytes)
+    blake3::hash(&bytes).to_hex().to_string()
 }
 
 /// Solved plans on disk. `disabled()` keeps none.
@@ -91,125 +82,84 @@ impl PlanCache {
     }
 }
 
-// -- the binary layout ----------------------------------------------------------------------
+type CacheState = (u8, [u8; MAX_TARGETS], [u8; JUNK_SLOTS], u8);
+type CacheRow = (CacheState, usize, f64, f64);
 
-fn put_u32(out: &mut Vec<u8>, n: usize) {
-    out.extend_from_slice(&(n as u32).to_le_bytes());
+#[derive(Serialize, Deserialize)]
+struct CachedPlan {
+    cost: f64,
+    hours: f64,
+    states: usize,
+    bounds: Bounds,
+    unpriced: Vec<String>,
+    usage: std::collections::BTreeMap<String, f64>,
+    actions: Vec<String>,
+    rows: Vec<CacheRow>,
 }
 
-fn put_f64(out: &mut Vec<u8>, x: f64) {
-    out.extend_from_slice(&x.to_le_bytes());
-}
-
-fn put_str(out: &mut Vec<u8>, s: &str) {
-    put_u32(out, s.len());
-    out.extend_from_slice(s.as_bytes());
-}
-
-/// `None` when the plan's maps don't all cover exactly the states in `order` (nothing to cache then).
 fn encode(plan: &Plan) -> Option<Vec<u8>> {
     let n = plan.order.len();
     if plan.policy.len() != n || plan.visits.len() != n || plan.values.len() != n {
         return None;
     }
-    let mut names: Vec<&str> = Vec::new();
-    let mut at: HashMap<&str, usize> = HashMap::new();
-    let mut policy = Vec::with_capacity(n);
-    for s in &plan.order {
-        let a = plan.policy.get(s)?.as_str();
-        let i = *at.entry(a).or_insert_with(|| {
-            names.push(a);
-            names.len() - 1
-        });
-        policy.push(i);
-    }
-    let mut out = Vec::with_capacity(64 + n * 36);
-    out.extend_from_slice(MAGIC);
-    put_f64(&mut out, plan.cost);
-    put_f64(&mut out, plan.hours);
-    out.extend_from_slice(&(plan.states as u64).to_le_bytes());
-    put_u32(&mut out, plan.unpriced.len());
-    for u in &plan.unpriced {
-        put_str(&mut out, u);
-    }
-    let mut usage: Vec<(&String, &f64)> = plan.usage.iter().collect();
-    usage.sort_by(|a, b| a.0.cmp(b.0));
-    put_u32(&mut out, usage.len());
-    for (k, v) in usage {
-        put_str(&mut out, k);
-        put_f64(&mut out, *v);
-    }
-    put_u32(&mut out, names.len());
-    for a in &names {
-        put_str(&mut out, a);
-    }
-    put_u32(&mut out, n);
-    for (s, p) in plan.order.iter().zip(&policy) {
-        out.push(s.rarity);
-        out.extend_from_slice(&s.status);
-        out.extend_from_slice(&s.junk);
-        put_u32(&mut out, *p);
-        put_f64(&mut out, *plan.visits.get(s)?);
-        put_f64(&mut out, *plan.values.get(s)?);
-    }
-    Some(out)
-}
-
-struct Reader<'a>(&'a [u8]);
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
-        if self.0.len() < n {
-            return None;
-        }
-        let (head, rest) = self.0.split_at(n);
-        self.0 = rest;
-        Some(head)
-    }
-
-    fn u32(&mut self) -> Option<usize> {
-        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?) as usize)
-    }
-
-    fn f64(&mut self) -> Option<f64> {
-        Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
-    }
-
-    fn string(&mut self) -> Option<String> {
-        let n = self.u32()?;
-        String::from_utf8(self.take(n)?.to_vec()).ok()
-    }
+    let mut actions = IndexMap::new();
+    let rows = plan
+        .order
+        .iter()
+        .map(|s| {
+            let name = plan.policy.get(s)?.as_str();
+            let next = actions.len();
+            let action = *actions.entry(name).or_insert(next);
+            Some(((s.rarity, s.status, s.junk, s.meta), action, *plan.visits.get(s)?, *plan.values.get(s)?))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let cached = CachedPlan {
+        cost: plan.cost,
+        hours: plan.hours,
+        states: plan.states,
+        bounds: plan.bounds?,
+        unpriced: plan.unpriced.clone(),
+        usage: plan.usage.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        actions: actions.into_keys().map(str::to_owned).collect(),
+        rows,
+    };
+    postcard::to_stdvec(&(PLAN_VERSION, cached)).ok()
 }
 
 fn decode(raw: &[u8]) -> Option<Plan> {
-    let mut r = Reader(raw);
-    if r.take(4)? != MAGIC {
+    let (version, body): (u32, _) = postcard::take_from_bytes(raw).ok()?;
+    if version != PLAN_VERSION {
         return None;
     }
-    let cost = r.f64()?;
-    let hours = r.f64()?;
-    let states = u64::from_le_bytes(r.take(8)?.try_into().ok()?) as usize;
-    let unpriced = (0..r.u32()?).map(|_| r.string()).collect::<Option<Vec<_>>>()?;
-    let n_usage = r.u32()?;
-    let mut usage = HashMap::with_capacity(n_usage);
-    for _ in 0..n_usage {
-        let k = r.string()?;
-        usage.insert(k, r.f64()?);
+    let (cached, rest): (CachedPlan, _) = postcard::take_from_bytes(body).ok()?;
+    if !rest.is_empty() {
+        return None;
     }
-    let names = (0..r.u32()?).map(|_| r.string()).collect::<Option<Vec<_>>>()?;
-    let n = r.u32()?;
-    let mut plan = Plan { cost, hours, states, unpriced, usage, ..Plan::default() };
-    plan.order.reserve(n);
-    for _ in 0..n {
-        let b = r.take(15)?;
-        let s = State::new(b[0], &b[1..9], &b[9..15]);
-        let name = names.get(r.u32()?)?.clone();
-        plan.visits.insert(s, r.f64()?);
-        plan.values.insert(s, r.f64()?);
-        plan.policy.insert(s, name);
-        plan.order.push(s);
+    let n = cached.rows.len();
+    let mut plan = Plan {
+        cost: cached.cost,
+        hours: cached.hours,
+        states: cached.states,
+        bounds: Some(cached.bounds),
+        unpriced: cached.unpriced,
+        usage: cached.usage.into_iter().collect(),
+        order: Vec::with_capacity(n),
+        ..Plan::default()
+    };
+    plan.policy.reserve(n);
+    plan.visits.reserve(n);
+    plan.values.reserve(n);
+    for ((rarity, status, junk, meta), action, visits, value) in cached.rows {
+        let state = State { rarity, status, junk, meta };
+        let name = cached.actions.get(action)?.clone();
+        if plan.policy.insert(state, name).is_some() {
+            return None;
+        }
+        plan.visits.insert(state, visits);
+        plan.values.insert(state, value);
+        plan.order.push(state);
     }
-    r.0.is_empty().then_some(plan)
+    Some(plan)
 }
 
 #[cfg(test)]
@@ -227,8 +177,9 @@ mod tests {
     #[test]
     fn plans_survive_the_disk() {
         let s = State::new(2, &[1, 0, 2], &[1, 0, 0, 3]);
-        let t = State::new(1, &[], &[]);
-        let mut plan = Plan { cost: 12.5, hours: 0.25, states: 9, unpriced: vec!["x".into()], ..Plan::default() };
+        let t = State::new(2, &[], &[]).with_meta(3);
+        let bounds = Some(Bounds { lower: 11.0, upper: f64::INFINITY });
+        let mut plan = Plan { cost: 12.5, hours: 0.25, states: 9, unpriced: vec!["x".into()], bounds, ..Plan::default() };
         plan.usage.insert("chaos".into(), 3.5);
         for (i, st) in [s, t].into_iter().enumerate() {
             plan.order.push(st);
@@ -236,11 +187,23 @@ mod tests {
             plan.visits.insert(st, 1.0 / 3.0);
             plan.values.insert(st, 7.0 + i as f64);
         }
+        let raw = encode(&plan).unwrap();
+        for end in 0..raw.len() {
+            assert!(decode(&raw[..end]).is_none());
+        }
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        assert!(decode(&trailing).is_none());
+        let (version, mut cached): (u32, CachedPlan) = postcard::from_bytes(&raw).unwrap();
+        assert!(decode(&postcard::to_stdvec(&(version - 1, &cached)).unwrap()).is_none());
+        cached.rows[0].1 = cached.actions.len();
+        assert!(decode(&postcard::to_stdvec(&(version, cached)).unwrap()).is_none());
         let dir = std::env::temp_dir().join(format!("ponder-plans-{}", std::process::id()));
         let cache = PlanCache::new(&dir);
         cache.put("abc", &plan);
         let back = cache.get("abc").expect("saved");
         assert_eq!((back.cost, back.hours, back.states, &back.unpriced, &back.usage), (12.5, 0.25, 9, &plan.unpriced, &plan.usage));
+        assert_eq!(back.bounds, bounds);
         assert_eq!((back.order.clone(), &back.policy, &back.visits, &back.values), (plan.order.clone(), &plan.policy, &plan.visits, &plan.values));
         assert!(cache.get("missing").is_none());
         let _ = std::fs::remove_dir_all(&dir);

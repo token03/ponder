@@ -20,6 +20,11 @@ rayon = "1"
 regex = "1"
 ureq = "3"
 anyhow = "1"
+indexmap = { version = "2", features = ["serde"] }
+blake3 = "1"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+percent-encoding = "2"
+form_urlencoded = "1"
 
 # Edit-build loop: light debug info, dependencies optimised, our crates at opt-level 1
 # (tests solve hundreds of real problems; at opt-level 0 that takes minutes), and the
@@ -33,6 +38,9 @@ opt-level = 2
 
 [profile.dev.package.ponder-core]
 opt-level = 3
+
+[profile.dev.package.ponder-app]
+opt-level = 0
 
 [profile.release]
 debug = "line-tables-only"

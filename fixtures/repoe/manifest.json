@@ -1,0 +1,112 @@
+{
+  "version": "3.29.3.3",
+  "files": {
+    "base_items": {
+      "source_sha256": "48afb07a5f40eb51552f90c17d53186469db282a2e759dab7b46e7f9d2a0f58b",
+      "entries": 5461,
+      "fields": [
+        "domain",
+        "drop_level",
+        "item_class",
+        "name",
+        "release_state",
+        "tags",
+        "implicits"
+      ]
+    },
+    "cluster_jewel_notables": {
+      "source_sha256": "f5d488483819a9f5854b739db2b25a2a422bd2b228530dc5bbfc734f87694fd8",
+      "entries": 309,
+      "fields": [
+        "all"
+      ]
+    },
+    "cluster_jewels": {
+      "source_sha256": "415d799b733e88454f5c724a64d0f860f43e1d557f0e6e7df874beeb3b83d1ed",
+      "entries": 3,
+      "fields": [
+        "all"
+      ]
+    },
+    "crafting_bench_options": {
+      "source_sha256": "0fe51ab1657cea69c533bb0610e393f10401156140de88edf686120483cd2845",
+      "entries": 765,
+      "fields": [
+        "actions",
+        "item_classes",
+        "cost",
+        "master",
+        "bench_tier"
+      ]
+    },
+    "essences": {
+      "source_sha256": "01c6ad55866df673dd25a9b08577ee22802ad3b8f0671b019cb4cf523b9bd700",
+      "entries": 106,
+      "fields": [
+        "name",
+        "level",
+        "item_level_restriction",
+        "spawn_level_min",
+        "mods",
+        "type"
+      ]
+    },
+    "fossils": {
+      "source_sha256": "e171c119f874b4f2be2a98366af61c5a2091ca26f508b2f5b9d6b551bb9df181",
+      "entries": 445,
+      "fields": [
+        "name",
+        "added_mods",
+        "forced_mods",
+        "mirrors",
+        "rolls_lucky",
+        "changes_quality",
+        "positive_mod_weights",
+        "negative_mod_weights"
+      ]
+    },
+    "item_classes": {
+      "source_sha256": "678fa3ba653c2750c38ddba4eed2c0f7d6c5ec040b2bbc07bc502fed69c5e632",
+      "entries": 103,
+      "fields": [
+        "category",
+        "category_id",
+        "name"
+      ]
+    },
+    "mods": {
+      "source_sha256": "defbba31b60f9191080c78197278057f834f7f927c1a2a080a7ca6ed3ea686b5",
+      "entries": 40355,
+      "fields": [
+        "domain",
+        "generation_type",
+        "groups",
+        "implicit_tags",
+        "adds_tags",
+        "is_essence_only",
+        "name",
+        "required_level",
+        "spawn_weights",
+        "generation_weights",
+        "stats",
+        "text",
+        "type"
+      ]
+    },
+    "stat_translations": {
+      "source_sha256": "3e62106782eee9ee6dd68f0477ae5375222009700208b9a0b13435a282d3befa",
+      "entries": 11257,
+      "fields": [
+        "ids",
+        "trade_stats"
+      ]
+    },
+    "tags": {
+      "source_sha256": "25df913abd459bedd3dc1b649e344b353e271ed0a32162f116d66034a3269b50",
+      "entries": 1389,
+      "fields": [
+        "all"
+      ]
+    }
+  }
+}

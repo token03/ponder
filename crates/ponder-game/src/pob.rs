@@ -15,7 +15,7 @@ use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use regex::Regex;
 use roxmltree::{Document, Node};
 
-use crate::item::{py_splitlines, py_strip};
+use crate::item::{split_lines, trim_text};
 
 /// Share-site URL patterns and the raw-code URL each maps to (`{}` is the captured id).
 static RAW_URLS: LazyLock<[(Regex, &'static str); 2]> = LazyLock::new(|| {
@@ -109,7 +109,7 @@ pub fn encode(xml: &str) -> String {
 ///
 /// NETWORK: the caller downloads it; this crate does no I/O of that kind.
 pub fn raw_url(source: &str) -> Option<String> {
-    let source = py_strip(source);
+    let source = trim_text(source);
     RAW_URLS
         .iter()
         .find_map(|(re, raw)| re.captures(source).map(|m| raw.replace("{}", &m[1])))
@@ -122,14 +122,14 @@ pub fn read_code(source: &str) -> String {
         && path.is_file()
         && let Ok(text) = std::fs::read_to_string(path)
     {
-        return py_strip(&text).to_string();
+        return trim_text(&text).to_string();
     }
-    py_strip(source).to_string()
+    trim_text(source).to_string()
 }
 
 /// A build from text already in hand: PoB XML, or an export code (what a download of a share URL holds).
 pub fn load_text(code_or_xml: &str) -> Result<Build, PobError> {
-    let text = py_strip(code_or_xml);
+    let text = trim_text(code_or_xml);
     if text.starts_with('<') {
         parse(text)
     } else {
@@ -145,7 +145,7 @@ pub fn load_with(
     fetch: impl Fn(&str) -> Result<String, String>,
 ) -> Result<Build, PobError> {
     let text = match raw_url(source) {
-        Some(url) => py_strip(&fetch(&url).map_err(PobError)?).to_string(),
+        Some(url) => trim_text(&fetch(&url).map_err(PobError)?).to_string(),
         None => read_code(source),
     };
     load_text(&text)
@@ -173,7 +173,7 @@ pub fn parse(xml: &str) -> Result<Build, PobError> {
         level: if level_text.is_empty() {
             0
         } else {
-            py_strip(level_text)
+            trim_text(level_text)
                 .parse()
                 .map_err(|_| PobError(format!("bad level {level_text:?}")))?
         },
@@ -192,9 +192,9 @@ pub fn parse(xml: &str) -> Result<Build, PobError> {
             .filter(|n| n.is_text())
             .map(|n| n.text().unwrap_or(""))
             .collect();
-        let text = py_splitlines(py_strip(&raw))
+        let text = split_lines(trim_text(&raw))
             .into_iter()
-            .map(py_strip)
+            .map(trim_text)
             .collect::<Vec<_>>()
             .join("\n");
         let uses = usage
@@ -253,7 +253,7 @@ fn item_usage(items_el: Node) -> Vec<(String, Vec<Use>)> {
                 continue;
             }
             let entry = (
-                py_strip(&COLOR.replace_all(&title, "")).to_string(),
+                trim_text(&COLOR.replace_all(&title, "")).to_string(),
                 name.to_string(),
                 is_active,
             );
@@ -279,7 +279,7 @@ fn main_skill(root: Node, main_group: Option<&str>) -> Option<String> {
         .unwrap_or(skills);
     let groups: Vec<Node> = children(container, "Skill").collect();
     // Python indexes groups[int(group) - 1]: a negative index counts from the end.
-    let mut i: i64 = py_strip(main_group?).parse::<i64>().ok()? - 1;
+    let mut i: i64 = trim_text(main_group?).parse::<i64>().ok()? - 1;
     if i < 0 {
         i += groups.len() as i64;
     }

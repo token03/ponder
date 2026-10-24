@@ -1,8 +1,8 @@
-//! mods tests, and the match goldens (fixtures, texts, ladder). Needs repoe data.
+//! mods tests, and the match goldens (fixtures, texts, ladder).
 
 mod common;
 
-use common::{db, golden, item_json, match_json, normalized, same_order, skip_without_data};
+use common::{db, expected, item_json, match_json, normalized, same_order};
 use ponder_game::item::parse_item;
 use ponder_game::mods::{IdMods, fits, line_values, normalize, template_ranges};
 use serde_json::Value;
@@ -38,9 +38,7 @@ fn item(text: &str) -> ponder_game::item::Item {
 
 #[test]
 fn tiers_and_sources() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let m = db().match_item(&item(
         "Rarity: RARE\nX\nHubris Circlet\nShaper Item\nItem Level: 86\nImplicits: 0\n\
          +135 to maximum Life\n+44% to Lightning Resistance\n{crafted}+23% to Lightning Resistance\n",
@@ -58,9 +56,7 @@ fn tiers_and_sources() {
 
 #[test]
 fn hybrid_mod_is_matched_as_one() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let m = db().match_item(&item(
         "Rarity: RARE\nX\nHubris Circlet\nItem Level: 86\nImplicits: 0\n\
          40% increased Energy Shield\n16% increased Stun and Block Recovery\n",
@@ -70,9 +66,7 @@ fn hybrid_mod_is_matched_as_one() {
 
 #[test]
 fn influence_mod_needs_influence() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let text = |inf: &str| {
         format!(
             "Rarity: RARE\nX\nHubris Circlet\n{inf}Item Level: 86\nImplicits: 0\nAdds 20 to 38 Cold Damage to Spells\n"
@@ -86,9 +80,7 @@ fn influence_mod_needs_influence() {
 
 #[test]
 fn unknown_lines_are_reported() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let m = db().match_item(&item(
         "Rarity: RARE\nX\nHubris Circlet\nImplicits: 0\nUse a fossil here\n+999 to maximum Life\n",
     ));
@@ -107,9 +99,7 @@ fn unknown_lines_are_reported() {
 
 #[test]
 fn summed_line_split_into_hybrid_and_single() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let m = db().match_item(&item(
         "Rarity: RARE\nX\nHubris Circlet\nItem Level: 86\nImplicits: 0\n\
          136% increased Energy Shield\n16% increased Stun and Block Recovery\n",
@@ -120,9 +110,7 @@ fn summed_line_split_into_hybrid_and_single() {
 
 #[test]
 fn unknown_base_leaves_everything_unmatched() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let m = db().match_item(&item(
         "Rarity: RARE\nX\nNo Such Base\nImplicits: 0\n+10 to Strength\n",
     ));
@@ -151,13 +139,13 @@ fn compare(
                 }
                 if let (Some(a), Some(b)) = (g[key].as_array(), w[key].as_array()) {
                     for x in a.iter().filter(|x| !b.contains(x)) {
-                        eprintln!("    {key} only in rust:   {x}");
+                        eprintln!("    {key} only in actual:   {x}");
                     }
                     for x in b.iter().filter(|x| !a.contains(x)) {
-                        eprintln!("    {key} only in python: {x}");
+                        eprintln!("    {key} only in expected: {x}");
                     }
                 } else {
-                    eprintln!("    {key}: rust {} python {}", g[key], w[key]);
+                    eprintln!("    {key}: actual {} expected {}", g[key], w[key]);
                 }
             }
         }
@@ -167,11 +155,9 @@ fn compare(
 }
 
 #[test]
-fn texts_match_python_goldens() {
-    if skip_without_data() {
-        return;
-    }
-    let texts = golden("texts");
+fn texts_match_fixtures() {
+    common::setup();
+    let texts = expected("texts");
     let pairs = texts
         .as_array()
         .unwrap()
@@ -190,11 +176,9 @@ fn texts_match_python_goldens() {
 }
 
 #[test]
-fn fixture_builds_match_python_goldens() {
-    if skip_without_data() {
-        return;
-    }
-    let builds = golden("fixtures");
+fn fixture_builds_match_fixtures() {
+    common::setup();
+    let builds = expected("fixtures");
     let mut pairs = Vec::new();
     for b in builds.as_array().unwrap() {
         let path = common::fixtures().join(b["file"].as_str().unwrap());
@@ -235,11 +219,9 @@ fn fixture_builds_match_python_goldens() {
 }
 
 #[test]
-fn ladder_match_ids_match_python_goldens() {
-    if skip_without_data() {
-        return;
-    }
-    let ladder = golden("ladder");
+fn ladder_match_ids_match_fixtures() {
+    common::setup();
+    let ladder = expected("ladder");
     let pairs = ladder["items"].as_array().unwrap().iter().map(|e| {
         let ids = |k: &str| -> Vec<String> {
             e["mods"][k]
@@ -278,9 +260,7 @@ fn ladder_match_ids_match_python_goldens() {
 
 #[test]
 fn match_ids_skips_unknown_ids() {
-    if skip_without_data() {
-        return;
-    }
+    common::setup();
     let mods = IdMods {
         explicit: vec!["IncreasedLife7".into(), "NoSuchMod".into(), "".into()],
         ..Default::default()
@@ -310,11 +290,9 @@ fn match_ids_skips_unknown_ids() {
 
 /// Texts built from real mods (hybrids, summed lines, crafted lines): parse and match both agree with Python.
 #[test]
-fn synthetic_items_match_python_goldens() {
-    if skip_without_data() {
-        return;
-    }
-    let synth = golden("synth");
+fn synthetic_items_match_fixtures() {
+    common::setup();
+    let synth = expected("synth");
     let mut pairs = Vec::new();
     for e in synth.as_array().unwrap() {
         let item = parse_item(e["text"].as_str().unwrap()).unwrap();

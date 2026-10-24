@@ -42,12 +42,14 @@ pub struct ClusterOpts {
     pub item_level: i64,
     pub need: Option<usize>,
     pub fractured: Vec<String>,
+    /// "Group@tier" small-passive mods that fill the open slots (`cluster::add_filler`)
+    pub filler: Vec<String>,
     pub solve: bool,
 }
 
 impl Default for ClusterOpts {
     fn default() -> ClusterOpts {
-        ClusterOpts { passives: None, item_level: 84, need: None, fractured: Vec::new(), solve: true }
+        ClusterOpts { passives: None, item_level: 84, need: None, fractured: Vec::new(), filler: Vec::new(), solve: true }
     }
 }
 
@@ -99,7 +101,7 @@ pub fn estimate_cluster(cx: &Context, size: &str, enchant: &str, notables: &[Str
     est.item_level = opts.item_level;
     est.fixed = opts.fractured.clone();
     let problem = match cluster::problem(size, &ench.name, notables, opts.need, opts.item_level, &opts.fractured) {
-        Ok(p) => p,
+        Ok(p) => cluster::add_filler(&p, &opts.filler),
         Err(e) => {
             est.error = Some(e.to_string());
             return est;
@@ -110,6 +112,19 @@ pub fn estimate_cluster(cx: &Context, size: &str, enchant: &str, notables: &[Str
     }
     est.rows = problem.targets.iter().map(|t| Row { role: "target", side: t.side, text: t.name.clone(), tier: String::new() }).collect();
     est.rows.extend(problem.fixed.iter().map(|m| Row { role: "fractured", side: m.side, text: m.label.clone(), tier: String::new() }));
+    if let Some((pre, suf)) = problem.filler_sides {
+        let names: Vec<String> = opts.filler.iter().map(|f| cluster::feature_label(f, &problem.pool)).collect();
+        let text = format!("any of: {}", names.join(", "));
+        for side in std::iter::repeat_n(Side::Prefix, pre).chain(std::iter::repeat_n(Side::Suffix, suf)) {
+            est.rows.push(Row { role: "filler", side, text: text.clone(), tier: "filler".into() });
+        }
+    }
+    for side in [Side::Prefix, Side::Suffix] {
+        let used = est.rows.iter().filter(|r| r.side == side).count();
+        for _ in used..problem.min_mods / 2 {
+            est.rows.push(Row { role: "any", side, text: "any mod".into(), tier: "any".into() });
+        }
+    }
     est.fixed_ids = problem.fixed.iter().map(|m| m.id.clone()).collect();
     let option = cx.enchant_option(&ench.short);
     est.search = Search::Cluster { size: size.into(), enchant: option.clone(), passives };
@@ -125,7 +140,8 @@ pub fn estimate_cluster(cx: &Context, size: &str, enchant: &str, notables: &[Str
     est.trade_url = Some(trade::search_url(league, &query));
     est.query = Some(query);
     if !opts.fractured.is_empty() {
-        let q = trade::cluster_query(cx, size, option.as_deref(), Some(passives), &[], Some(opts.item_level), &est.fixed_ids);
+        let mut q = trade::cluster_query(cx, size, option.as_deref(), Some(passives), &[], Some(opts.item_level), &est.fixed_ids);
+        q["query"]["filters"]["misc_filters"]["filters"]["corrupted"] = serde_json::json!({"option": "false"});
         est.base_url = Some(trade::search_url(league, &q));
         est.base_query = Some(q);
     } else if let Some(base) = cx.cluster_base(size, &ench.short, passives, opts.item_level) {
@@ -163,6 +179,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
         filler_need: p.filler_need,
         filler: p.filler.clone(),
         filler_sides: p.filler_sides,
+        min_mods: p.min_mods,
     };
     est.base = grp.best().to_string();
     est.used_base = if m.item.base != grp.best() { m.item.base.clone() } else { String::new() };
@@ -174,6 +191,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     est.fixed = p.fixed.iter().map(|m| m.label.clone()).collect();
     est.fixed_ids = p.fixed.iter().map(|m| m.id.clone()).collect();
     est.filler_families = gp.filler_families.clone();
+    est.can_fracture = m.item.influences.is_empty() && !m.item.flags.contains("synthesised");
     est.settings = cx.settings;
     est.search = if JEWELLERY.contains(&grp.item_class.as_str()) && grp.bases.len() > 1 {
         Search::Category(trade::category(&grp.item_class).map(str::to_string))
@@ -204,6 +222,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
         let mut q = est.query_with(frac);
         q.item_level = Some(gp.item_level);
         q.fractured_only = true;
+        q.corrupted = Some(false);
         let query = trade::item_query(&q);
         est.base_url = Some(trade::search_url(league, &query));
         est.base_query = Some(query);
@@ -241,11 +260,12 @@ fn filler_stats(cx: &Context, filler: &std::collections::BTreeSet<String>) -> Ve
 /// covers essence-only mods no bought base has. The solver's numbers come from `solve_all`.
 pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Option<&Prices>, filler: bool) {
     let Some(p) = est.problem.as_ref() else { return };
-    if est.error.is_some() || !est.fractures.is_empty() || p.targets.len() + p.filler_need < 2 {
+    if est.error.is_some() || !est.can_fracture || !p.fixed.is_empty() || !est.fractures.is_empty() || p.targets.len() + p.filler_need < 2 {
         return;
     }
     let pool: HashMap<&str, &craft::Mod> = p.pool.iter().map(|m| (m.id.as_str(), m)).collect();
     let mods = cx.mods_json();
+    let bench_cost = est.bench_cost();
     let mut made_fractures: Vec<Fracture> = Vec::new();
     let families: &[String] = if filler { &est.filler_families } else { &[] };
     for family in families {
@@ -260,15 +280,21 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
             }
         }
         // A fractured filler mod counts toward filler_need through the base state.
-        let mut problem = p.clone();
+        let mut problem = p.to_spec();
         problem.fixed.push(craft::Mod { weight: 0.0, ..mod_.clone() });
-        let mut f = Fracture::new(format!("{} (filler)", mod_.label), mod_.id.clone(), problem);
+        let mut f = Fracture::new(format!("{} (filler)", mod_.label), mod_.id.clone(), problem.compile());
+        f.bench_cost = bench_cost;
+        if est.kind == "gear" {
+            f.donor_query = super::donors::donor_query(cx, &est.base, &[ids.iter().map(|id| (*id).to_string()).collect()], Some(est.item_level), 1, 6);
+            f.donor_url = f.donor_query.as_ref().map(|q| trade::search_url(league, q));
+        }
         let mut frac: Vec<Stat> = cx.stat_id(&mod_.id, "fractured").map(|sid| (sid, cx.stat_min(&ids))).into_iter().collect();
         frac.extend(est.fixed_ids.iter().filter_map(|m| Some((cx.stat_id(m, "fractured")?, cx.stat_min(&[m])))));
         if !frac.is_empty() {
             let mut q = est.query_with(frac);
             q.item_level = Some(est.item_level);
             q.fractured_only = true;
+            q.corrupted = Some(false);
             let query = trade::item_query(&q);
             f.trade_url = Some(trade::search_url(league, &query));
             f.query = Some(query);
@@ -286,12 +312,15 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
         }
         let Some(&first) = candidates.first() else { continue };
         let mod_ = candidates[1..].iter().fold(first, |best, m| if m.weight > best.weight { m } else { best }); // the commonest acceptable tier
-        let mut problem = p.clone();
+        let mut problem = p.to_spec();
         problem.targets.remove(i);
         problem.need = p.need.saturating_sub(1);
         problem.fixed.push(craft::Mod { weight: 0.0, ..mod_.clone() });
-        let mut f = Fracture::new(t.name.clone(), mod_.id.clone(), problem);
+        let mut f = Fracture::new(t.name.clone(), mod_.id.clone(), problem.compile());
+        f.bench_cost = bench_cost;
         f.made = made;
+        f.donor_query = (est.kind == "gear").then(|| super::donors::donor_query(cx, &est.base, std::slice::from_ref(&t.good), Some(est.item_level), 1, 6)).flatten();
+        f.donor_url = f.donor_query.as_ref().map(|q| trade::search_url(league, q));
         if est.kind == "cluster" {
             if let Search::Cluster { size, enchant, passives } = &est.search {
                 let mut fractured = vec![mod_.id.clone()];
@@ -315,7 +344,8 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
                 f.query = Some(trade::item_query(&q));
             }
         }
-        if let Some(q) = &f.query {
+        if let Some(q) = &mut f.query {
+            q["query"]["filters"]["misc_filters"]["filters"]["corrupted"] = serde_json::json!({"option": "false"});
             f.trade_url = Some(trade::search_url(league, q));
         }
         made_fractures.push(f);

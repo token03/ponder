@@ -149,8 +149,8 @@ fn not_an_item_is_an_error() {
 
 /// Every hand-written text parses to exactly what Python made of it (no repoe data needed).
 #[test]
-fn parse_matches_python_goldens() {
-    let texts = common::golden("texts");
+fn parse_matches_fixtures() {
+    let texts = common::expected("texts");
     let mut bad = 0;
     for entry in texts.as_array().unwrap() {
         let text = entry["text"].as_str().unwrap();

@@ -1,68 +1,18 @@
-//! Shared test helpers: repo paths, goldens, the data skip, and Rust items/matches as the golden JSON shape.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
-use std::io::Read;
-use std::path::PathBuf;
-use std::sync::{Once, OnceLock};
+#[path = "../../../../tests/support/mod.rs"]
+mod support;
+#[path = "../../../../tests/support/game.rs"]
+mod game;
 
-use ponder_game::data;
+pub use support::*;
+pub use game::*;
 use ponder_game::item::{Item, ModLine};
-use ponder_game::mods::{ItemMatch, ModDB};
+use ponder_game::mods::ItemMatch;
 use serde_json::{Value, json};
 
-pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap()
-}
-
-pub fn fixtures() -> PathBuf {
-    repo_root().join("fixtures")
-}
-
-/// Point the data directory at the repo's cache unless the caller already chose one.
-pub fn setup() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        if std::env::var_os("PONDER_DATA").is_none() {
-            // SAFETY: every test calls `setup` before touching the environment, and the Once
-            // blocks them all until this has run.
-            unsafe { std::env::set_var("PONDER_DATA", repo_root().join(".cache/repoe")) };
-        }
-    });
-}
-
-/// True (with a note) when the repoe data is missing: the test should return early.
-pub fn skip_without_data() -> bool {
-    setup();
-    if data::available(None) {
-        return false;
-    }
-    eprintln!(
-        "skipping: repoe data not found in {}; run `ponder data fetch`",
-        data::data_dir().display()
-    );
-    true
-}
-
-pub fn db() -> &'static ModDB {
-    static DB: OnceLock<ModDB> = OnceLock::new();
-    DB.get_or_init(|| ModDB::load().expect("repoe data"))
-}
-
-pub fn golden(name: &str) -> Value {
-    // PONDER_GOLDENS points at a bigger set made with PONDER_GOLDEN_SAMPLE / PONDER_GOLDEN_SYNTH.
-    let dir = std::env::var_os("PONDER_GOLDENS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join("goldens/items"));
-    let path = dir.join(format!("{name}.json.gz"));
-    let file = std::fs::File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let mut text = String::new();
-    flate2::read::GzDecoder::new(file)
-        .read_to_string(&mut text)
-        .unwrap();
-    serde_json::from_str(&text).unwrap()
+pub fn expected(name: &str) -> Value {
+    fixture(&format!("expected/items/{name}.json.gz"))
 }
 
 fn line_json(l: &ModLine) -> Value {

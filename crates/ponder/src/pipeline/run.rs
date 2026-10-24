@@ -14,8 +14,8 @@ use super::build::{GearOpts, build_gear, add_fractures, estimate_cluster, estima
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
 use super::solving::{slots_of, solve_slots};
-use super::tree::{add_sales, link_products};
-use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority, snapshot_products};
+use super::pivots::add_pivots;
+use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
 use crate::demand::{self, Archetype};
 use crate::mine::{self, Candidate};
 
@@ -59,7 +59,7 @@ pub struct LadderOpts {
 
 impl Default for LadderOpts {
     fn default() -> LadderOpts {
-        LadderOpts { gear_top: 80, per_group: 3, niche: 40, cluster_top: 80, min_characters: 5, group: None, trade_lookup: false, trade_budget: 40, recombs: false, workers: None }
+        LadderOpts { gear_top: 80, per_group: 3, niche: 40, cluster_top: 80, min_characters: 5, group: None, trade_lookup: false, trade_budget: 40, recombs: true, workers: None }
     }
 }
 
@@ -104,7 +104,13 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
             }
             rares += 1;
             let m = db.match_item(&item);
-            let est = estimate_item(cx, db, &m, &table, &league, &gear_opts)?;
+            let est = match estimate_item(cx, db, &m, &table, &league, &gear_opts) {
+                Ok(est) => est,
+                Err(e) => {
+                    errors.push(format!("{}: {}: {e}", head(&source, 70), item.base));
+                    continue;
+                }
+            };
             matched.push((source.clone(), m));
             let Some(est) = est.filter(|e| !e.targets.is_empty()) else { continue };
             let i = *by_key.entry(est.key.clone()).or_insert_with(|| {
@@ -144,7 +150,7 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
         solve_slots(cx, slots, &table, opts.workers, progress);
     }
     if opts.recombs {
-        super::recombs::add_recombs(cx, db, &mut estimates, &table, opts.workers, progress);
+        super::recombs::add_recombs_in_league(cx, db, &mut estimates, &table, &league, opts.workers, progress);
     }
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..estimates.len()).collect();
@@ -258,36 +264,31 @@ pub fn ladder(cx: &Context, db: &ModDB, characters: Option<Vec<Lite>>, opts: &La
         if estimates.len() - n_gear >= opts.cluster_top {
             break;
         }
-        let copts = ClusterOpts { passives: Some(a.usual_passives()), solve: false, ..ClusterOpts::default() }; // two enchants can share a tag
+        // two enchants can share a tag
+        let copts = ClusterOpts { passives: Some(a.usual_passives()), filler: a.filler.clone(), solve: false, ..ClusterOpts::default() };
         let mut est = estimate_cluster(cx, &a.size, &a.enchant, &a.notables, &table, &league, &copts);
         if est.error.is_some() || estimates.contains_key(&est.key) {
             continue;
         }
         est.demand = a.characters;
         est.skills = a.skills.most_common().into_iter().take(3).map(|(s, _)| s.clone()).collect();
-        add_fractures(cx, &mut est, &league, None, true); // fractured bases are most of the cluster market's money
+        add_fractures(cx, &mut est, &league, Some(&table), true); // fractured bases are most of the cluster market's money
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
-    link_products(&mut out);
-    // Smallest products first: their costs are what a bricked bigger craft sells for.
-    let sizes: std::collections::BTreeSet<usize> = out.iter().filter_map(|e| e.problem.as_ref().map(|p| p.targets.len())).collect();
-    for n in sizes {
-        let wave: Vec<usize> = (0..out.len()).filter(|&i| out[i].problem.as_ref().is_some_and(|p| p.targets.len() == n)).collect();
-        for &i in &wave {
-            add_sales(&mut out, i);
-        }
-        solve_slots(cx, slots_of(&mut out, &wave), &table, opts.workers, progress);
-    }
+    let all: Vec<usize> = (0..out.len()).collect();
+    solve_slots(cx, slots_of(&mut out, &all), &table, opts.workers, progress);
     if opts.recombs {
-        super::recombs::add_recombs(cx, db, &mut out, &table, opts.workers, progress);
+        super::recombs::add_recombs_in_league(cx, db, &mut out, &table, &league, opts.workers, progress);
     }
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..out.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(out[i].demand));
         price_on_trade(cx, &mut out, &order, &table, &league, opts.trade_budget, progress);
     }
-    snapshot_products(&mut out);
+    // after pricing: a priced fractured base can change the recipe the pivots follow
+    say(progress, "finding pivots");
+    in_pool(opts.workers, || add_pivots(&mut out));
     Ok(LadderReport {
         characters: characters.len(),
         items: worn.len(),

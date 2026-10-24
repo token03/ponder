@@ -11,7 +11,7 @@ pub fn role_color(role: &str, dark: bool) -> Color32 {
         "fractured" => ((230, 180, 90), (150, 95, 0)),
         "essence" => ((200, 140, 255), (110, 50, 170)),
         "bench" => ((140, 220, 160), (20, 120, 50)),
-        "skipped" => ((150, 150, 150), (120, 120, 120)),
+        "skipped" | "any" => ((150, 150, 150), (120, 120, 120)),
         _ => ((185, 185, 185), (90, 90, 90)), // filler
     };
     let (r, g, b) = if dark { d } else { l };
@@ -48,14 +48,18 @@ pub fn signed(x: Option<f64>, divine: f64, dark: bool) -> RichText {
 
 /// A small rounded label, e.g. a skill name.
 pub fn chip(ui: &mut Ui, text: &str) {
-    egui::Frame::new()
+    let text: egui::WidgetText = RichText::new(text).small().into();
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::FontSelection::Default);
+    let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .corner_radius(8.0)
-        .inner_margin(egui::Margin::symmetric(6, 1))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).small());
+        .inner_margin(egui::Margin::symmetric(6, 1));
+    ui.allocate_ui(galley.size() + frame.total_margin().sum(), |ui| {
+        frame.show(ui, |ui| {
+            ui.label(galley);
         });
+    });
 }
 
 /// A link that opens in the browser, with a copy button next to it.

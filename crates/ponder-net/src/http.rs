@@ -11,6 +11,11 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub fn encode_component(text: &str) -> String {
+    const COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+    percent_encoding::utf8_percent_encode(text, COMPONENT).to_string()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Get,

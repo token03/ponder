@@ -17,13 +17,11 @@
 //! The trade layer is passed in: [`TradeData`] holds repoe's mods and stat translations (the
 //! pieces of `ponder_net::trade` that read repoe), so nothing here touches the network.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use ponder_game::data;
-use ponder_game::item::{Item, ModLine};
 use ponder_game::mods::{ItemMatch, ModDB};
-use ponder_net::pyjson::truthy;
 use ponder_net::trade::{self, ItemQuery, Rates, StatIds, Translations};
 use serde_json::Value;
 
@@ -130,102 +128,20 @@ pub fn archetype_query(
 
 /// A trade listing's item, matched to mod ids and tiers through its mod text.
 pub fn listing_match(db: &ModDB, listing: &Value) -> Option<ItemMatch> {
-    let empty = Value::Null;
-    let it = listing.get("item").filter(|i| truthy(i)).unwrap_or(&empty);
-    let text = |key: &str| -> Vec<&str> {
-        it.get(key)
-            .filter(|v| truthy(v))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect()
-    };
-    let mut lines: Vec<ModLine> = text("explicitMods").into_iter().map(ModLine::new).collect();
-    lines.extend(
-        text("fracturedMods")
-            .into_iter()
-            .map(|t| ModLine::with_marker(t, "fractured")),
-    );
-    lines.extend(
-        text("craftedMods")
-            .into_iter()
-            .map(|t| ModLine::with_marker(t, "crafted")),
-    );
-    let influences: BTreeSet<String> = match it.get("influences") {
-        Some(Value::Object(m)) => m
-            .iter()
-            .filter(|(_, v)| truthy(v))
-            .map(|(k, _)| k.clone())
-            .collect(),
-        _ => BTreeSet::new(),
-    };
-    let mut item = Item::new(
-        "RARE",
-        it.get("name").and_then(Value::as_str).unwrap_or(""),
-        it.get("baseType").and_then(Value::as_str).unwrap_or(""),
-    );
-    item.item_level = it.get("ilvl").and_then(Value::as_i64);
-    item.influences = influences;
-    item.explicits = lines;
+    let item = crate::item::listing_to_item(&trade::listing_item(listing));
     let m = db.match_item(&item);
     m.base_id.is_some().then_some(m)
 }
 
-/// Minimum-norm least squares (`numpy.linalg.lstsq(x, y, rcond=None)`), by one-sided Jacobi SVD.
-///
-/// `x` is row-major, one `Vec` per row. Singular values at or below `eps * max(rows, cols) *
-/// largest` are treated as zero.
 pub fn lstsq(x: &[Vec<f64>], y: &[f64]) -> Vec<f64> {
     let (m, n) = (x.len(), x.first().map_or(0, Vec::len));
-    let mut a: Vec<Vec<f64>> = (0..n).map(|j| x.iter().map(|r| r[j]).collect()).collect(); // columns
-    let mut v: Vec<Vec<f64>> = (0..n)
-        .map(|j| (0..n).map(|i| f64::from(u8::from(i == j))).collect())
-        .collect(); // columns of V
-    for _ in 0..60 {
-        let mut rotated = false;
-        for p in 0..n {
-            for q in p + 1..n {
-                let alpha: f64 = a[p].iter().map(|t| t * t).sum();
-                let beta: f64 = a[q].iter().map(|t| t * t).sum();
-                let gamma: f64 = a[p].iter().zip(&a[q]).map(|(s, t)| s * t).sum();
-                if gamma == 0.0 || gamma.abs() <= 1e-15 * (alpha * beta).sqrt() {
-                    continue;
-                }
-                rotated = true;
-                let zeta = (beta - alpha) / (2.0 * gamma);
-                let t = zeta.signum() / (zeta.abs() + (1.0 + zeta * zeta).sqrt());
-                let c = 1.0 / (1.0 + t * t).sqrt();
-                let s = c * t;
-                for cols in [&mut a, &mut v] {
-                    let (lo, hi) = cols.split_at_mut(q);
-                    for (u, w) in lo[p].iter_mut().zip(hi[0].iter_mut()) {
-                        let (up, wq) = (*u, *w);
-                        *u = c * up - s * wq;
-                        *w = s * up + c * wq;
-                    }
-                }
-            }
-        }
-        if !rotated {
-            break;
-        }
+    if m == 0 || n == 0 {
+        return vec![0.0; n];
     }
-    let sigma: Vec<f64> = a
-        .iter()
-        .map(|col| col.iter().map(|t| t * t).sum::<f64>().sqrt())
-        .collect();
-    let cutoff = f64::EPSILON * m.max(n) as f64 * sigma.iter().copied().fold(0.0, f64::max);
-    let mut coef = vec![0.0; n];
-    for j in 0..n {
-        if sigma[j] > cutoff {
-            let w = a[j].iter().zip(y).map(|(s, t)| s * t).sum::<f64>() / (sigma[j] * sigma[j]);
-            for (c, vi) in coef.iter_mut().zip(&v[j]) {
-                *c += w * vi;
-            }
-        }
-    }
-    coef
+    let a = faer::Mat::from_fn(m, n, |i, j| x[i][j]);
+    let y = faer::Mat::from_fn(m, 1, |i, _| y[i]);
+    let fitted = a.thin_svd().expect("finite price features").pseudoinverse() * y;
+    (0..n).map(|i| fitted[(i, 0)]).collect()
 }
 
 /// Fit the price model for an archetype from its trade listings; None if there are too few usable ones.

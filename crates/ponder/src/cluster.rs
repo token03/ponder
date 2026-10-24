@@ -158,11 +158,11 @@ pub fn notable_name(m: &data::Mod) -> String {
 /// Every mod that can roll on this cluster, with its weight.
 pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
     let bases = loaded(data::base_items());
-    let tags: BTreeSet<&str> = bases[size_id(size)]
+    let tags: BTreeSet<String> = bases[size_id(size)]
         .tags
         .iter()
-        .map(String::as_str)
-        .chain([enchant.tag.as_str()])
+        .cloned()
+        .chain([enchant.tag.clone()])
         .collect();
     let mut out = Vec::new();
     for (mod_id, m) in loaded(data::mods()).iter() {
@@ -172,12 +172,8 @@ pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
         {
             continue;
         }
-        let weight = m
-            .spawn_weights
-            .iter()
-            .find(|w| tags.contains(w.tag.as_str()))
-            .map_or(0, |w| w.weight);
-        if weight <= 0 {
+        let weight = ponder_game::mods::ModDB::generation_weight(m, &tags);
+        if weight <= 0.0 {
             continue;
         }
         let notable = is_notable(m);
@@ -193,7 +189,7 @@ pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
             } else {
                 Side::Suffix
             },
-            weight: weight as f64,
+            weight,
             groups: m.groups.clone(),
             notable,
             label,
@@ -301,7 +297,7 @@ pub fn feature_label(name: &str, mods: &[Mod]) -> String {
             texts
                 .iter()
                 .find(|(_, m)| m.groups.contains(&group))
-                .map(|(id, _)| id)
+                .map(|(id, _)| id.as_str())
         });
     let text = match mod_id {
         Some(id) if !texts[id].text_or_empty().is_empty() => texts[id].text_or_empty(),
@@ -353,6 +349,38 @@ pub fn resolve(mods: &[Mod], names: &[String]) -> Result<Vec<Target>> {
         });
     }
     Ok(out)
+}
+
+/// Fill a passive jewel: one open slot takes any of `features` ("Group@tier" small-passive mods,
+/// what its wearers put there), the others any mod at all, so the jewel has all four. Features
+/// that can't roll here are skipped; with nothing to fill a slot, the jewel is only made full.
+pub fn add_filler(problem: &Problem, features: &[String]) -> Problem {
+    if features.is_empty() {
+        return problem.clone();
+    }
+    let mut p = problem.to_spec();
+    let wanted: BTreeSet<&String> = p.targets.iter().flat_map(|t| t.good.iter()).collect();
+    let mut filler = BTreeSet::new();
+    for f in features {
+        if let Ok(t) = resolve(&p.pool, std::slice::from_ref(f)) {
+            filler.extend(t[0].good.iter().filter(|m| !wanted.contains(m)).cloned());
+        }
+    }
+    let limit = problem.limit();
+    let open = |side: Side| {
+        let used = p.targets.iter().filter(|t| t.side == side).count() + p.fixed.iter().filter(|m| m.side == side).count();
+        let fillable = p.pool.iter().any(|m| m.side == side && filler.contains(&m.id));
+        if fillable { limit.saturating_sub(used) } else { 0 }
+    };
+    let (pre, suf) = (open(Side::Prefix), open(Side::Suffix));
+    p.min_mods = 2 * limit;
+    if pre + suf == 0 {
+        return p.compile();
+    }
+    p.filler = filler;
+    p.filler_sides = Some(if suf >= pre { (0, 1) } else { (1, 0) });
+    p.filler_need = 1;
+    p.compile()
 }
 
 /// Fractured mods: notables by name, small-passive mods at exactly their tier.
@@ -411,8 +439,8 @@ pub fn cost(
     item_level: i64,
     fractured: &[String],
 ) -> Result<(Problem, Plan)> {
-    let mut p = problem(size, enchant, notables, need, item_level, fractured)?;
-    let plan = solve(&mut p, pricing.prices, pricing.settings)?;
+    let p = problem(size, enchant, notables, need, item_level, fractured)?;
+    let plan = solve(&p, pricing.prices, pricing.settings)?;
     Ok((p, plan))
 }
 
@@ -436,9 +464,9 @@ pub fn problem(
     let (harvest, profiles) = actions::harvest(&mods);
     let mut all = actions::basic();
     all.extend(harvest);
-    let mut p = Problem::new(mods, targets, need, all, Kind::Jewel);
+    let mut p = ponder_core::ProblemSpec::new(mods, targets, need, all, Kind::Jewel);
     p.notable_cap = cap;
     p.fixed = fixed;
     p.profiles = profiles;
-    Ok(p)
+    Ok(p.compile())
 }
