@@ -16,6 +16,7 @@ anyhow.workspace = true
 regex.workspace = true
 indexmap = { version = "2", features = ["serde"] }
 rustc-hash = "2"
+flate2 = "1"
 
 [dev-dependencies]
 flate2 = "1"
