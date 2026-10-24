@@ -1,16 +1,9 @@
-__pycache__/
-*.egg-info/
-.venv/
-.pytest_cache/
-build/
-dist/
+/target/
 
-# Downloaded game data (see `ponder data fetch`)
+# Downloaded game data, ladder, prices, trade answers and solved plans (see `ponder data fetch`)
 .cache/
-
-.env
 
 # Local secrets (POESESSID)
 .env
+
 ponder-*.zip
-rust/target/

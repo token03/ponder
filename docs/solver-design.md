@@ -130,7 +130,7 @@ re-lock. Community testing suggests previews are deterministic per donor
 3. Legality engine with source classification per base (native, NNN,
    essence-only, veiled, exclusive) as an explicit API.
 4. Assembly planner with a recombinator kernel table. *First cut done*
-   (`recomb.py`): clean donors (a `junk_cap` constraint on the single-item
+   (`crates/ponder/src/recomb.rs`): clean donors (a `junk_cap` constraint on the single-item
    solver), NNN padding from partner bases and essence-forced named mods, and a
    DP over subsets of wanted mods for two-level trees. Failures that hand back
    one input exactly are credited (that input isn't re-crafted). Next: credit

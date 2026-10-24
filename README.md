@@ -1,470 +1,245 @@
 # ponder
 
-Mine Path of Exile builds for profitable crafting candidates.
+Find Path of Exile 3.30 market holes: what ladder characters wear, the cheapest
+way to craft it, and what the trade site has.
 
-The plan, in stages:
+- `ponder` is a command line that prints JSON, for scripts and LLMs.
+- `ponder-app` is a desktop app (egui) for browsing the same results.
 
-1. **Mine** (working): read Path of Building exports, match every rare's mod
-   lines to exact mod ids, tiers and sources, and rank mod combinations that
-   many builds share.
-2. **Cost** (working): the cheapest crafting policy for a target and its
-   expected cost, for cluster jewels and ordinary rares.
-3. **Price and margin** (started): poe.ninja for currency and cluster bases,
-   trade-site lookups for selling prices.
-4. **Explain**: an LLM layer that turns plans and numbers into plain advice.
+Both sit on one Rust library.
 
 ## Setup
 
-Needs [uv](https://docs.astral.sh/uv/).
+Needs Rust 1.99 or newer.
 
 ```sh
-uv sync                      # makes .venv, installs ponder, pytest and textual (TUI)
-uv run ponder data fetch     # ~60 MB of repoe-fork game data into .cache/repoe
-uv run pytest                # run the tests
+cargo build --release
+./target/release/ponder data fetch        # ~60 MB of repoe-fork game data into .cache/repoe
+./target/release/ponder prices fetch      # current league prices from poe.ninja into .cache/ninja
+./target/release/ponder ladder fetch      # top characters of every popular skill and class, cached
+cargo run --release -p ponder-app         # the desktop app
+cargo test                                # the tests (some need the data and ladder caches)
 ```
 
-Game data comes from [repoe-fork](https://github.com/repoe-fork/repoe), which
-exports it from the game files each patch. Set `PONDER_DATA` to keep it
-somewhere else.
+`cargo install --path crates/ponder-cli` and `cargo install --path crates/ponder-app` put
+`ponder` and `ponder-app` on your PATH. Run them from the project directory, or pass
+`ponder-app` that directory: every cache lives under `.cache/` in the working directory.
 
-## Use
+Game data comes from [repoe-fork](https://github.com/repoe-fork/repoe), which exports it
+from the game files each patch. Set `PONDER_DATA` to keep it somewhere else.
 
-Each source can be a pobb.in or pastebin link, a file holding a PoB code or
-XML, or a PoB code pasted directly.
+On Linux the app needs the usual desktop libraries: OpenGL, X11 or Wayland, and
+`libxkbcommon-x11`.
 
-### One command
+## The desktop app
+
+`ponder-app` runs the ladder pipeline in the background (about 5 s from scratch) and lays
+the results out in tiles that you can drag, split, close and reopen from the View menu.
+The layout, filters and run settings are remembered.
+
+- **Crafts**: every costed product, ranked market holes first and then by how many
+  characters wear it. Click any column to sort. ↑/↓ and PgUp/PgDn move through the table,
+  and Ctrl+R runs the pipeline again.
+- **Overview**: run totals, plus a plot of cheapest cost against demand. Click a point to
+  select that craft.
+- **Item**: the selected craft's mods (target, filler, bench), its costs and the expected
+  currency. Buttons price it on trade, find half-done items for sale, cost a recombinator
+  tree, or copy its JSON.
+- **Recipe**: the plan as numbered steps. Each outcome links to the step it leads to.
+- **Fractured bases**, **Products & starts**, **Recombinator**: the alternatives to
+  crafting from scratch.
+- **Finish an item**: paste an item copied in game (Ctrl+C) anywhere in the window to see
+  what it can become and what finishing it costs.
+
+The left panel holds the run settings (how many archetypes, niche combos and clusters to
+cost, the chaos-per-hour charge, recombinators, trade) and the filters (text, gear or
+clusters, base group, minimum demand, maximum cost, has-a-fracture, and more).
+
+## The command line
+
+Every command prints one JSON document on stdout. Progress goes to stderr (`-q` silences
+it), errors come out as `{"error": ...}` with exit code 1, and `--pretty` indents the output.
 
 ```sh
-ponder build.txt                         # = ponder run build.txt
-ponder builds/3.29.txt --fractures       # also cost starting from fractured bases
-ponder builds/3.29.txt --trade           # price items and bases on the trade site
-ponder https://pobb.in/XXXX --json       # the same report as JSON, for scripts and LLMs
-ponder tui builds/3.29.txt               # browse it interactively (also: ponder-tui)
+ponder ladder fetch                          # top characters of every popular skill and class (poe.ninja), cached
+ponder ladder archetypes --group Bow         # mod combinations many characters share = crafting candidates
+ponder ladder tiers --group "Gloves (ES)"    # how often each mod is worn, and how much its tier matters
+ponder ladder prices --group Bow --top 3     # fit what each tier is worth from trade listings
+ponder ladder crafts                         # cost what the ladder wears (gear + clusters), rank market holes
+ponder ladder crafts --trade --recomb        # ... priced on trade, with recombinator trees
+ponder ladder crafts --starts 10 --top 20    # ... and half-done items for sale for the best 10
+ponder ladder finish item.txt                # what an item you have can become, and the recipe from it
+ponder run https://pobb.in/XXXX build.txt    # cost every rare in some builds (--fractures, --trade, --recomb)
+ponder item item.txt                         # read an item and match its mods to mod ids and tiers
+ponder prices show                           # the poe.ninja prices costs use
+ponder data version
 ```
 
-`ponder run` loads every build and turns each rare into a craft: its target
-mods plus the **group of bases that roll exactly the same mods** (same item
-class, same spawn-relevant tags, influences included). Warlock, Sage and
-Sorcerer Gloves are one "Gloves (ES)" craft; most rings are one "Ring". Crafts
-and trade searches always use the group's **best base** (end-game bases first,
-then highest drop level; experimental bases are skipped), since the same mods
-sell for more on it. Jewellery is searched by category, since its bases differ
-only by implicit. The same craft needed by several builds is merged.
+A source for `run` can be a pobb.in or pastebin link, a file holding a PoB code or XML, a
+directory, or a `.txt` file of links (one per line, `#` comments). For example,
+`builds/3.29.txt` is a list of build links. Mobalytics sits behind a Cloudflare bot check,
+so copy the PoB code from that page instead.
 
-**Targets vs filler.** A craft doesn't copy the PoB item mod for mod.
-Resistances (fire, cold, lightning, all, chaos) become *filler*: the item
-needs as many resistances as it had, any of them, at T3 or better (or the
-item's own tier if worse), because buyers want enough res, rarely a
-particular one. Everything else (life, attributes, ES, gem levels...) stays a
-target at its tier or better. This is what makes resistance-guaranteeing
-tools (Harvest fire/cold/lightning reforges, essences, Frigid/Scorched/Metallic
-fossils) and side-only finishing (eldritch currency) worth using. `--exact`
-turns it off and asks for every mod as it is.
+### What the ladder commands do
 
-For each craft it prints the expected cost and the recipe, and:
+`ladder fetch` reads poe.ninja's builds data: the top 10 characters for every main skill
+with at least 40 players, and the top 20 of every ascendancy (about 2,500 characters).
+Their items come with exact mod ids, so nothing is text-matched. Only what crafting reads
+is cached, under `.cache/ladder/<snapshot>`: each character's class, main skill, and rare
+items and jewels by mod id.
 
-- `--fractures`: for every target, and every filler resistance the item uses,
-  the cost of buying a base with that mod already fractured and crafting the
-  rest, against crafting from scratch. The cheapest to finish is marked
-  *suggested* and its recipe is the one shown (e.g. wand: buy fractured +1
-  cold spell gems, spam Shrieking Essence of Misery for cast speed).
-  Fractured bases are real money, so with `--trade` their price is looked up
-  (a fractured-item search for that mod at its minimum tier and the item
-  level the rest needs), each item's two most promising fractures first; once
-  priced, the suggestion is the cheapest total. Gear bases can also be
-  **made**: reroll (chaos, scour+alch, an essence that forces the mod, a
-  fossil combo, Harvest) until the mod lands on an item with few enough mods,
-  then a Fracturing Orb, which needs 4+ mods and picks the wanted one 1 time
-  in k; a miss ruins the base and you start over (`craft.self_fracture`).
-  That also covers essence-only mods no bought base has, and the base column
-  says `make` when it beats buying. Ladder runs cost these for gear too.
-  Jewels are not fractured this way. Items in a build that already have a
-  fractured mod need such a base too; until it is priced their total shows
-  `+base`.
-- `--trade`: the selling price (median of the cheapest asks) and the margin,
-  using whichever is cheaper, scratch or the best fracture. See below for the
-  search budget.
-
-Prices of one divine and up show in divines (`2.4d`), below in chaos. In a
-terminal the trade links are clickable; piped output prints the raw URLs and
-never wraps.
-
-Solving runs in one process per CPU (`--workers N` to change). Most rares
-take well under a second; four-target T1 gear can take a couple.
-
-### The TUI
-
-`ponder tui SOURCES` runs the same pipeline (fractures included) and shows the
-crafts beside the selected one's detail: prefixes and suffixes with tiers,
-costs, fracture options and the recipe. Keys are vim-flavoured (`?` lists
-them): `j/k`, `g/G`, `ctrl+d/u`, `h/l` between tabs, `J/K` scroll the detail,
-`/` search, `f` filter, `s` sort (margin, craft, cheapest, fracture saving,
-builds, hole, demand, recomb saving), `R` cost a recombinator tree, `t` price the selected item on trade, `F` price the two most promising fractured bases
-of every item shown, `S` search trade for half-done items of the selected craft, `o`/`y` open or copy its trade search, `b` other
-builds, `q` quit.
-
-Colour means something: fractured mods gold, bench crafts light blue, essence
-mods magenta, T1 tiers bold yellow, magic and rare the way the game shows
-them, mods already on the item green and blocked ones red, margins green or
-red. It starts in the `ansi-dark` theme (your terminal's own colours); pick
-another with `ctrl+p` and it is remembered in `~/.config/ponder/tui.json`.
-It needs `textual`, which `uv sync` installs; elsewhere `pip install 'ponder[tui]'`.
-
-### Ladder data: what people actually wear
-
-```sh
-ponder ladder fetch                      # top characters of every popular skill and class (poe.ninja), cached
-ponder ladder archetypes --group Bow     # mod combinations many characters share = crafting candidates
-ponder ladder tiers --group "Gloves (ES)"   # how often each mod is worn, and how much its tier matters
-ponder ladder prices --group Bow --top 3    # fit what each tier is worth from trade listings
-ponder ladder crafts                     # cost what the ladder wears (gear + cluster notables), rank market holes
-ponder ladder crafts --trade --recomb    # ... priced on trade, with recombinator trees
-ponder ladder crafts --starts 10         # ... and half-done items for sale for the top 10
-ponder ladder finish item.txt            # what an item you have can become, and the recipe from it
-ponder tui --ladder                      # the same, interactively (R costs a recomb tree, s sorts by hole/demand)
-```
-
-`fetch` reads poe.ninja's builds data: for every main skill with at least 40
-players the top 10 characters, and the top 20 of every ascendancy (about 3,000
-characters). Their items come with exact mod ids, so nothing is text-matched.
-Only what crafting reads is cached, under `.cache/ladder/<snapshot>`: each
-character's class, main skill and rare items and jewels by mod id (about 15 KB
-a character; the full documents with passive trees and PoB exports were ~15x
-that and are converted and deleted on the next read).
-
-- **archetypes**: per base group, the mod combinations shared by the most
-  characters. Mods count by main stat, so a hybrid "%phys / accuracy" merges
-  with plain "%phys" and "%ES / stun recovery" with "%ES" (flat and % ES stay
-  apart); resistances are one token. A combination mostly worn as part of a
-  bigger one (70% of its characters) is folded into it. Each row says which
-  bases it's worn on (for weapons the base matters a lot) and which skills.
-- **tiers**: per base group and mod, the share of ladder items at T1 (and T2
-  or better) and the *lift*: that share over the chance a roll lands there.
-  A big lift means players pay for the tier (T1 life, T1 ES); near 1× means
-  any tier will do.
-- **prices**: for the top archetypes, up to 50 trade listings each with every
-  core mod at T4 or better, then a least-squares fit of log price on which
-  core mods are T1 / T2, the number of resistances and open affixes. The
-  multipliers say what T1 is worth per mod, in this market.
-
+- **archetypes**: the mod combinations shared by the most characters, per base group.
+  - Mods count by main stat, so a hybrid "%phys / accuracy" merges with plain "%phys"
+    (flat and % ES stay apart), and resistances are one token.
+  - A combination worn mostly as part of a bigger one (70% of its characters) is folded
+    into it.
+  - Each archetype lists the bases it's worn on and the skills that wear it.
+- **tiers**: for each base group and mod, the share of ladder items at T1 (and T2 or
+  better), and the *lift*: that share divided by the chance a roll lands there. A big lift
+  means players pay for the tier (T1 life, T1 ES). A lift near 1× means any tier will do.
+- **prices**: for the top archetypes, up to 50 trade listings each, with every core mod at
+  T4 or better. A least-squares fit of log price on which core mods are T1 or T2, the
+  number of resistances and the open affixes gives the multipliers: what T1 is worth per
+  mod, in this market.
 - **crafts**: turns the ladder into crafting candidates and costs them.
-  Gear archetypes become **finished** items, the way their wearers' items
-  are: the archetype's mods plus any other mod at least half of its items
-  carry (`demand.COMPLETE_SHARE`), each at the tier most wearers reach; then
-  each side is filled to the number of useful mods its wearers usually have
-  there, from *filler*: any mod at least 10% of them wear on that item
-  (`demand.FILLER_SHARE`; resistances always count) at the tier 80% of them
-  have or beat. "Useful" means a mod family worn on 5%+ of that base group's
-  items. One open slot is finished at the bench when it offers a filler mod
-  for that side (suffix first: a crafted resistance). So "life + block" on a
-  Shaper armour shield costs as life, block and recover-life-on-block (most
-  wear it) plus filled sides, not as a two-mod item. Picked: the most worn
-  overall (`--gear`), the top few of every base group (`--per-group`, so
-  quivers, claws and shields aren't crowded out by rings) and the most
-  *niche* 3+ mod combos (`--niche`): mods worn together far more often than
-  chance (lift), which marks one build's item (minion rings, Kinetic Blast
-  chaos wands). Cluster jewels are read too (6k on a typical sample): by
-  size, enchant, usual passive count and notable combination (2+ notables
-  on larges, all of them on mediums and smalls), and **passive point**
-  jewels (no notables: Effect plus "also grant" mods, e.g. a 12-passive
-  minion large with 35% Effect and minion speed) by mod combination, each
-  at the tier most wearers have. Every cluster also gets its **fractured
-  base worth**: crafting from a plain base less the cheapest finish from a
-  base with one wanted mod fractured; buy such a base below that and it pays. With `--trade` each gets a
-  selling price and listing count, and `hole = margin × wearers / (listed + 5)`
-  ranks market holes: wanted, thinly supplied, profitable.
-- **the product tree**: the ladder's products overlap. "Life + block" sits
-  under "life + block + recover on block", which sits under the full shield:
-  a product is under another of the same base group (or cluster kind) when
-  every mod it wants is one the other makes at the same tier or better, with
-  fewer wanted mods and no more filler (`pipeline.link_products`). The
-  detail view lists what an item *sells as* (below it) and *leads to*
-  (above it). The tree is how a craft **pivots**: products are solved
-  smallest first, and a bigger craft gets "sell as <smaller product>"
-  actions. Any magic or rare item that passes as one can be sold for 70% of
-  that product's cheapest cost (`pipeline.SALE_SHARE`, less 90 s to list it,
-  and less a new base when the base cost money: a cluster base, a fractured
-  base), and you start over. So bricking a late, expensive step isn't a total
-  loss, and the recipe says when to cash out: `c. 12% sell as Life + Block
-  (+310c) → back to 1`. Values are rough (what the smaller item costs to
-  make, not its trade price); if a sale would pay more than making that item
-  again the solver plans without sales. Ladder runs cost fractures of wanted
-  mods only, not of filler resistances (`ponder SOURCES --fractures` still
-  does both).
-- **finishing a real item**: the solver doesn't care where an item comes
-  from. Its state is just the mods on it, and a plan already knows the
-  expected cost to finish from every state it reaches (`craft.Plan.values`;
-  any other state is solved from where it is, `Problem.begin`). So
-  `ponder ladder finish item.txt` takes an item you dropped or half-crafted
-  (copied in game with Ctrl+C or Ctrl+Alt+C, or PoB text), lists every
-  ladder product of its base group it can become with what finishing costs,
-  what the product is worth and what that saves, and prints the recipe from
-  the item's own state. Crafted mods are ignored (the bench removes them),
-  fractured ones fix the craft, corrupted items and mods it can't read are
-  refused. **Half-done items for sale** work the same way: `--starts N` (or
-  `S` in the TUI) searches trade for rares of a craft's bases carrying any of
-  its wanted mods, finishes each listing from its own mods, and lists the
-  cheapest price + finish totals beside crafting it (`pipeline.find_starts`).
-  On the current ladder a Bone Ring with T1 life, T2 ES and a fire
-  resistance already passes as "ES + life + 1 filler" (a 1c bench craft
-  away, worth 2.8d), and finishes into "life + 3 filler" for 1.6d against
-  2.1d from scratch.
+  - **Finished items.** Gear archetypes become finished items, the way their wearers'
+    items are:
+    - the archetype's mods, plus any other mod at least half of its items carry
+      (`demand::COMPLETE_SHARE`), each at the tier most wearers reach;
+    - then each side is filled to the number of useful mods its wearers usually have
+      there, from *filler*: any mod at least 10% of them wear (`demand::FILLER_SHARE`;
+      resistances always count), at the tier 80% of them have or beat;
+    - one open slot is finished at the bench when the bench offers a filler mod for that
+      side.
+  - **Which archetypes.** The most worn overall (`--gear`), the top few of every base group
+    (`--per-group`), and the most *niche* 3+ mod combos (`--niche`): mods worn together far
+    more often than chance, which marks one build's item.
+  - **Cluster jewels** are costed by size, enchant, usual passive count and notable
+    combination. Passive-point jewels are costed by mod combination.
+  - **Market holes.** With `--trade`, each craft gets a selling price and a listing count,
+    and `hole = margin × wearers / (listed + 5)` ranks the holes: wanted, thinly supplied,
+    profitable.
 
-### Recombinators (`recomb.py`)
+**The product tree.** A product is *under* another of the same base group when every mod
+it wants is one the other makes at the same tier or better, with fewer wanted mods and no
+more filler. For example, "life + block" sits under "life + block + recover on block".
+Products are solved smallest first, and a bigger craft gets "sell as <smaller product>"
+actions: an item that bricks late can be sold for 70% of that product's cheapest cost
+(`SALE_SHARE`), and you start over. The recipe says when to cash out. If a sale would pay
+more than making that item again, the solver plans without sales.
 
-`--recomb` (or `R` in the TUI) costs a recombinator tree for each gear item:
-clean donors (an extra solver constraint: no mods but the wanted ones), then
-recombinations, cheapest first over every split of the wanted mods (a DP over
-subsets, so a 3-4 mod item can come from two smaller recombinations). The
-model:
+**Finishing a real item.** A plan already knows the expected cost to finish from every
+state it reaches, and any other state is solved from where it is. So `ladder finish` takes
+an item you dropped or half-crafted, lists every ladder product of its base group it can
+become, and shows what finishing costs, what the product is worth and what that saves.
+Crafted mods are ignored (the bench removes them), and fractured ones fix the craft.
+**Half-done items for sale** work the same way: `--starts N` searches trade for rares of a
+craft's bases that carry any of its wanted mods, finishes each listing from its own mods,
+and keeps the cheapest totals of price plus finishing.
 
-- the output takes either input's base, 50/50;
-- per side, how many mods the output keeps depends only on that side's pool
-  size across both inputs (`recomb.SIDE_COUNTS`, the poewiki / u/Butsicles
-  table: edit it when a patch changes the odds);
-- kept mods are drawn from the pool *after* removing those that can't roll
-  on the output base. That is **NNN padding**: a partner base's native mods
-  (an evasion donor's "+% Evasion" for an ES target) inflate the pool size,
-  so the output keeps more, without ever displacing a wanted mod;
-- once a mod is picked its mod group is blocked, so a wanted mod on *both*
-  donors (**doubling**) pads the pool too, with no base coin flip;
-- tierless essence mods are exclusive and 3.26 cut the mod count for inputs
-  carrying mods the item can't normally roll, so essence pads are off
-  (`recomb.ESSENCE_PADS`).
+### Targets, filler and bases
 
-Leaves carry 1-2 wanted mods, on the target base or on a partner base with up
-to 2 NNN pads per side (4 mods per donor at most). Only Unpredictable
-Recombination is modelled: Predictable mode's displayed odds have no published
-formula yet. Resistance filler is split into distinct families per slot (fire,
-cold, ...), so two donors never both bring the same resistance. A failure that
-keeps exactly one input's mods on the target base is a clean copy of that input
-and is reused on the next attempt; the plan shows it as "#1 back 24%". Other
-partial outputs are counted as a loss, so real costs are a little lower still.
-`recomb.simulate` checks the closed-form odds by Monte Carlo.
+A craft doesn't copy an item mod for mod.
 
-### Single tools
+- **Resistances are filler.** The item needs as many resistances as it had, any of them,
+  at T3 or better, because buyers want enough res and rarely a particular one. That is what
+  makes resistance-guaranteeing tools (Harvest reforges, essences, fossils) and side-only
+  finishing (eldritch currency) worth using. `run --exact` turns this off.
+- **Everything else stays a target** at its tier or better. Hybrid mods count as their main
+  stat.
+- **Base groups.** Each craft covers the group of bases that roll exactly the same mods:
+  Warlock, Sage and Sorcerer Gloves are one "Gloves (ES)" craft. Crafts and trade searches
+  use the group's best base, since the same mods sell for more on it.
 
-```sh
-ponder items https://pobb.in/XXXX        # every rare, mod by mod
-ponder mine builds/3.29.txt              # mod combos shared across builds
-ponder cluster cost medium "area damage" "Vast Power" "Assert Dominance"
-```
+## How the solver works (`crates/ponder-core`)
 
-A `.txt` file of links (one per line, `#` comments) works anywhere a source
-does; `builds/3.29.txt` is the current list.
+**States.** An item is reduced to a small state:
+- its rarity;
+- whether each target is missing, on the item, or *blocked* (a worse tier or an exclusive
+  mod of the same group is there);
+- how many other mods sit on each side.
 
-`ponder items` output reads like:
+**Policy iteration.** Every currency maps a state to a distribution over states. Policy
+iteration picks, for every state, the action with the lowest expected cost **to finish**,
+and solves those expectations exactly. That is full lookahead, not a greedy rule: it will
+regal into a rare, exalt, or annul whenever that is cheaper over the whole remaining craft.
+`simulate` replays a recipe on real mods, and the tests check that the two agree.
 
-```
-[Helmet] Doom Crown / Hubris Circlet  ilvl 86  (shaper)
-   P T2  natural  IncreasedLife8                   +121 to maximum Life
-   P T2  natural  LocalIncreasedEnergyShieldPercent6 84% increased Energy Shield  F
-   S     crafted  EinharMasterLightningResist2     +23% to Lightning Resistance
-```
+**Actions** are built from the repoe data and costed in poe.ninja prices:
+- transmute, alteration, augmentation, regal, exalted, annulment, alchemy, chaos, and
+  scour + alchemy / transmute;
+- Harvest "reforge with a <tag> modifier";
+- Shrieking and Deafening essences;
+- fossil rerolls of 1-4 fossils in a resonator, with the best combo per subset of wanted
+  mods kept;
+- metamods ("Prefixes/Suffixes Cannot Be Changed" with a scour or a reroll);
+- eldritch exalts and annulments on armour pieces without influence;
+- bench crafts as the last step;
+- self-made fractured bases: reroll until the mod lands with few enough mods, then use a
+  Fracturing Orb.
 
-`P`/`S` is prefix/suffix, `T1` is the best tier that can roll on that base,
-`F` marks a fractured mod, `+` marks two mods the game summed into one line
-(e.g. a hybrid %ES prefix plus a plain %ES prefix) and `~N` means N other mods
-fit the line equally well. Sources:
+**Time is charged.** Clicking time is charged at `PONDER_CHAOS_PER_HOUR` (default 1500;
+set it in the environment or `.env`, and 0 turns it off), so plans don't call for ten
+thousand alterations on a long shot.
 
-- `natural`: can roll on this base, with these influences
-- `essence`: only from essences
-- `veiled` / `delve`: unveiled mods and fossil-only mods
-- `special`: a real mod that can't roll naturally here (wrong influence,
-  incursion, cluster notables...)
-- `crafted` / `legacy-crafted`: bench craft, current or no longer offered
+**Plan cache.** Solved plans are cached in `.cache/plans-rs`, keyed by the problem and by
+the prices its actions use (to 3 significant figures).
 
-Each item also lists the PoB item sets that use it (guide authors often name
-them by stage: "Early game", "Mid game", "Endgame"). Lines no mod has, usually
-the author's own notes inside an item, are printed with `#`; lines that look
-like a mod but fit no roll range are printed with `?`.
-
-`ponder mine` counts mod families (all tiers of a mod) per item class and
-lists the combinations shared by the most builds. A combo is hidden when a
-larger one is shared by exactly the same builds.
-
-## Crafting costs
-
-```sh
-ponder prices fetch                      # current league prices from poe.ninja
-ponder cluster cost large "cold damage" "Prismatic Heart" "Widespread Destruction" "Blast-Freeze"
-ponder cluster cost large "cold damage" ... --fractured "Prismatic Heart"   # start from a fractured base
-ponder cluster cost large "minion damage" HaveIncreasedEffect@1 GrantMinionAttackAndCastSpeed@1   # passive point jewel
-ponder craft https://pobb.in/XXXX --slot Helmet --settle 1                 # any rare in a build
-```
-
-Each prints the expected cost, the expected currency used, and the recipe
-as numbered steps (`craft.steps`): situations with the same rarity and the
-same targets on the item form one step, which says what to spam (and what to
-use instead in its rarer situations), then lists each outcome with its chance
-and the step it leads to, or *back to* an earlier one when a target is lost:
-
-```
- 2. magic, nothing yet: spam alt ~30×; if 1 other suffix: spam aug ~8.7×
-      a.  50% got +(39-49) to maximum Energy Shield (T1)  → 4
-      b.  50% got (92-100)% increased Energy Shield (T1)  → 3
- 5. rare with (92-100)% increased Energy Shield (T1): eldritch exalt (prefix); if 2 other prefix + 1 other suffix: scour+transmute
-      a.  95% scour+transmute: lost (92-100)% increased Energy Shield (T1)  → back to 2
-      b.   2% got +(39-49) to maximum Energy Shield (T1)  → 7
-```
-
-A self-made fractured base is step 0. The per-state table (`craft.recipe`,
-the share of all actions each situation takes) is still in the JSON. `cluster cost`
-also prints the poe.ninja base price, a trade-site search link, and with
-`--trade` the market price and margin.
-
-### How the solver works (`craft.py`)
-
-An item is reduced to a small state: its rarity, whether each target mod is
-missing / on the item / *blocked* (a worse tier or an exclusive mod of the
-same group is there), and how many other mods sit on each side. Every
-currency maps a state to a distribution over states. Policy iteration then
-picks, for every state, the action with the lowest expected cost **to
-finish**, solving those expectations exactly. That is full lookahead, not a
-greedy rule: it will regal into a rare, or exalt, or annul, whenever that is
-cheaper over the whole remaining craft. `craft.simulate` replays a recipe on
-real mods with exact group exclusion; the tests check the two agree.
-
-Actions, built from repoe data and costed in poe.ninja prices:
-
-- transmute, alteration, augmentation, regal, exalted, annulment
-- alchemy, chaos, scour + alchemy, scour + transmute
-- Harvest "reforge with a <tag> modifier" for every tag the pool has
-- essences (Shrieking and Deafening) for the item class, with a scour on rares
-- fossil rerolls of 1-4 fossils in the matching chaotic resonator (gear
-  only). All 3,000-odd combinations are scored at once in numpy (a hit
-  chance per wanted mod from its weight share on its side); for every
-  subset of the wanted mods the combo with the lowest price per hit is kept,
-  and the solver values those ~10 exactly (`actions.fossil_combos`). Fossils
-  multiply per tag, and fossils in one resonator multiply together. At
-  current prices they pay on tag-skewed crafts (+1 gem wands, curse bodies,
-  crit-multi jewels: 14-94% cheaper than single fossils on 10 of 338 ladder
-  items) and lose to alt/alch spam on most others
-- metamods: "Prefixes/Suffixes Cannot Be Changed", then either scour (keeps
-  one side, clears the other) or a reroll of the other side: chaos, or a
-  Harvest reforge whose tag can hit a wanted mod there (gear only; the
-  metamod needs a free slot on the side it takes, and holds it during the
-  reroll)
-- eldritch currency on helmets, body armours, gloves and boots without
-  influence: Eldritch Exalted Orb adds a prefix or a suffix only, Eldritch
-  Orb of Annulment removes one from one side only (the implicits that pick
-  the side are cheap and not counted)
-
-Crafted mods on a PoB item that the bench still offers become the last step:
-the plan must finish with a free slot on that side, and the bench cost (plus
-"Can have up to 3 Crafted Modifiers" when there are two) is added on top.
-
-Item level filters the mod pool. When a PoB item has no item level, it is
-raised from 84 to whatever its mods need (T1 life or movement speed need 86).
-Fractured mods (`--fractured`, or read from a PoB item) stay through every
-reroll and can't be annulled. Actions with no price are left out rather than
-counted as free.
-
-Solved plans are cached in `.cache/plans`, keyed by the problem and the
-prices its actions use (to 3 significant figures), so reruns, the TUI and
-recombinator donors shared between items don't solve twice.
-
-Not modelled yet: bench crafts used mid-craft (e.g. to block a mod group
-before an exalt), "Cannot roll Attack/Caster Modifiers", fossils that add mods (Glyphic,
-Tangled, Hollow, Sanctified...),
-Eldritch Chaos Orbs and eldritch implicits as targets, influence orbs,
-Awakener, veiled mods, and Harvest's newer crafts (recombinators: see below). `ponder craft` lists the mods on an item it doesn't
-try to make (veiled, legacy-crafted and special mods).
+**Recombinators** (`crates/ponder/src/recomb.rs`): clean donors, then recombinations,
+cheapest first over every split of the wanted mods.
+- The output takes either input's base, 50/50.
+- Per side, how many mods the output keeps depends only on that side's pool size
+  (`recomb::SIDE_COUNTS`; edit it when a patch changes the odds).
+- Kept mods are drawn after the mods that can't roll on the output base are removed. That
+  is NNN padding.
 
 ### Assumptions not in the game data
 
-The solver (`craft.py`) itself only knows game mechanics, the two sampled
-roll counts below, and the clicking-time charge. Everything that decides
-*what* to craft is an input made elsewhere and can be swapped for your own:
-which mods a product wants and how much filler it needs (`demand.py`: the
-`*_SHARE` constants, `MAX_KEYS`), what a brick sells for (`pipeline.SALE_SHARE`,
-`MIN_SALE`), resistances as interchangeable filler (`gear.FILLER_*`). A
-`craft.Problem` built by hand (targets, pool, actions) solves the same way.
+The constants below are kept so they're easy to correct. Everything that decides *what* to
+craft is an input that you can swap for your own:
 
-Kept as constants so they're easy to correct:
+| What | Default | Where |
+|---|---|---|
+| Which mods a product wants | the `*_SHARE` constants and `MAX_KEYS` | `demand` |
+| What a brick sells for | 70% (`SALE_SHARE`), at least `MIN_SALE` | `pipeline` |
+| Resistances as filler | T3 or better | `gear::FILLER_FAMILIES`, `FILLER_TIER` |
+| Magic items: 1 or 2 mods | equal chance | `MAGIC_TWO_MOD_CHANCE` |
+| Rare gear: 4 / 5 / 6 mods | 9:3:1 | `RARE_MOD_COUNTS_GEAR` |
+| Harvest costs for tags without a lifeforce source | priced at the dearest lifeforce | `actions::HARVEST` |
+| Clicking time per action | — | `ponder_core::SECONDS` |
+| Recombinator odds by pool size | — | `recomb::SIDE_COUNTS` |
 
-- magic items roll 1 or 2 mods with equal chance (`craft.MAGIC_TWO_MOD_CHANCE`)
-- rare mod counts: gear 4/5/6 at 9:3:1 (a 1,000-chaos sample), jewels 3/4 at
-  3:1 (`craft.RARE_MOD_COUNTS`)
-- jewels hold 2 prefixes and 2 suffixes; clusters hold 1 / 2 / 3 notables
-- filler: resistances at T3 or better (`gear.FILLER_FAMILIES`, `gear.FILLER_TIER`)
-- a side-locked reroll rolls the usual number of mods in total, the kept
-  ones and the metamod included
-- Harvest reforge costs: fire, cold and lightning are sourced; the other tags
-  are guesses priced at the dearest lifeforce (`actions.HARVEST`)
-- clicking time is charged at `PONDER_CHAOS_PER_HOUR` (default 1500, set it in
-  the environment or `.env`; 0 turns it off): about 1 s per alteration or
-  augment, 2 s per regal, exalt, annul, chaos or essence (+1 s with a scour),
-  2 s + 2 s per fossil for a resonator, 2 s per Harvest reforge (one click), 5 s more for
-  a bench metamod, 15 s per recombination (`craft.SECONDS` and friends). The
-  solver minimises currency plus time, so it stops planning ten thousand
-  alterations for a long shot; plans show the hours and what they were charged
-- recombinator odds by pool size (`recomb.SIDE_COUNTS`), a 50/50 base, NNN
-  mods counted then dropped; failed attempts are worth nothing
+## Prices and the trade site
 
-### Prices and the trade site
+`ponder prices fetch` caches currency, essence, fossil, resonator and cluster base prices
+under `.cache/ninja`.
 
-`ponder prices fetch` caches currency, essence, fossil, resonator and cluster
-base prices under `.cache/ninja`; without it a built-in snapshot is used.
-
-The trade API (the one Awakened PoE Trade uses) wants your pathofexile.com
-session cookie: put `POESESSID=...` in a `.env` in the directory you run
-ponder from (it is git-ignored), or export it. It is a login token, so keep it
-out of anything you share. A 403 with a valid cookie means the site is
-blocking the network; the printed search links always work in a browser.
+The trade API wants your pathofexile.com session cookie. Put `POESESSID=...` in a `.env`
+in the project directory (it is git-ignored), or export it. It is a login token, so keep it
+out of anything you share; ponder never prints it. A 403 with a valid cookie means the site
+is blocking the network, and the printed search links still work in a browser.
 
 The API allows only a few dozen searches per five minutes, so:
-
 - every call waits as long as the API's own rate-limit headers say it must;
-- answers are cached in `.cache/trade` for an hour (`PONDER_TRADE_TTL`
-  seconds), in the currency they were listed in, so reruns are free and pick
-  up a new divine price;
-- `--trade-budget N` (default 40) caps the searches one run sends: finished
-  items first in priority order, then fractured bases.
+- answers are cached in `.cache/trade` for an hour (`PONDER_TRADE_TTL` seconds);
+- `--trade-budget N` (default 40) caps the searches one run sends: finished items first,
+  in priority order, then fractured bases.
 
 ## Layout
 
-The library has no UI code, so scripts and LLM tools can call it directly
-(`pipeline.run(sources)` returns a `Report`; `Report.to_dict()` is JSON).
-`render.py` turns results into rich renderables, and `cli.py` and `tui.py`
-are thin front ends over both.
-
 ```
-src/ponder/
-  pipeline.py the whole run: builds -> priced crafting estimates (library API)
-  render.py rich tables and recipe panels shared by the CLI and TUI
-  cli.py    `ponder` command line
-  tui.py    `ponder tui` / `ponder-tui` (textual)
-  pob.py    decode PoB codes, fetch share links, list items and slots
-  item.py   parse PoB item text (header, influences, markers, variants)
-  data.py   download and load repoe-fork JSON
-  mods.py   match lines to mod ids, tiers and sources
-  mine.py   rank shared mod combinations
-  craft.py  crafting states, policy iteration, simulation
-  actions.py currencies, Harvest, essences, fossils, bench and metamods
-  cluster.py cluster jewel enchants, mod pools, costs
-  gear.py   targets from a PoB rare (tiers, fractures, essence and bench mods), base groups
-  prices.py poe.ninja prices
-  trade.py  trade-site queries, listings, rate limits, cache
-  ladder.py poe.ninja ladder characters (protobuf search, NDIC dictionaries, item mod ids)
-  demand.py tier demand, gear archetypes (lift / niche) and cluster notable combos from ladder items
-  recomb.py recombinator odds, NNN padding, donor trees
-  pricing.py tier price multipliers fitted on trade listings
-  cli.py    the `ponder` command
-builds/     lists of build links per league
-tests/      unit tests; the mod tests run once data is fetched
-tests/fixtures/real/  real PoB exports used as regression tests
+crates/
+  ponder-core/  the solver: lumped item states, currency outcomes, policy iteration, recipes (no I/O)
+  ponder-game/  repoe game data, item text and PoB parsing, matching mod lines to mod ids
+  ponder-net/   poe.ninja ladder and prices, the trade site, share links, .env; every call cached
+  ponder/       the library: actions, gear and cluster problems, demand, recombinators, the pipeline
+  ponder-cli/   `ponder`: JSON command line
+  ponder-app/   `ponder-app`: egui desktop app
+goldens/        frozen reference answers the tests compare against (see goldens/README.md)
+fixtures/       PoB exports and builds used by the tests
+builds/         lists of build links
+docs/           design notes
 ```
 
-## Build sources
-
-pobb.in and pastebin links are fetched directly. Mobalytics sits behind a
-Cloudflare bot check, so copy the PoB code from the page instead.
-
-## Known gaps
-
-- A summed line is only split when it is a hybrid plus a single mod; two
-  single mods summed (e.g. natural plus crafted fire res) stay unmatched.
-- Mining groups by exact mod family, so `+1 to Level of all Fire Skill Gems`
-  and `... Lightning Skill Gems` count separately. Grouping by what a build
-  actually treats as interchangeable comes later.
+The library has no UI code. `ponder::pipeline::ladder` returns a `LadderReport`, and
+`pipeline::run` returns a `Report`. Their `to_dict()` is the JSON the CLI prints.
