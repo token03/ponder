@@ -142,6 +142,16 @@ pub struct Donor {
     pub plan: Option<Arc<Plan>>,
     pub error: Option<String>,
     pub on_target: bool,
+    /// Carries NNN pads: its problem is built only when a padded tree could pay
+    /// ([`Planner::prepare_padded`]).
+    pub padded: bool,
+    /// A padded donor's goal until its problem is built.
+    pub goal: Option<gear::ComponentGoal>,
+    /// Before it is solved, a padded donor costs at least its dearest mod alone, unpadded, on
+    /// the same base (a superset goal under the same actions costs no less).
+    pub lower: Option<f64>,
+    /// Those unpadded single-mod donors (indices into the planner's donors).
+    pub singles: Vec<usize>,
 }
 
 impl Donor {
@@ -155,6 +165,10 @@ impl Donor {
             plan: None,
             error: None,
             on_target: true,
+            padded: false,
+            goal: None,
+            lower: None,
+            singles: Vec::new(),
         }
     }
 
@@ -173,12 +187,16 @@ impl Donor {
 
     /// What a finished tree keeps of this donor.
     pub fn leaf(&self) -> Leaf {
+        self.leaf_costing(self.cost())
+    }
+
+    fn leaf_costing(&self, cost: Option<f64>) -> Leaf {
         Leaf {
             base: self.base.clone(),
             base_id: self.base_id.clone(),
             carries: self.carries.clone(),
             padding: self.padding.clone(),
-            cost: self.cost(),
+            cost,
             on_target: self.on_target,
             problem: self.problem.clone(),
             plan: self.plan.clone(),
@@ -574,6 +592,8 @@ pub struct Planner {
     /// carried names -> donors (indices into `donors`), in creation order
     leaf_keys: IndexMap<BTreeSet<String>, Vec<usize>>,
     keys: HashMap<LeafKey, usize>,
+    /// (base id, wanted name) -> the unpadded donor carrying just that mod there
+    singles: HashMap<(String, String), usize>,
     pools: HashMap<String, Arc<BTreeSet<String>>>,
     filler: BTreeSet<String>,
 }
@@ -610,6 +630,7 @@ impl Planner {
             donors: Vec::new(),
             leaf_keys: IndexMap::new(),
             keys: HashMap::new(),
+            singles: HashMap::new(),
             pools: HashMap::new(),
             filler: problem.filler.clone(),
         };
@@ -632,6 +653,7 @@ impl Planner {
             donors: Vec::new(),
             leaf_keys: IndexMap::new(),
             keys: HashMap::new(),
+            singles: HashMap::new(),
             pools: HashMap::new(),
             filler: BTreeSet::new(),
         };
@@ -718,7 +740,8 @@ impl Planner {
                                 .filter(|(_, n)| *n > 0)
                                 .map(|(&s, n)| (s, bins(db, &free(&nnn[s.index()], &carried), n)))
                                 .collect();
-                            if !pads.is_empty() {
+                            // Unpadded single mods on a partner bound its padded donors from below.
+                            if !pads.is_empty() || size == 1 {
                                 opts.push(self.donor(db, bid, &carried, &pads, false, pricing));
                             }
                         }
@@ -790,20 +813,31 @@ impl Planner {
         let fillers = carried.iter().filter(|w| w.target.is_none()).count();
         let filler = if fillers > 0 { self.filler.intersection(&pool).cloned().collect() } else { BTreeSet::new() };
         let goal = gear::ComponentGoal { targets, filler, filler_need: fillers };
-        let problem = gear::component_problem_on(db, bid, goal, item_level, &BTreeSet::new(), pricing);
+        let padded = !pads.is_empty();
+        let singles = if padded { carried.iter().filter_map(|w| self.singles.get(&(bid.to_string(), w.name.clone())).copied()).collect() } else { Vec::new() };
+        let (problem, goal) =
+            if padded { (None, Some(goal)) } else { (Some(gear::component_problem_on(db, bid, goal, item_level, &BTreeSet::new(), pricing)), None) };
         let donor = Donor {
             base: db.bases[bid].name.clone(),
             base_id: bid.to_string(),
             carries: carried.iter().map(|w| w.name.clone()).collect(),
             padding,
-            problem: Some(problem),
+            problem,
             plan: None,
             error: None,
             on_target,
+            padded,
+            goal,
+            lower: None,
+            singles,
         };
         self.donors.push(donor);
-        self.keys.insert(key, self.donors.len() - 1);
-        Some(self.donors.len() - 1)
+        let index = self.donors.len() - 1;
+        self.keys.insert(key, index);
+        if !padded && carried.len() == 1 {
+            self.singles.insert((bid.to_string(), carried[0].name.clone()), index);
+        }
+        Some(index)
     }
 
     /// (new wanted mods, pads) on `side` for the second input; its doubled mods count as pads.
@@ -832,8 +866,50 @@ impl Planner {
         s
     }
 
+    /// Build the problems of the padded donors (their goals were kept until a padded tree could pay).
+    pub fn prepare_padded(&mut self, db: &ModDB, pricing: Pricing) {
+        let item_level = self.item_level;
+        for donor in self.donors.iter_mut().filter(|d| d.problem.is_none()) {
+            if let Some(goal) = donor.goal.take() {
+                donor.problem = Some(gear::component_problem_on(db, &donor.base_id, goal, item_level, &BTreeSet::new(), pricing));
+            }
+        }
+    }
+
+    /// Whether some padded donor is still unbuilt.
+    pub fn has_pending_padded(&self) -> bool {
+        self.donors.iter().any(|d| d.goal.is_some())
+    }
+
+    /// Set each unsolved padded donor's lower bound from its solved single-mod donors.
+    pub fn bound_padded(&mut self) {
+        let lower: Vec<Option<f64>> = self
+            .donors
+            .iter()
+            .map(|d| {
+                if !d.padded || d.plan.is_some() || d.singles.len() != d.carries.len() {
+                    return None;
+                }
+                d.singles.iter().map(|&i| self.donors[i].plan.as_ref().map_or(f64::INFINITY, |p| p.bounds.lower)).reduce(f64::max)
+            })
+            .collect();
+        for (donor, lower) in self.donors.iter_mut().zip(lower) {
+            donor.lower = lower;
+        }
+    }
+
+    /// The cheapest tree for every set, with unsolved padded donors at their lower bounds: no
+    /// tree using those donors can cost less once they are solved.
+    pub fn optimistic_by_set(&self) -> BTreeMap<BTreeSet<String>, Arc<Step>> {
+        self.best_by_set_costing(&|d: &Donor| d.cost().or(if d.padded { Some(d.lower.unwrap_or(0.0)) } else { None }))
+    }
+
     /// The cheapest tree for every set of 2+ wanted mods it can make, once the leaves are solved.
     pub fn best_by_set(&self) -> BTreeMap<BTreeSet<String>, Arc<Step>> {
+        self.best_by_set_costing(&|d: &Donor| d.cost())
+    }
+
+    fn best_by_set_costing(&self, cost: &dyn Fn(&Donor) -> Option<f64>) -> BTreeMap<BTreeSet<String>, Arc<Step>> {
         if !self.ok {
             return BTreeMap::new();
         }
@@ -845,7 +921,10 @@ impl Planner {
             .map(|(k, v)| {
                 (
                     k.clone(),
-                    v.iter().map(|&i| &self.donors[i]).filter(|d| d.cost().is_some()).map(|d| Node::Donor(Arc::new(d.leaf()))).collect(),
+                    v.iter()
+                        .map(|&i| &self.donors[i])
+                        .filter_map(|d| cost(d).filter(|c| c.is_finite()).map(|c| Node::Donor(Arc::new(d.leaf_costing(Some(c))))))
+                        .collect(),
                 )
             })
             .collect();

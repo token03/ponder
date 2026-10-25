@@ -37,6 +37,8 @@ pub struct Context {
     pub http: Arc<dyn Transport>,
     /// Solved plans, by problem.
     pub plans: PlanCache,
+    /// Plans solved in this process, shared between products (donors, preparation stages).
+    pub solves: super::solving::SharedSolves,
     resale_quotes: RwLock<std::collections::BTreeMap<String, super::resale::ResaleQuote>>,
     clusters: OnceLock<Vec<Value>>,
 }
@@ -52,6 +54,7 @@ impl Context {
             ladder,
             http,
             plans: PlanCache::default(),
+            solves: Default::default(),
             resale_quotes: RwLock::new(quotes),
             clusters: OnceLock::new(),
         }

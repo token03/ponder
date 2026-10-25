@@ -88,16 +88,9 @@ impl Planner {
                 &influences,
                 pricing,
             );
-            Some(Donor {
-                base: db.bases[base_id].name.clone(),
-                base_id: base_id.into(),
-                carries: vec![target.name],
-                padding: Default::default(),
-                problem: Some(p),
-                plan: None,
-                error: None,
-                on_target: true,
-            })
+            let mut donor = Donor::new(&db.bases[base_id].name, base_id, &[&target.name]);
+            donor.problem = Some(p);
+            Some(donor)
         };
         for i in 0..problem.targets.len() {
             for j in i + 1..problem.targets.len() {

@@ -1,18 +1,19 @@
 //! Recombinator trees for gear estimates.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use ponder_core::Prices;
 use ponder_game::mods::ModDB;
 use rayon::prelude::*;
 
 use super::context::{Context, Progress};
-use super::solving::{SolveSlot, continuation, solve_slots};
+use super::solving::continuation;
 use super::types::{Estimate, RecombInfo};
 use crate::gear::Pricing;
-use crate::recomb::Planner;
+use crate::recomb::{Planner, Step};
 
-/// Cost a recombinator tree for every gear estimate that has 2+ wanted mods.
-///
-/// All their leaf donors are solved in one parallel batch (and plan-cached).
+/// Price the donor routes (protected, recombinator, Awakener) of every gear estimate.
 pub fn add_recombs(
     cx: &Context,
     db: &ModDB,
@@ -33,136 +34,147 @@ pub fn add_recombs_in_league(
     workers: Option<usize>,
     progress: Option<Progress>,
 ) {
-    let pricing = Pricing::new(table, &cx.settings);
     if let Some(p) = progress {
-        p("pricing protected finishing recipes");
+        p("pricing protected, recombinator and Awakener recipes");
     }
-    super::protected::add_protected_routes(cx, estimates, table, workers);
-    if let Some(p) = progress {
-        p("preparing crafting donors");
-    }
-    let mut planners: Vec<(usize, Planner)> = estimates
-        .par_iter()
-        .enumerate()
-        .filter_map(|(i, e)| {
-            let problem = e.problem.as_ref()?;
-            if e.kind != "gear" {
-                return None;
-            }
-            let bid = db.find_base(&e.base)?;
-            let planner = Planner::new(db, problem, bid, e.item_level, pricing);
-            planner.ok.then_some((i, planner))
-        })
-        .collect();
-    let mut awakeners: Vec<_> = estimates
-        .par_iter()
-        .enumerate()
-        .filter_map(|(i, e)| {
-            let problem = e.problem.as_ref()?;
-            if e.kind != "gear" || problem.influences.len() != 2 {
-                return None;
-            }
-            let bid = db.find_base(&e.base)?;
-            let planner = crate::awakener::Planner::new(db, problem, bid, e.item_level, pricing);
-            (!planner.pairs.is_empty()).then_some((i, planner))
-        })
-        .collect();
-    let items = planners.len();
-    let mut donors: Vec<_> = planners.iter_mut().flat_map(|(_, p)| p.leaves_mut()).collect();
-    donors.extend(awakeners.iter_mut().flat_map(|(_, p)| p.leaves_mut()));
-    if let Some(p) = progress {
-        p(&format!("crafting donors: {} for {} items", donors.len(), items));
-    }
-    solve_donor_plans(cx, donors, table, workers, progress);
-    if let Some(progress) = progress {
-        progress("pricing donor finishing recipes");
-    }
-    let recombine = |(i, planner): &(usize, Planner)| (*i, best_part(planner, &estimates[*i], cx, league, table));
-    let recipes: Vec<_> =
-        if workers == Some(1) { planners.iter().map(recombine).collect() } else { planners.par_iter().map(recombine).collect() };
-    for (i, recipe) in recipes {
-        estimates[i].recomb = recipe;
-    }
-    let awaken = |(i, planner): &(usize, crate::awakener::Planner)| {
-        let e = &estimates[*i];
-        let mut recipe = None;
-        if let Some(problem) = &e.problem {
-            recipe = planner.best(problem, pricing, |pair, mut recovery| {
-                let preserved =
-                    ponder_core::Preservation { targets: pair.targets.iter().fold(0, |mask, &i| mask | 1 << i), filler: [0; 2] };
-                let baseline = super::solving::acquired_continuation(
-                    cx,
-                    problem,
-                    pair.outcomes.clone(),
-                    preserved,
-                    recovery.clone(),
-                    e.plan.as_ref(),
-                    table,
-                )
-                .ok()?;
-                let thresholds = super::resale::thresholds(problem, &baseline, &recovery, preserved, recovery.cost);
-                let Some(quote) = cx.resale_quote(problem, preserved) else { return Some((baseline, thresholds, None)) };
-                let (cost, hours, usage) = (recovery.cost, recovery.hours, recovery.usage.clone());
-                quote.apply(&mut recovery, cost, hours, usage, cx.settings.chaos_per_hour);
-                match super::solving::acquired_continuation(cx, problem, pair.outcomes.clone(), preserved, recovery, e.plan.as_ref(), table)
-                {
-                    Ok(plan) => Some((plan, thresholds, None)),
-                    Err(error) => Some((baseline, thresholds, Some(error.to_string()))),
-                }
-            });
-            if let Some(recipe) = &mut recipe {
-                for donor in &mut recipe.donors {
-                    donor.query = super::donors::donor_query_influenced(
-                        cx,
-                        &donor.base,
-                        std::slice::from_ref(&donor.modifiers),
-                        Some(e.item_level),
-                        1,
-                        1,
-                        &std::collections::BTreeSet::from([donor.influence.clone()]),
-                    );
-                    donor.trade_url = donor.query.as_ref().map(|q| ponder_net::trade::search_url(league, q));
-                }
-            }
-        }
-        (*i, recipe)
-    };
-    let recipes: Vec<_> =
-        if workers == Some(1) { awakeners.iter().map(awaken).collect() } else { awakeners.par_iter().map(awaken).collect() };
-    for (i, recipe) in recipes {
-        estimates[i].awakener = recipe;
+    let run = |e: &mut Estimate| price_donor_routes(cx, db, e, table, league);
+    if workers == Some(1) {
+        estimates.iter_mut().for_each(run);
+    } else {
+        estimates.par_iter_mut().for_each(run);
     }
 }
 
-fn solve_donor_plans(
-    cx: &Context,
-    donors: Vec<&mut crate::recomb::Donor>,
-    table: &Prices,
-    workers: Option<usize>,
-    progress: Option<Progress>,
-) {
-    type Work = (Option<ponder_core::Problem>, Option<ponder_core::Plan>, Option<String>);
-    let mut unique: indexmap::IndexMap<blake3::Hash, Work> = indexmap::IndexMap::new();
-    let keys: Vec<_> = donors
-        .iter()
-        .map(|d| {
-            d.problem.as_ref().map(|problem| {
-                let key = problem.fingerprint();
-                unique.entry(key).or_insert_with(|| (Some(problem.clone()), None, None));
-                key
-            })
-        })
-        .collect();
-    let slots = unique.values_mut().map(|(problem, plan, error)| SolveSlot { problem, plan, error }).collect();
-    solve_slots(cx, slots, table, workers, progress);
-    let results: std::collections::HashMap<_, _> =
-        unique.into_iter().map(|(key, (_, plan, error))| (key, (plan.map(std::sync::Arc::new), error))).collect();
-    for (donor, key) in donors.into_iter().zip(keys) {
-        if let Some(result) = key.and_then(|key| results.get(&key)) {
-            donor.plan = result.0.clone();
-            donor.error = result.1.clone();
+/// The routes that start from prepared components, for one estimate: a protected side, a
+/// recombinator tree and an Awakener pair. Each is priced once; reset a field to price it again.
+pub fn price_donor_routes(cx: &Context, db: &ModDB, e: &mut Estimate, table: &Prices, league: &str) {
+    if e.kind != "gear" || e.problem.is_none() {
+        return;
+    }
+    if e.protected.is_none() {
+        e.protected = super::protected::protected_recipe(cx, e, table);
+    }
+    if e.recomb.is_none() {
+        e.recomb = recomb_route(cx, db, e, table, league);
+    }
+    if e.awakener.is_none() {
+        e.awakener = awakener_route(cx, db, e, table, league);
+    }
+}
+
+/// Solve donors through the shared solves (products that share a donor solve it once).
+fn solve_donors<'a>(cx: &Context, donors: impl Iterator<Item = &'a mut crate::recomb::Donor>, table: &Prices) {
+    let mut todo: Vec<_> = donors.filter(|d| d.problem.is_some() && d.plan.is_none() && d.error.is_none()).collect();
+    todo.par_iter_mut().for_each(|d| match cx.solves.solve(cx, d.problem.as_ref().expect("filtered"), table) {
+        Ok(plan) => d.plan = Some(plan),
+        Err(error) => d.error = Some(error),
+    });
+}
+
+/// The cheapest recombinator recipe. Unpadded donors are solved first; the NNN-padded ones
+/// (most of the donor work) only when a tree using them at their lower bounds could beat
+/// both the unpadded trees and the item's other routes.
+fn recomb_route(cx: &Context, db: &ModDB, e: &Estimate, table: &Prices, league: &str) -> Option<RecombInfo> {
+    let problem = e.problem.as_ref()?;
+    let bid = db.find_base(&e.base)?;
+    let pricing = Pricing::new(table, &cx.settings);
+    let mut planner = Planner::new(db, problem, bid, e.item_level, pricing);
+    if !planner.ok {
+        return None;
+    }
+    solve_donors(cx, planner.leaves_mut().into_iter(), table);
+    if planner.has_pending_padded() {
+        planner.bound_padded();
+        let finishing = Finishing::new(e);
+        let solved = finishing.cheapest(&planner, &planner.best_by_set());
+        let optimistic = finishing.cheapest(&planner, &planner.optimistic_by_set());
+        let incumbent = [e.cheapest().map(|c| c - e.bench_cost()), solved].into_iter().flatten().reduce(f64::min);
+        let worth_it = optimistic.is_some_and(|lower| incumbent.is_none_or(|best| lower < best));
+        if worth_it {
+            planner.prepare_padded(db, pricing);
+            solve_donors(cx, planner.leaves_mut().into_iter(), table);
         }
     }
+    best_part(&planner, e, cx, league, table)
+}
+
+/// What finishing costs from each item a tree can hand over, as far as the estimate's own
+/// plans know it (for comparing trees before choosing one; `best_part` prices the choice).
+struct Finishing<'a> {
+    problem: &'a ponder_core::Problem,
+    plans: Vec<&'a ponder_core::Plan>,
+}
+
+impl<'a> Finishing<'a> {
+    fn new(e: &'a Estimate) -> Finishing<'a> {
+        let plans = e.plan.iter().chain(e.protected.as_ref().map(|p| p.finishing.as_ref())).collect();
+        Finishing { problem: e.problem.as_ref().expect("a gear problem"), plans }
+    }
+
+    /// The cheapest tree plus finish over every set; a set no plan finishes counts as free to
+    /// finish, so with optimistic trees this stays a lower bound.
+    fn cheapest(&self, planner: &Planner, by_set: &BTreeMap<BTreeSet<String>, Arc<Step>>) -> Option<f64> {
+        by_set
+            .iter()
+            .filter_map(|(set, step)| {
+                let state = planner.state_after(self.problem, set);
+                let finish = if self.problem.done(&state) {
+                    0.0
+                } else {
+                    self.plans.iter().filter_map(|p| p.to_finish(self.problem, &state)).reduce(f64::min).unwrap_or(0.0)
+                };
+                Some(step.cost? + finish)
+            })
+            .reduce(f64::min)
+    }
+}
+
+/// The cheapest Awakener recipe; a pair whose two donors and orb already cost more than the
+/// item's best route skips its finishing solve.
+fn awakener_route(cx: &Context, db: &ModDB, e: &Estimate, table: &Prices, league: &str) -> Option<crate::awakener::Recipe> {
+    let problem = e.problem.as_ref()?;
+    if problem.influences.len() != 2 {
+        return None;
+    }
+    let bid = db.find_base(&e.base)?;
+    let pricing = Pricing::new(table, &cx.settings);
+    let mut planner = crate::awakener::Planner::new(db, problem, bid, e.item_level, pricing);
+    if planner.pairs.is_empty() {
+        return None;
+    }
+    solve_donors(cx, planner.leaves_mut(), table);
+    let incumbent = e.cheapest().map(|c| c - e.bench_cost());
+    let mut recipe = planner.best(problem, pricing, |pair, mut recovery| {
+        let preserved = ponder_core::Preservation { targets: pair.targets.iter().fold(0, |mask, &i| mask | 1 << i), filler: [0; 2] };
+        let quote = cx.resale_quote(problem, preserved);
+        if quote.is_none() && incumbent.is_some_and(|best| recovery.cost >= best) {
+            return None; // finishing costs at least nothing without a sale credit
+        }
+        let baseline =
+            super::solving::acquired_continuation(cx, problem, pair.outcomes.clone(), preserved, recovery.clone(), e.plan.as_ref(), table)
+                .ok()?;
+        let thresholds = super::resale::thresholds(problem, &baseline, &recovery, preserved, recovery.cost);
+        let Some(quote) = quote else { return Some((baseline, thresholds, None)) };
+        let (cost, hours, usage) = (recovery.cost, recovery.hours, recovery.usage.clone());
+        quote.apply(&mut recovery, cost, hours, usage, cx.settings.chaos_per_hour);
+        match super::solving::acquired_continuation(cx, problem, pair.outcomes.clone(), preserved, recovery, e.plan.as_ref(), table) {
+            Ok(plan) => Some((plan, thresholds, None)),
+            Err(error) => Some((baseline, thresholds, Some(error.to_string()))),
+        }
+    })?;
+    for donor in &mut recipe.donors {
+        donor.query = super::donors::donor_query_influenced(
+            cx,
+            &donor.base,
+            std::slice::from_ref(&donor.modifiers),
+            Some(e.item_level),
+            1,
+            1,
+            &std::collections::BTreeSet::from([donor.influence.clone()]),
+        );
+        donor.trade_url = donor.query.as_ref().map(|q| ponder_net::trade::search_url(league, q));
+    }
+    Some(recipe)
 }
 
 /// The cheapest of recombining some of the wanted mods and crafting the rest: a tree for a set

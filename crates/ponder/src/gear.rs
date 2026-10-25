@@ -264,7 +264,7 @@ pub fn problem_spec_on(
     problem
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ComponentGoal {
     pub targets: Vec<Target>,
     pub filler: BTreeSet<String>,

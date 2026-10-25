@@ -21,6 +21,7 @@ fn default_notable_cap() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProblemSpec {
+    #[serde(serialize_with = "shared::pool")]
     pub pool: Arc<Vec<Mod>>,
     pub targets: Vec<Target>,
     pub need: usize,
@@ -33,7 +34,7 @@ pub struct ProblemSpec {
     pub notable_cap: usize,
     #[serde(default)]
     pub fixed: Vec<Mod>, // fractured mods, never removed
-    #[serde(default)]
+    #[serde(default, serialize_with = "shared::profiles")]
     pub profiles: Arc<BTreeMap<String, WeightProfile>>, // name -> mod id -> weight
     #[serde(default)]
     pub extra_mods: BTreeMap<String, Mod>, // forced mods outside the pool
@@ -67,6 +68,7 @@ pub struct ProblemSpec {
 
 mod effects;
 mod interval;
+mod shared;
 mod pool;
 mod projection;
 mod recipes;
@@ -195,11 +197,7 @@ impl Problem {
     }
 
     pub fn fingerprint(&self) -> blake3::Hash {
-        *self.caches.fingerprint.get_or_init(|| {
-            let mut hasher = blake3::Hasher::new();
-            serde_json::to_writer(&mut hasher, self.spec.as_ref()).expect("a problem serialises");
-            hasher.finalize()
-        })
+        *self.caches.fingerprint.get_or_init(|| shared::fingerprint(self.spec.as_ref()))
     }
 
     fn c(&self) -> &Compiled {

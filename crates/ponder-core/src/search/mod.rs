@@ -140,8 +140,16 @@ pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, Solve
         });
     }
     let mut warm: StateMap<usize> = StateMap::default();
+    let trace = std::env::var_os("PONDER_SEARCH_TRACE").is_some();
+    let mut round = 0;
     loop {
+        round += 1;
+        let t = std::time::Instant::now();
         let g = explore(model, options.limits, None)?.without_dead_ends().ok_or(SolveError::Unreachable)?;
+        if trace {
+            eprintln!("search round {round}: explore {:.3}s states={} pairs={}", t.elapsed().as_secs_f64(), g.n(), g.pair_action.len());
+        }
+        let t = std::time::Instant::now();
         let start = g.states.iter().position(|s| *s == model.origin()).ok_or(SolveError::Unreachable)?;
         let proper: Vec<usize> = g.proper_policy().into_iter().collect::<Option<_>>().ok_or(SolveError::Unreachable)?;
         let seeded: Vec<usize> = (0..g.n())
@@ -159,9 +167,18 @@ pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, Solve
         };
         warm = g.states.iter().zip(&policy).map(|(s, &p)| (*s, g.pair_action[p])).collect();
         let visits = g.visits(&lu, start);
-        if model.refine(&refinements(&g, &policy, &visits)) {
+        if trace {
+            eprintln!("search round {round}: iterate {:.3}s", t.elapsed().as_secs_f64());
+        }
+        let t = std::time::Instant::now();
+        let refined = model.refine(&refinements(&g, &policy, &visits));
+        if trace {
+            eprintln!("search round {round}: refine {:.3}s changed={refined}", t.elapsed().as_secs_f64());
+        }
+        if refined {
             continue;
         }
+        let t = std::time::Instant::now();
         let (lower, kind) =
             if g.is_loose() { g.optimistic(&policy, &value, start, options.backend, options.max_rounds) } else { (value[start], None) };
         if let Some(ceiling) = options.cost_ceiling.filter(|ceiling| ceiling.is_finite())
@@ -171,6 +188,9 @@ pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, Solve
         }
         let upper = if g.is_loose() { g.upper_bound(&policy, &value, start, options.backend, options.max_rounds) } else { value[start] };
         let bounds = Bounds { lower, upper };
+        if trace {
+            eprintln!("search round {round}: bounds {:.3}s loose={}", t.elapsed().as_secs_f64(), g.is_loose());
+        }
         if kind.is_some_and(|optimistic| model.refine(&potential_refinements(&g, &optimistic, &value))) {
             continue;
         }

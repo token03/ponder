@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use super::cache::plan_key;
 use super::context::Context;
-use super::solving::{SolveSlot, solve_slots};
 use super::types::Estimate;
 
 #[derive(Clone, Debug)]
@@ -78,162 +77,174 @@ impl ProtectedRecipe {
     }
 }
 
-struct Work {
-    estimate: usize,
-    side: Side,
-    problem: Option<Problem>,
-    plan: Option<Plan>,
-    error: Option<String>,
-    cleanup: Action,
+/// The cheapest protected recipe for every gear estimate (see [`protected_recipe`]).
+pub fn add_protected_routes(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>) {
+    let run = |e: &mut Estimate| {
+        if let Some(recipe) = protected_recipe(cx, e, prices) {
+            e.protected = Some(recipe);
+        }
+    };
+    if workers == Some(1) {
+        estimates.iter_mut().for_each(run);
+    } else {
+        estimates.par_iter_mut().for_each(run);
+    }
 }
 
-pub fn add_protected_routes(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>) {
-    let mut work = Vec::new();
-    for (i, estimate) in estimates.iter().enumerate().filter(|(_, e)| e.kind == "gear") {
-        let Some(problem) = &estimate.problem else { continue };
-        if !problem.fixed.is_empty() || problem.begin.is_some() {
-            continue;
-        }
-        for side in [Side::Prefix, Side::Suffix] {
-            let filler = problem.filler_sides.map_or(0, |(p, s)| if side == Side::Prefix { p } else { s });
-            let wanted = problem.targets.iter().filter(|t| t.side == side).count() + filler;
-            if wanted == 0 || wanted != problem.side_limit(RARE, side) || problem.reserve.get(&side).copied().unwrap_or(0) != 0 {
-                continue;
-            }
-            let cleanup = problem
-                .actions
-                .iter()
-                .filter_map(|action| {
-                    let kind = match (side, action.kind) {
-                        (Side::Prefix, ActionKind::MetaLockPrefixes) | (Side::Suffix, ActionKind::MetaLockSuffixes) => {
-                            ActionKind::ProtectedScour(side)
-                        }
-                        (Side::Suffix, ActionKind::BristleMatron) => ActionKind::MatronScour,
-                        _ => return None,
-                    };
-                    let mut cleanup = action.clone();
-                    cleanup.kind = kind;
-                    cleanup.name = format!("{}; scour {}es", action.name, side.other().name());
-                    cleanup.cost.push(("scour".into(), 1.0));
-                    cleanup.seconds += 1.0;
-                    cleanup.cost.iter().all(|(id, _)| prices.contains_key(id)).then_some(cleanup)
-                })
-                .min_by(|a, b| step_cost(a, prices, &cx.settings).total_cmp(&step_cost(b, prices, &cx.settings)));
-            let Some(cleanup) = cleanup else { continue };
-            let mut spec = problem.to_spec();
-            spec.targets.retain(|t| t.side == side);
-            spec.need = spec.targets.len();
-            spec.filler_need = filler;
-            if filler == 0 {
-                spec.filler.clear();
-                spec.filler_label.clear();
-            }
-            spec.filler_sides = (filler > 0).then_some(if side == Side::Prefix { (filler, 0) } else { (0, filler) });
-            spec.reserve.clear();
-            spec.reserve.insert(side.other(), 1);
-            spec.bench.clear();
-            spec.blockers.clear();
-            spec.allow_terminal_bench = false;
-            spec.junk_cap = Some(if side == Side::Prefix {
-                (0, problem.side_limit(RARE, Side::Suffix))
-            } else {
-                (problem.side_limit(RARE, Side::Prefix), 0)
-            });
-            spec.actions.retain(|a| {
-                !matches!(a.kind.effect(), Effect::Veil(_) | Effect::Unveil(_) | Effect::RevealUnveil(_) | Effect::FinishBench)
-            });
-            let veils: std::collections::HashSet<_> = spec.unveils.iter().map(|m| m.id.clone()).collect();
-            spec.extra_mods.retain(|id, _| !veils.contains(id));
-            spec.unveils.clear();
-            spec.min_mods = 0;
-            work.push(Work { estimate: i, side, problem: Some(spec.compile()), plan: None, error: None, cleanup });
+/// Prepare one complete side, clear the other, and finish the protected item: the cheaper side.
+///
+/// Not pruned against the item's other routes: a recombined side finishes through this
+/// recipe's recovery plan, which pays off even when preparing the side by hand does not.
+pub fn protected_recipe(cx: &Context, estimate: &Estimate, prices: &Prices) -> Option<ProtectedRecipe> {
+    if estimate.kind != "gear" {
+        return None;
+    }
+    let problem = estimate.problem.as_ref()?;
+    if !problem.fixed.is_empty() || problem.begin.is_some() {
+        return None;
+    }
+    let mut best: Option<ProtectedRecipe> = None;
+    for side in [Side::Prefix, Side::Suffix] {
+        let Some((preparation, cleanup)) = preparation(cx, problem, side, prices) else { continue };
+        let Ok(plan) = cx.solves.solve(cx, &preparation, prices) else { continue };
+        if let Some(recipe) = finish_protected(cx, problem, side, preparation, plan, cleanup, prices)
+            && best.as_ref().is_none_or(|b| recipe.cost < b.cost)
+        {
+            best = Some(recipe);
         }
     }
-    let slots = work.iter_mut().map(|w| SolveSlot { problem: &mut w.problem, plan: &mut w.plan, error: &mut w.error }).collect();
-    solve_slots(cx, slots, prices, workers, None);
-    let solve = |work: &Work| -> Option<(usize, ProtectedRecipe)> {
-        let preparation = work.problem.as_ref()?;
-        let plan = work.plan.as_ref()?;
-        let problem = estimates[work.estimate].problem.as_ref()?;
-        let mut seed = problem.start();
-        seed.rarity = RARE;
-        for (i, _) in problem.targets.iter().enumerate().filter(|(_, t)| t.side == work.side) {
-            seed.status[i] = GOOD;
-        }
-        seed.junk[4 + work.side.index()] = preparation.filler_need as u8;
-        let initial = Arc::new(Distribution::Exact(vec![(1.0, seed)]));
-        let cleanup_cost = step_cost(&work.cleanup, prices, &cx.settings);
-        let mut recovery_usage = plan.usage.clone();
-        *recovery_usage.entry(work.cleanup.name.clone()).or_default() += 1.0;
-        *recovery_usage.entry("scour to restart".into()).or_default() += 1.0;
-        let mut recovery = Recovery {
-            initial: initial.clone(),
-            cost: plan.cost + cleanup_cost + prices.get("scour")? + cx.settings.chaos_per_hour / 3600.0,
-            hours: plan.hours + (work.cleanup.seconds + 1.0) / 3600.0,
-            usage: recovery_usage,
-            sale: None,
-        };
-        let key = format!("{}-protected-recovery-{}", plan_key(problem, prices, &cx.settings), work.side.index());
-        let baseline = cx
-            .plans
-            .get_or_solve(&key, || {
+    best
+}
+
+/// The preparation problem for one complete `side` and its cheapest lock-and-scour cleanup.
+fn preparation(cx: &Context, problem: &Problem, side: Side, prices: &Prices) -> Option<(Problem, Action)> {
+    let filler = problem.filler_sides.map_or(0, |(p, s)| if side == Side::Prefix { p } else { s });
+    let wanted = problem.targets.iter().filter(|t| t.side == side).count() + filler;
+    if wanted == 0 || wanted != problem.side_limit(RARE, side) || problem.reserve.get(&side).copied().unwrap_or(0) != 0 {
+        return None;
+    }
+    let cleanup = problem
+        .actions
+        .iter()
+        .filter_map(|action| {
+            let kind = match (side, action.kind) {
+                (Side::Prefix, ActionKind::MetaLockPrefixes) | (Side::Suffix, ActionKind::MetaLockSuffixes) => {
+                    ActionKind::ProtectedScour(side)
+                }
+                (Side::Suffix, ActionKind::BristleMatron) => ActionKind::MatronScour,
+                _ => return None,
+            };
+            let mut cleanup = action.clone();
+            cleanup.kind = kind;
+            cleanup.name = format!("{}; scour {}es", action.name, side.other().name());
+            cleanup.cost.push(("scour".into(), 1.0));
+            cleanup.seconds += 1.0;
+            cleanup.cost.iter().all(|(id, _)| prices.contains_key(id)).then_some(cleanup)
+        })
+        .min_by(|a, b| step_cost(a, prices, &cx.settings).total_cmp(&step_cost(b, prices, &cx.settings)))?;
+    let mut spec = problem.to_spec();
+    spec.targets.retain(|t| t.side == side);
+    spec.need = spec.targets.len();
+    spec.filler_need = filler;
+    if filler == 0 {
+        spec.filler.clear();
+        spec.filler_label.clear();
+    }
+    spec.filler_sides = (filler > 0).then_some(if side == Side::Prefix { (filler, 0) } else { (0, filler) });
+    spec.reserve.clear();
+    spec.reserve.insert(side.other(), 1);
+    spec.bench.clear();
+    spec.blockers.clear();
+    spec.allow_terminal_bench = false;
+    spec.junk_cap =
+        Some(if side == Side::Prefix { (0, problem.side_limit(RARE, Side::Suffix)) } else { (problem.side_limit(RARE, Side::Prefix), 0) });
+    spec.actions
+        .retain(|a| !matches!(a.kind.effect(), Effect::Veil(_) | Effect::Unveil(_) | Effect::RevealUnveil(_) | Effect::FinishBench));
+    let veils: std::collections::HashSet<_> = spec.unveils.iter().map(|m| m.id.clone()).collect();
+    spec.extra_mods.retain(|id, _| !veils.contains(id));
+    spec.unveils.clear();
+    spec.min_mods = 0;
+    Some((spec.compile(), cleanup))
+}
+
+/// Finish from the prepared side, rebuilding it (or selling the blocked item) when finishing loses it.
+fn finish_protected(
+    cx: &Context,
+    problem: &Problem,
+    side: Side,
+    preparation: Problem,
+    plan: Arc<Plan>,
+    cleanup: Action,
+    prices: &Prices,
+) -> Option<ProtectedRecipe> {
+    let mut seed = problem.start();
+    seed.rarity = RARE;
+    for (i, _) in problem.targets.iter().enumerate().filter(|(_, t)| t.side == side) {
+        seed.status[i] = GOOD;
+    }
+    seed.junk[4 + side.index()] = preparation.filler_need as u8;
+    let initial = Arc::new(Distribution::Exact(vec![(1.0, seed)]));
+    let cleanup_cost = step_cost(&cleanup, prices, &cx.settings);
+    let mut recovery_usage = plan.usage.clone();
+    *recovery_usage.entry(cleanup.name.clone()).or_default() += 1.0;
+    *recovery_usage.entry("scour to restart".into()).or_default() += 1.0;
+    let mut recovery = Recovery {
+        initial: initial.clone(),
+        cost: plan.cost + cleanup_cost + prices.get("scour")? + cx.settings.chaos_per_hour / 3600.0,
+        hours: plan.hours + (cleanup.seconds + 1.0) / 3600.0,
+        usage: recovery_usage,
+        sale: None,
+    };
+    let key = format!("{}-protected-recovery-{}", plan_key(problem, prices, &cx.settings), side.index());
+    let baseline = cx
+        .plans
+        .get_or_solve(&key, || {
+            let private = problem.fresh_transition_cache();
+            ponder_core::solve_with_recovery(&private, initial.clone(), side, recovery.clone(), prices, &cx.settings)
+        })
+        .ok()?;
+    let replacement_cost = plan.cost + cleanup_cost;
+    let replacement_hours = plan.hours + cleanup.seconds / 3600.0;
+    let core = ponder_core::Preservation::side(problem, side);
+    let sale_thresholds = super::resale::thresholds(problem, &baseline, &recovery, core, replacement_cost);
+    let mut sale_error = None;
+    let finishing = match cx.resale_quote(problem, core) {
+        Some(quote) => {
+            let mut sale_usage = plan.usage.clone();
+            *sale_usage.entry(cleanup.name.clone()).or_default() += 1.0;
+            quote.apply(&mut recovery, replacement_cost, replacement_hours, sale_usage, cx.settings.chaos_per_hour);
+            let raw = serde_json::to_vec(&recovery.sale).ok()?;
+            let sale_key = format!("{key}-{}", blake3::hash(&raw).to_hex());
+            match cx.plans.get_or_solve(&sale_key, || {
                 let private = problem.fresh_transition_cache();
-                ponder_core::solve_with_recovery(&private, initial.clone(), work.side, recovery.clone(), prices, &cx.settings)
-            })
-            .ok()?;
-        let replacement_cost = plan.cost + cleanup_cost;
-        let replacement_hours = plan.hours + work.cleanup.seconds / 3600.0;
-        let sale_thresholds =
-            super::resale::thresholds(problem, &baseline, &recovery, ponder_core::Preservation::side(problem, work.side), replacement_cost);
-        let mut sale_error = None;
-        let finishing = match cx.resale_quote(problem, ponder_core::Preservation::side(problem, work.side)) {
-            Some(quote) => {
-                let mut sale_usage = plan.usage.clone();
-                *sale_usage.entry(work.cleanup.name.clone()).or_default() += 1.0;
-                quote.apply(&mut recovery, replacement_cost, replacement_hours, sale_usage, cx.settings.chaos_per_hour);
-                let raw = serde_json::to_vec(&recovery.sale).ok()?;
-                let sale_key = format!("{key}-{}", blake3::hash(&raw).to_hex());
-                match cx.plans.get_or_solve(&sale_key, || {
-                    let private = problem.fresh_transition_cache();
-                    ponder_core::solve_with_recovery(&private, initial, work.side, recovery.clone(), prices, &cx.settings)
-                }) {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        sale_error = Some(error.to_string());
-                        recovery.sale = None;
-                        baseline
-                    }
+                ponder_core::solve_with_recovery(&private, initial, side, recovery.clone(), prices, &cx.settings)
+            }) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    sale_error = Some(error.to_string());
+                    recovery.sale = None;
+                    baseline
                 }
             }
-            None => baseline,
-        };
-        let mut usage = plan.usage.clone();
-        for (action, count) in &finishing.usage {
-            *usage.entry(action.clone()).or_default() += count;
         }
-        *usage.entry(work.cleanup.name.clone()).or_default() += 1.0;
-        Some((
-            work.estimate,
-            ProtectedRecipe {
-                side: work.side,
-                preparation: preparation.clone(),
-                plan: Arc::new(plan.clone()),
-                cleanup: work.cleanup.clone(),
-                cost: plan.cost + cleanup_cost + finishing.cost,
-                hours: plan.hours + work.cleanup.seconds / 3600.0 + finishing.hours,
-                finishing: Arc::new(finishing),
-                usage,
-                recovery,
-                sale_thresholds,
-                sale_error,
-            },
-        ))
+        None => baseline,
     };
-    let recipes: Vec<_> =
-        if workers == Some(1) { work.iter().filter_map(solve).collect() } else { work.par_iter().filter_map(solve).collect() };
-    for (i, recipe) in recipes {
-        if estimates[i].protected.as_ref().is_none_or(|best| recipe.cost < best.cost) {
-            estimates[i].protected = Some(recipe);
-        }
+    let mut usage = plan.usage.clone();
+    for (action, count) in &finishing.usage {
+        *usage.entry(action.clone()).or_default() += count;
     }
+    *usage.entry(cleanup.name.clone()).or_default() += 1.0;
+    Some(ProtectedRecipe {
+        side,
+        preparation,
+        cost: plan.cost + cleanup_cost + finishing.cost,
+        hours: plan.hours + cleanup.seconds / 3600.0 + finishing.hours,
+        plan,
+        cleanup,
+        finishing: Arc::new(finishing),
+        usage,
+        recovery,
+        sale_thresholds,
+        sale_error,
+    })
 }

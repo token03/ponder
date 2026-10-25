@@ -23,6 +23,7 @@ mod pivots;
 mod protected;
 mod recombs;
 mod resale;
+mod routes;
 mod run;
 mod solving;
 mod types;
@@ -37,7 +38,8 @@ pub use pivots::{
     PIVOT_CLICKS, PIVOT_MIN_CHAOS, PIVOT_MIN_PER_CRAFT, PIVOT_SHARE, PIVOTS_PER_STEP, Pivot, add_pivots, pivots_of, short_name,
 };
 pub use protected::{ProtectedRecipe, add_protected_routes};
-pub use recombs::{add_recombs, add_recombs_in_league};
+pub use recombs::{add_recombs, add_recombs_in_league, price_donor_routes};
+pub use routes::price_routes;
 pub use resale::{ResaleQuote, SaleThreshold};
 pub use run::{LadderOpts, RunOpts, build_name, current_league, expand_sources, ladder, load_build, run};
 pub use solving::{Solvable, SolveSlot, slots_of, solve_all, solve_estimates, solve_one, solve_slots};

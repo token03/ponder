@@ -14,7 +14,8 @@ use super::build::{ClusterOpts, GearOpts, add_fractures, build_gear, estimate_cl
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
 use super::pivots::add_pivots;
-use super::solving::{load_estimates, solve_estimates};
+use super::routes::price_routes;
+use super::solving::solve_estimates;
 use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
 use crate::demand::{self, Archetype};
 use crate::mine::{self, Candidate};
@@ -163,9 +164,7 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
             add_fractures(cx, e, &league, Some(&table), true);
         }
     }
-    load_estimates(cx, &mut estimates, &table);
-    super::recombs::add_recombs_in_league(cx, db, &mut estimates, &table, &league, opts.workers, progress);
-    solve_estimates(cx, &mut estimates, &table, opts.workers, progress);
+    price_routes(cx, db, &mut estimates, &table, &league, opts.workers, progress);
     solve_estimates(cx, &mut extra, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..estimates.len()).collect();
@@ -309,10 +308,7 @@ pub fn ladder(
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
-    load_estimates(cx, &mut out, &table);
-    super::recombs::add_recombs_in_league(cx, db, &mut out, &table, &league, opts.workers, progress);
-    say(progress, &format!("solving {} crafts and fracture options", out.len()));
-    solve_estimates(cx, &mut out, &table, opts.workers, progress);
+    price_routes(cx, db, &mut out, &table, &league, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..out.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(out[i].demand));

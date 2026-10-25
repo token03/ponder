@@ -70,6 +70,33 @@ pub fn acquired_continuation(
     })
 }
 
+/// Plans solved during this process, by plan key: products that share a donor (or a
+/// preparation stage) wait for one solve instead of each running it.
+#[derive(Default)]
+pub struct SharedSolves {
+    cells: std::sync::Mutex<rustc_hash::FxHashMap<String, std::sync::Arc<std::sync::OnceLock<Result<std::sync::Arc<Plan>, String>>>>>,
+}
+
+impl SharedSolves {
+    /// The plan for `problem` at these prices: from this process, the plan cache, or a fresh solve.
+    pub fn solve(&self, cx: &Context, problem: &Problem, table: &Prices) -> Result<std::sync::Arc<Plan>, String> {
+        let key = plan_key(problem, table, &cx.settings);
+        let cell = self.cells.lock().expect("shared solves").entry(key.clone()).or_default().clone();
+        cell.get_or_init(|| {
+            cx.plans
+                .get_or_solve(&key, || craft::solve(&problem.fresh_transition_cache(), table, &cx.settings))
+                .map(std::sync::Arc::new)
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+    }
+
+    /// Forget everything (a new run, or prices changed).
+    pub fn clear(&self) {
+        self.cells.lock().expect("shared solves").clear();
+    }
+}
+
 /// The three fields solving fills in, borrowed from an `Estimate`, a `Fracture` or a `Finish`.
 pub struct SolveSlot<'a> {
     pub problem: &'a mut Option<Problem>,
@@ -134,14 +161,6 @@ pub fn solve_one(cx: &Context, item: &mut dyn Solvable, table: &Prices) {
     solve_slot(cx, &mut item.slot(), table, None);
 }
 
-pub fn load_estimates(cx: &Context, estimates: &mut [Estimate], table: &Prices) {
-    estimates.par_iter_mut().for_each(|estimate| {
-        for mut slot in slots_of(std::slice::from_mut(estimate), &[0]) {
-            load_slot(cx, &mut slot, table);
-        }
-    });
-}
-
 fn load_slot(cx: &Context, slot: &mut SolveSlot<'_>, table: &Prices) -> Option<String> {
     let problem = slot.problem.as_ref()?;
     if slot.plan.is_some() || slot.error.is_some() {
@@ -160,6 +179,22 @@ fn load_slot(cx: &Context, slot: &mut SolveSlot<'_>, table: &Prices) -> Option<S
 }
 
 fn solve_below(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &mut Option<f64>, ceiling: Option<f64>) -> bool {
+    let started = std::time::Instant::now();
+    let label = slot.problem.as_ref().map(|p| (p.targets.len(), p.fixed.len()));
+    let dump = slot.problem.clone();
+    let searched = solve_below_inner(cx, slot, table, lower_bound, ceiling);
+    if std::env::var_os("PONDER_TRACE").is_some() && let Some((targets, fixed)) = label {
+        let secs = started.elapsed().as_secs_f64();
+        eprintln!("TRACE slot targets={targets} fixed={fixed} searched={searched} secs={secs:.3} pruned={}", lower_bound.is_some());
+        if secs > 4.0 && let Some(p) = dump {
+            let _ = std::fs::create_dir_all("target/craft-cases");
+            let _ = std::fs::write(format!("target/craft-cases/slow-{secs:.1}-{}.json", p.fingerprint()), serde_json::to_vec(&p).unwrap_or_default());
+        }
+    }
+    searched
+}
+
+fn solve_below_inner(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &mut Option<f64>, ceiling: Option<f64>) -> bool {
     let Some(problem) = slot.problem.as_ref() else { return false };
     if slot.plan.is_some() {
         *lower_bound = None;
@@ -197,56 +232,75 @@ fn solve_below(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &
             cx.plans.put_lower_bound(&key, bound);
             *lower_bound = Some(bound);
         }
-        Err(error) => *slot.error = Some(error.to_string()),
+        Err(error) => {
+            if std::env::var_os("PONDER_TRACE").is_some() {
+                eprintln!("TRACE error {error}");
+            }
+            *slot.error = Some(error.to_string())
+        }
     }
     searched
 }
 
-pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], table: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    let mut ordered: Vec<_> = estimates
-        .iter_mut()
-        .filter(|estimate| {
-            (estimate.plan.is_none() && estimate.error.is_none())
-                || estimate.fractures.iter().any(|fracture| fracture.plan.is_none() && fracture.error.is_none())
-        })
-        .collect();
-    ordered.sort_by_key(|estimate| std::cmp::Reverse((estimate.problem.as_ref().map_or(0, |p| p.targets.len()), estimate.fractures.len())));
-    let work = |estimate: &mut Estimate| {
-        let started = std::time::Instant::now();
-        let mut searched = false;
-        let mut order: Vec<_> = (0..estimate.fractures.len()).collect();
-        order.sort_by(|&a, &b| {
-            estimate.fractures[b]
-                .base_cost()
-                .unwrap_or(f64::NEG_INFINITY)
-                .total_cmp(&estimate.fractures[a].base_cost().unwrap_or(f64::NEG_INFINITY))
-        });
-        for i in order {
-            let upper = estimate.upper_bound();
-            let fracture = &mut estimate.fractures[i];
-            let ceiling = upper.zip(fracture.base_cost()).map(|(upper, base)| upper - base - fracture.bench_cost);
-            searched |= solve_below(
-                cx,
-                SolveSlot { problem: &mut fracture.problem, plan: &mut fracture.plan, error: &mut fracture.error },
-                table,
-                &mut fracture.craft_lower_bound,
-                ceiling,
-            );
-        }
-        let ceiling = estimate.upper_bound().map(|upper| upper - estimate.bench_cost() - estimate.base_price.map_or(0.0, |b| b.0));
+/// Fractured variants first (cheapest base cost last, so dear bases with the hard mod already
+/// on give an early incumbent), then the direct craft. Each search stops once its certified
+/// lower bound exceeds the best complete route's certified upper bound. True when anything was
+/// searched rather than read from the plan cache.
+pub fn solve_direct_and_fractures(cx: &Context, estimate: &mut Estimate, table: &Prices) -> bool {
+    let mut searched = false;
+    let mut order: Vec<_> = (0..estimate.fractures.len()).collect();
+    order.sort_by(|&a, &b| {
+        estimate.fractures[b]
+            .base_cost()
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&estimate.fractures[a].base_cost().unwrap_or(f64::NEG_INFINITY))
+    });
+    for i in order {
+        let upper = estimate.upper_bound();
+        let fracture = &mut estimate.fractures[i];
+        let ceiling = upper.zip(fracture.base_cost()).map(|(upper, base)| upper - base - fracture.bench_cost);
         searched |= solve_below(
             cx,
-            SolveSlot { problem: &mut estimate.problem, plan: &mut estimate.plan, error: &mut estimate.error },
+            SolveSlot { problem: &mut fracture.problem, plan: &mut fracture.plan, error: &mut fracture.error },
             table,
-            &mut estimate.craft_lower_bound,
+            &mut fracture.craft_lower_bound,
             ceiling,
         );
-        if searched && let Some(progress) = progress {
-            let dominated = usize::from(estimate.craft_lower_bound.is_some())
-                + estimate.fractures.iter().filter(|fracture| fracture.craft_lower_bound.is_some()).count();
-            progress(&format!("solved {} ({:.2}s; {dominated} dominated alternatives)", estimate.title, started.elapsed().as_secs_f64()));
+    }
+    let ceiling = estimate.upper_bound().map(|upper| upper - estimate.bench_cost() - estimate.base_price.map_or(0.0, |b| b.0));
+    searched |= solve_below(
+        cx,
+        SolveSlot { problem: &mut estimate.problem, plan: &mut estimate.plan, error: &mut estimate.error },
+        table,
+        &mut estimate.craft_lower_bound,
+        ceiling,
+    );
+    searched
+}
+
+/// The direct craft and fractured variants of every estimate (see [`solve_direct_and_fractures`]).
+pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], table: &Prices, workers: Option<usize>, progress: Option<Progress>) {
+    let work = |estimate: &mut Estimate| {
+        let started = std::time::Instant::now();
+        if solve_direct_and_fractures(cx, estimate, table) {
+            report_solved(estimate, started, progress);
         }
     };
+    for_each_largest_first(estimates, workers, work);
+}
+
+pub(super) fn report_solved(estimate: &Estimate, started: std::time::Instant, progress: Option<Progress>) {
+    if let Some(progress) = progress {
+        let dominated = usize::from(estimate.craft_lower_bound.is_some())
+            + estimate.fractures.iter().filter(|fracture| fracture.craft_lower_bound.is_some()).count();
+        progress(&format!("solved {} ({:.2}s; {dominated} dominated alternatives)", estimate.title, started.elapsed().as_secs_f64()));
+    }
+}
+
+/// Run `work` on every estimate, biggest problems first so no core idles at the end.
+pub(super) fn for_each_largest_first(estimates: &mut [Estimate], workers: Option<usize>, work: impl Fn(&mut Estimate) + Sync + Send) {
+    let mut ordered: Vec<&mut Estimate> = estimates.iter_mut().collect();
+    ordered.sort_by_key(|estimate| std::cmp::Reverse((estimate.problem.as_ref().map_or(0, |p| p.targets.len()), estimate.fractures.len())));
     if workers == Some(1) {
         ordered.into_iter().for_each(work);
     } else {

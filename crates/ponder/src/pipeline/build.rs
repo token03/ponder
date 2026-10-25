@@ -245,8 +245,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     }
     est.problem = Some(gp.problem);
     if est.error.is_none() && opts.solve {
-        solve_one(cx, &mut est, table);
-        super::recombs::add_recombs_in_league(cx, db, std::slice::from_mut(&mut est), table, league, None, None);
+        super::routes::price_routes(cx, db, std::slice::from_mut(&mut est), table, league, Some(1), None);
     }
     Ok(est)
 }
