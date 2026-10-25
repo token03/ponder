@@ -1,4 +1,3 @@
-mod bounds;
 mod graph;
 
 use std::fmt;
@@ -35,12 +34,11 @@ pub struct Options {
     pub limits: SolveLimits,
     pub max_rounds: usize,
     pub backend: Backend,
-    pub cost_ceiling: Option<f64>,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { limits: SolveLimits::default(), max_rounds: 60, backend: Backend::Auto, cost_ceiling: None }
+        Options { limits: SolveLimits::default(), max_rounds: 60, backend: Backend::Auto }
     }
 }
 
@@ -51,7 +49,8 @@ pub struct Solution {
     pub values: Vec<f64>,
     pub visits: Vec<f64>,
     pub explored: usize,
-    pub bounds: Bounds,
+    /// The policy relies on lumped (estimated) chances somewhere it goes.
+    pub approximate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,10 +63,6 @@ pub enum SolveError {
     /// `evaluate` was given a policy with no action for a state.
     MissingPolicy(String),
     IterationLimit(usize),
-    Dominated {
-        lower_bound: f64,
-        ceiling: f64,
-    },
     ResourceLimit {
         resource: String,
         limit: usize,
@@ -80,9 +75,6 @@ impl fmt::Display for SolveError {
             SolveError::Unreachable => f.write_str("no policy reaches the goal with probability 1"),
             SolveError::Singular(m) | SolveError::MissingPolicy(m) | SolveError::InvalidRecovery(m) => f.write_str(m),
             SolveError::IterationLimit(rounds) => write!(f, "solver did not converge within {rounds} policy iterations"),
-            SolveError::Dominated { lower_bound, ceiling } => {
-                write!(f, "certified cost of at least {lower_bound:.2} exceeds the complete recipe cost of {ceiling:.2}")
-            }
             SolveError::ResourceLimit { resource, limit } => write!(f, "search incomplete: exceeded {limit} {resource}"),
         }
     }
@@ -103,30 +95,6 @@ impl Default for SolveLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
-pub struct Bounds {
-    pub lower: f64,
-    pub upper: f64,
-}
-
-impl Bounds {
-    /// The bounds of a plan whose chances are all exact.
-    pub fn exact(cost: f64) -> Bounds {
-        Bounds { lower: cost, upper: cost }
-    }
-
-    /// How far apart the bounds are, as a share of `cost`.
-    pub fn spread(&self, cost: f64) -> f64 {
-        if cost <= 0.0 { 0.0 } else { (self.upper - self.lower) / cost }
-    }
-}
-
-struct OptimisticPolicy {
-    actions: Vec<usize>,
-    visits: Vec<f64>,
-    values: Vec<f64>,
-}
-
 pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, SolveError> {
     if model.is_goal(&model.origin()) {
         return Ok(Solution {
@@ -136,20 +104,12 @@ pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, Solve
             values: Vec::new(),
             visits: Vec::new(),
             explored: 1,
-            bounds: Bounds::exact(0.0),
+            approximate: false,
         });
     }
     let mut warm: StateMap<usize> = StateMap::default();
-    let trace = std::env::var_os("PONDER_SEARCH_TRACE").is_some();
-    let mut round = 0;
     loop {
-        round += 1;
-        let t = std::time::Instant::now();
         let g = explore(model, options.limits, None)?.without_dead_ends().ok_or(SolveError::Unreachable)?;
-        if trace {
-            eprintln!("search round {round}: explore {:.3}s states={} pairs={}", t.elapsed().as_secs_f64(), g.n(), g.pair_action.len());
-        }
-        let t = std::time::Instant::now();
         let start = g.states.iter().position(|s| *s == model.origin()).ok_or(SolveError::Unreachable)?;
         let proper: Vec<usize> = g.proper_policy().into_iter().collect::<Option<_>>().ok_or(SolveError::Unreachable)?;
         let seeded: Vec<usize> = (0..g.n())
@@ -167,41 +127,18 @@ pub fn solve(model: &mut impl Model, options: Options) -> Result<Solution, Solve
         };
         warm = g.states.iter().zip(&policy).map(|(s, &p)| (*s, g.pair_action[p])).collect();
         let visits = g.visits(&lu, start);
-        if trace {
-            eprintln!("search round {round}: iterate {:.3}s", t.elapsed().as_secs_f64());
-        }
-        let t = std::time::Instant::now();
-        let refined = model.refine(&refinements(&g, &policy, &visits));
-        if trace {
-            eprintln!("search round {round}: refine {:.3}s changed={refined}", t.elapsed().as_secs_f64());
-        }
-        if refined {
-            continue;
-        }
-        let t = std::time::Instant::now();
-        let (lower, kind) =
-            if g.is_loose() { g.optimistic(&policy, &value, start, options.backend, options.max_rounds) } else { (value[start], None) };
-        if let Some(ceiling) = options.cost_ceiling.filter(|ceiling| ceiling.is_finite())
-            && lower > ceiling + 1e-9 * ceiling.abs().max(1.0)
-        {
-            return Err(SolveError::Dominated { lower_bound: lower, ceiling });
-        }
-        let upper = if g.is_loose() { g.upper_bound(&policy, &value, start, options.backend, options.max_rounds) } else { value[start] };
-        let bounds = Bounds { lower, upper };
-        if trace {
-            eprintln!("search round {round}: bounds {:.3}s loose={}", t.elapsed().as_secs_f64(), g.is_loose());
-        }
-        if kind.is_some_and(|optimistic| model.refine(&potential_refinements(&g, &optimistic, &value))) {
+        // Lumped rolls the plan actually uses are worked out exactly, then the plan is redone.
+        if model.refine(&refinements(&g, &policy, &visits)) {
             continue;
         }
         return Ok(Solution {
             cost: value[start],
+            approximate: g.approximate(&policy, &visits),
             policy: policy.iter().map(|&p| g.pair_action[p]).collect(),
             states: g.states,
             values: value,
             visits,
             explored: g.seen,
-            bounds,
         });
     }
 }
@@ -212,24 +149,6 @@ fn refinements(g: &Graph, policy: &[usize], visits: &[f64]) -> Vec<(State, usize
         .enumerate()
         .filter(|&(i, _)| visits[i] > 1e-9 && g.loose[g.pair_list[policy[i]]])
         .map(|(i, s)| (*s, g.pair_action[policy[i]]))
-        .collect()
-}
-
-fn potential_refinements(g: &Graph, optimistic: &OptimisticPolicy, incumbent: &[f64]) -> Vec<(State, usize)> {
-    let costs = g.q_with(&optimistic.values, &g.extreme(&optimistic.values, false));
-    g.states
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| optimistic.visits[*i] > 1e-9)
-        .flat_map(|(i, &state)| {
-            let costs = &costs;
-            (g.state_ptr[i]..g.state_ptr[i + 1])
-                .filter(move |&pair| {
-                    g.loose[g.pair_list[pair]]
-                        && (pair == optimistic.actions[i] || costs[pair] <= incumbent[i] + 1e-9 * incumbent[i].abs().max(1.0))
-                })
-                .map(move |pair| (state, g.pair_action[pair]))
-        })
         .collect()
 }
 
@@ -246,7 +165,7 @@ pub fn evaluate_solution(model: &impl Model, policy: &StateMap<usize>, options: 
             values: Vec::new(),
             visits: Vec::new(),
             explored: 1,
-            bounds: Bounds::exact(0.0),
+            approximate: false,
         });
     }
     let g = explore(model, options.limits, Some(policy))?;
@@ -258,16 +177,14 @@ pub fn evaluate_solution(model: &impl Model, policy: &StateMap<usize>, options: 
     if !values.iter().chain(&visits).all(|value| value.is_finite()) {
         return Err(SolveError::Singular("policy values or visit counts are not finite".into()));
     }
-    let bounds =
-        if g.is_loose() { g.bounds(&chosen, &values, start, options.backend, options.max_rounds).0 } else { Bounds::exact(values[start]) };
     Ok(Solution {
         cost: values[start],
+        approximate: g.approximate(&chosen, &visits),
         policy: chosen.iter().map(|&p| g.pair_action[p]).collect(),
         states: g.states,
         values,
         visits,
         explored: g.seen,
-        bounds,
     })
 }
 

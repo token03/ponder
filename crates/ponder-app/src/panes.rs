@@ -628,20 +628,11 @@ fn currency(ui: &mut Ui, e: &Estimate, divine: f64) {
     )
     .on_hover_text(format!("Time charged at {:.0}c/h", e.settings.chaos_per_hour));
     if let Some((_, plan)) = e.cheapest_plan()
-        && plan.bounds.spread(plan.cost) >= 0.005
+        && plan.approximate
     {
-        ui.label(
-            RichText::new(format!(
-                "certified {} – {}",
-                view::money(Some(plan.bounds.lower), divine),
-                view::money(Some(plan.bounds.upper), divine)
-            ))
-            .weak(),
-        )
-        .on_hover_text(
-            "The solver counts other mods without knowing which they are, so its chances are estimates.\n\
-             No way of crafting, even reading every mod, expects to spend less than the first figure;\n\
-             this plan expects to spend at most the second. Both hold for the solver's game model.",
+        ui.label(RichText::new("estimated chances").weak()).on_hover_text(
+            "The solver counts other mods without knowing which they are, so some of this plan's\n\
+             chances are estimates rather than exact rolls; its cost is an estimate too.",
         );
     }
 }

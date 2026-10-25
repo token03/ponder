@@ -201,30 +201,34 @@ fn random_problem(seed: u64) -> Problem {
     ProblemSpec::new(pool, targets, need, actions(), Kind::Gear).compile()
 }
 
+/// On toy pools small enough to solve on real items, the lumped plan is followed on real items
+/// and compared with the exact optimum: its regret, and how far its own estimate is off.
 #[test]
-fn certified_bounds_hold_on_real_items() {
+fn lumped_plans_stay_close_to_the_exact_optimum_on_real_items() {
     let settings = Settings { chaos_per_hour: 0.0 };
-    let mut loose = 0;
+    let (mut worst_regret, mut worst_estimate, mut approximate) = (0.0f64, 0.0f64, 0);
     for (seed, slams) in (0..24).flat_map(|s| [(s, false), (s, true)]) {
         let prices = prices(slams);
         let p = random_problem(seed);
         let plan = solve(&p, &prices, &settings).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
-        let b = plan.bounds;
         let best = exact_values(&p, &prices, &settings, None);
         let followed = exact_values(&p, &prices, &settings, Some(&plan.policy));
         let tol = 1e-7 * best;
-        eprintln!(
-            "seed {seed:>2}: lower {:>9.4} <= best {best:>9.4} <= plan on real items {followed:>9.4} <= upper {:>9.4} (plan says {:.4})",
-            b.lower, b.upper, plan.cost
-        );
-        assert!(b.lower <= best + tol, "seed {seed}: lower bound {} above the exact optimum {best}", b.lower);
+        let (regret, estimate) = ((followed - best) / best, (plan.cost - followed).abs() / followed);
+        eprintln!("seed {seed:>2}: best {best:>9.4}  plan on real items {followed:>9.4}  plan says {:>9.4}", plan.cost);
         assert!(best <= followed + tol, "seed {seed}: the plan beats the exact optimum");
-        assert!(followed <= b.upper + tol, "seed {seed}: the plan costs {followed} on real items, above its upper bound {}", b.upper);
-        assert!(b.lower <= plan.cost + tol && plan.cost <= b.upper + tol);
-        loose += (b.upper - b.lower > tol) as usize;
+        worst_regret = worst_regret.max(regret);
+        worst_estimate = worst_estimate.max(estimate);
+        approximate += plan.approximate as usize;
     }
-    assert!(loose >= 10, "only {loose} toys had loose bounds: the test isn't exercising them");
+    eprintln!("worst regret {:.1}%, worst estimate error {:.1}%", 100.0 * worst_regret, 100.0 * worst_estimate);
+    assert!(approximate >= 10, "only {approximate} toys used lumped chances: the test isn't exercising them");
+    assert!(worst_regret < REGRET, "a lumped plan costs {:.1}% more than the best on real items", 100.0 * worst_regret);
+    assert!(worst_estimate < REGRET, "a lumped plan's estimate is {:.1}% off its cost on real items", 100.0 * worst_estimate);
 }
+
+/// The toys weigh junk up to 400x apart (adversarial for lumping); real pools are milder.
+const REGRET: f64 = 0.5;
 
 #[test]
 fn fresh_rolls_are_exact() {
@@ -276,7 +280,7 @@ fn an_avoidable_dead_end_is_avoided_not_fatal() {
 }
 
 #[test]
-fn overlapping_groups_do_not_receive_an_exact_certificate() {
+fn overlapping_groups_are_flagged_approximate() {
     let pool = vec![
         Mod::new("goal", Side::Prefix, 1.0, &["goal"], false, "goal", &[]),
         Mod::new("x", Side::Prefix, 100.0, &["shared", "x"], false, "x", &[]),
@@ -294,7 +298,8 @@ fn overlapping_groups_do_not_receive_an_exact_certificate() {
     let settings = Settings { chaos_per_hour: 0.0 };
     let plan = solve(&p, &prices, &settings).unwrap();
     let exact = exact_values(&p, &prices, &settings, None);
-    let bounds = plan.bounds;
-    assert!(bounds.lower <= exact + 1e-9 && exact <= bounds.upper);
+    // Overlapping groups can't be pooled into exact classes: the lumped roll is far off
+    // (3.83 here), and the plan says so.
+    assert!(plan.approximate, "plan {} versus exact {exact}", plan.cost);
     assert!((exact - 1.477272706).abs() < 1e-7);
 }

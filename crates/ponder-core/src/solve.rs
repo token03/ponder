@@ -5,7 +5,7 @@ use crate::action::{ActionKind, step_cost};
 use crate::linear::Backend;
 use crate::problem::{PreparedAction, Problem};
 use crate::search::{self, Decision, Model, Options};
-pub use crate::search::{Bounds, SolveError, SolveLimits, StateMap};
+pub use crate::search::{SolveError, SolveLimits, StateMap};
 use crate::transition::{Distribution, TransitionBuffer, TransitionResult};
 use crate::types::*;
 
@@ -29,7 +29,8 @@ pub struct Plan {
     pub values: StateMap<f64>, // expected chaos to finish from every state the plan reaches
     /// The open states in the order the solver numbered them (Python's dict order): ties in `steps` follow it.
     pub order: Vec<State>,
-    pub bounds: Bounds,
+    /// The plan relies on lumped (estimated) chances somewhere it goes.
+    pub approximate: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -145,7 +146,7 @@ pub fn solve_with(problem: &Problem, prices: &Prices, settings: &Settings, optio
     let unpriced =
         problem.actions.iter().filter(|a| a.cost.iter().any(|(pid, _)| !prices.contains_key(pid))).map(|a| a.name.clone()).collect();
     if problem.done(&problem.origin()) {
-        return Ok(Plan { states: 1, unpriced, bounds: Bounds::exact(0.0), ..Plan::default() });
+        return Ok(Plan { states: 1, unpriced, ..Plan::default() });
     }
     let active = cheapest_of_equals(problem, prices, settings);
     if !producible_goal(problem, &active, &[(1.0, problem.origin())], None) {
@@ -383,7 +384,7 @@ fn make_plan(
         hours,
         values: solution.states.iter().zip(&solution.values).map(|(s, &v)| (*s, v)).collect(),
         order: solution.states,
-        bounds: solution.bounds,
+        approximate: solution.approximate,
     }
 }
 

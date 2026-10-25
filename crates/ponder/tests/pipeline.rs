@@ -404,7 +404,7 @@ fn pivots_find_starts_on_the_other_products() {
 }
 
 #[test]
-fn dominated_crafts_resume_when_an_incumbent_or_base_quote_changes() {
+fn routes_whose_base_costs_more_than_the_best_are_skipped_until_the_quote_changes() {
     let mut cx = offline_context(0.0);
     cx.plans = PlanCache::new(temp_dir("competitive-plans"));
     let table = cheap_table();
@@ -422,14 +422,6 @@ fn dominated_crafts_resume_when_an_incumbent_or_base_quote_changes() {
     fracture.base_price = Some((0.0, 1));
     estimate.fractures.push(fracture);
     estimate.plan = None;
-    solve_estimates(&cx, std::slice::from_mut(&mut estimate), &table, Some(1), None);
-    assert!(estimate.plan.is_none());
-    assert!(estimate.error.is_none());
-    let bound = estimate.craft_lower_bound.expect("direct route is dominated");
-    let key = plan_key(estimate.problem.as_ref().unwrap(), &table, &cx.settings);
-    assert_eq!(cx.plans.lower_bound(&key), Some(bound));
-    assert!(bound > estimate.cheapest().unwrap());
-
     let mut fracture = estimate.fractures.pop().unwrap();
     solve_estimates(&cx, std::slice::from_mut(&mut estimate), &table, Some(1), None);
     assert!(estimate.plan.is_some());
@@ -788,7 +780,7 @@ fn the_json_keys() {
         "item_level",
         "craft_cost",
         "direct_lower_bound",
-        "craft_bounds",
+        "approximate",
         "bench",
         "base_price",
         "base_source",
@@ -897,7 +889,7 @@ fn estimate_arithmetic() {
     assert_eq!(e.to_dict()["selected_route"], "recombination");
     assert_eq!(e.to_dict()["total"], 55.0);
     assert_eq!(e.to_dict()["craft_cost"], 50.0);
-    assert!(e.to_dict()["craft_bounds"].is_null());
+    assert!(e.to_dict()["approximate"].is_null());
     assert_eq!(e.to_dict()["direct_total"], 105.0);
     assert!(e.cheapest_plan().is_none());
     assert_eq!(e.to_dict()["recomb"], json!({"cost": 50}));

@@ -203,34 +203,22 @@ fn solve_below_inner(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bo
     if slot.error.is_some() {
         return false;
     }
-    let key = plan_key(problem, table, &cx.settings);
-    let ceiling = ceiling.filter(|ceiling| ceiling.is_finite());
-    if let Some(ceiling) = ceiling {
-        let floor = cx
-            .plans
-            .lower_bound(&key)
-            .or_else(|| problem.actions.iter().all(|action| craft::step_cost(action, table, &cx.settings) >= 0.0).then_some(0.0));
-        if let Some(floor) = floor
-            && floor > ceiling + 1e-9 * ceiling.abs().max(1.0)
-        {
-            *lower_bound = Some(floor);
-            return false;
-        }
+    // Finishing costs nothing at best: a route whose fixed costs alone exceed the best is skipped.
+    let free_at_best = problem.actions.iter().all(|action| craft::step_cost(action, table, &cx.settings) >= 0.0);
+    if free_at_best && ceiling.is_some_and(|ceiling| ceiling < 0.0) {
+        *lower_bound = Some(0.0);
+        return false;
     }
+    let key = plan_key(problem, table, &cx.settings);
     let mut searched = false;
     let result = cx.plans.get_or_solve(&key, || {
         searched = true;
-        let problem = problem.fresh_transition_cache();
-        craft::solve_with(&problem, table, &cx.settings, craft::SolveOptions { cost_ceiling: ceiling, ..Default::default() })
+        craft::solve(&problem.fresh_transition_cache(), table, &cx.settings)
     });
     match result {
         Ok(plan) => {
             *slot.plan = Some(plan);
             *lower_bound = None;
-        }
-        Err(craft::SolveError::Dominated { lower_bound: bound, .. }) => {
-            cx.plans.put_lower_bound(&key, bound);
-            *lower_bound = Some(bound);
         }
         Err(error) => {
             if std::env::var_os("PONDER_TRACE").is_some() {
@@ -242,10 +230,10 @@ fn solve_below_inner(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bo
     searched
 }
 
-/// Fractured variants first (cheapest base cost last, so dear bases with the hard mod already
-/// on give an early incumbent), then the direct craft. Each search stops once its certified
-/// lower bound exceeds the best complete route's certified upper bound. True when anything was
-/// searched rather than read from the plan cache.
+/// Fractured variants first (dearest base first: the hard mod already on gives a cheap finish
+/// and an early best route), then the direct craft. A route whose base and bench crafts alone
+/// cost more than the best complete route so far is skipped. True when anything was searched
+/// rather than read from the plan cache.
 pub fn solve_direct_and_fractures(cx: &Context, estimate: &mut Estimate, table: &Prices) -> bool {
     let mut searched = false;
     let mut order: Vec<_> = (0..estimate.fractures.len()).collect();
@@ -256,9 +244,9 @@ pub fn solve_direct_and_fractures(cx: &Context, estimate: &mut Estimate, table: 
             .total_cmp(&estimate.fractures[a].base_cost().unwrap_or(f64::NEG_INFINITY))
     });
     for i in order {
-        let upper = estimate.upper_bound();
+        let best = estimate.cheapest();
         let fracture = &mut estimate.fractures[i];
-        let ceiling = upper.zip(fracture.base_cost()).map(|(upper, base)| upper - base - fracture.bench_cost);
+        let ceiling = best.zip(fracture.base_cost()).map(|(best, base)| best - base - fracture.bench_cost);
         searched |= solve_below(
             cx,
             SolveSlot { problem: &mut fracture.problem, plan: &mut fracture.plan, error: &mut fracture.error },
@@ -267,7 +255,7 @@ pub fn solve_direct_and_fractures(cx: &Context, estimate: &mut Estimate, table: 
             ceiling,
         );
     }
-    let ceiling = estimate.upper_bound().map(|upper| upper - estimate.bench_cost() - estimate.base_price.map_or(0.0, |b| b.0));
+    let ceiling = estimate.cheapest().map(|best| best - estimate.bench_cost() - estimate.base_price.map_or(0.0, |b| b.0));
     searched |= solve_below(
         cx,
         SolveSlot { problem: &mut estimate.problem, plan: &mut estimate.plan, error: &mut estimate.error },

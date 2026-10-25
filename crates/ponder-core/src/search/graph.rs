@@ -9,9 +9,8 @@ use super::*;
 /// the same list, so lists are stored once and pairs point at them: a
 /// reroll's expected cost to finish is computed once, not once per state.
 ///
-/// Each entry also has bounds on its probability (`e_lo`, `e_hi`): the true chance, for
-/// whichever real item the state stands for, lies between them. Lists with exact chances
-/// have both equal to `e_prob`.
+/// A list is `loose` when its chances are a lumped estimate rather than exact for every real
+/// item the state stands for; the model may refine such lists.
 pub(super) struct Graph {
     pub(super) factorization: std::cell::RefCell<linear::FactorizationCache>,
     pub states: Vec<State>, // open states, in the order they were first acted on
@@ -23,9 +22,7 @@ pub(super) struct Graph {
     pub(super) list_ptr: Vec<usize>, // list k's entries: list_ptr[k]..list_ptr[k+1]
     pub(super) e_next: Vec<i32>,
     pub(super) e_prob: Vec<f64>,
-    pub(super) e_lo: Vec<f64>,
-    pub(super) e_hi: Vec<f64>,
-    /// lists whose chances are only bounded
+    /// lists whose chances are lumped estimates
     pub(super) loose: Vec<bool>,
 }
 
@@ -37,8 +34,6 @@ struct Builder {
     pub(super) list_ptr: Vec<usize>,
     pub(super) e_id: Vec<u32>,
     pub(super) e_prob: Vec<f64>,
-    pub(super) e_lo: Vec<f64>,
-    pub(super) e_hi: Vec<f64>,
     pub(super) loose: Vec<bool>,
 }
 
@@ -48,7 +43,7 @@ impl Builder {
             return Err(SolveError::ResourceLimit { resource: "transitions".into(), limit: limits.transitions });
         }
         let loose = bounds.is_some_and(|b| b.iter().zip(out).any(|(&(lo, hi), &(p, _))| lo != p || hi != p));
-        for (k, &(p, n)) in out.iter().enumerate() {
+        for &(p, n) in out {
             let next_id = self.by_id.len() as u32;
             if self.by_id.len() >= limits.states && !self.seen.contains_key(&n) {
                 return Err(SolveError::ResourceLimit { resource: "states".into(), limit: limits.states });
@@ -58,11 +53,8 @@ impl Builder {
                 self.by_id.push(n);
                 self.frontier.push(id);
             }
-            let (lo, hi) = if loose { bounds.expect("loose lists have bounds")[k] } else { (p, p) };
             self.e_id.push(id);
             self.e_prob.push(p);
-            self.e_lo.push(lo);
-            self.e_hi.push(hi);
         }
         self.list_ptr.push(self.e_id.len());
         self.loose.push(loose);
@@ -84,8 +76,6 @@ pub(super) fn explore(model: &impl Model, limits: SolveLimits, only: Option<&Sta
         list_ptr: vec![0],
         e_id: Vec::new(),
         e_prob: Vec::new(),
-        e_lo: Vec::new(),
-        e_hi: Vec::new(),
         loose: Vec::new(),
     };
     b.seen.insert(origin, 0);
@@ -151,8 +141,6 @@ pub(super) fn explore(model: &impl Model, limits: SolveLimits, only: Option<&Sta
         list_ptr: b.list_ptr,
         e_next: b.e_id.iter().map(|&id| index[id as usize]).collect(),
         e_prob: b.e_prob,
-        e_lo: b.e_lo,
-        e_hi: b.e_hi,
         loose: b.loose,
     })
 }
@@ -166,18 +154,14 @@ impl Graph {
         self.list_ptr.len() - 1
     }
 
-    /// Whether any list's chances are only bounded.
-    pub(super) fn is_loose(&self) -> bool {
-        self.loose.iter().any(|&l| l)
+    /// Whether the policy acts with lumped chances in some state it reaches.
+    pub(super) fn approximate(&self, policy: &[usize], visits: &[f64]) -> bool {
+        policy.iter().zip(visits).any(|(&p, &n)| n > 1e-12 && self.loose[self.pair_list[p]])
     }
 
     /// Expected cost to finish after taking each pair's action.
     pub(super) fn q(&self, value: &[f64]) -> Vec<f64> {
-        self.q_with(value, &self.e_prob)
-    }
-
-    /// `q` with each entry's chance from `prob`.
-    pub(super) fn q_with(&self, value: &[f64], prob: &[f64]) -> Vec<f64> {
+        let prob = &self.e_prob;
         let expected: Vec<f64> = (0..self.lists())
             .map(|l| {
                 (self.list_ptr[l]..self.list_ptr[l + 1])
@@ -345,21 +329,15 @@ impl Graph {
             list_ptr: self.list_ptr,
             e_next,
             e_prob: self.e_prob,
-            e_lo: self.e_lo,
-            e_hi: self.e_hi,
             loose: self.loose,
         })
     }
 
     /// I - P for the policy, factored. None if the matrix is singular.
     pub(super) fn factor(&self, policy: &[usize], backend: Backend) -> Option<Lu> {
-        self.factor_with(policy, &self.e_prob, backend)
-    }
-
-    pub(super) fn factor_with(&self, policy: &[usize], prob: &[f64], backend: Backend) -> Option<Lu> {
         let rows = policy.iter().map(|&p| self.pair_list[p]).collect();
         linear::factor(
-            &System { rows, list_ptr: &self.list_ptr, e_next: &self.e_next, e_prob: prob },
+            &System { rows, list_ptr: &self.list_ptr, e_next: &self.e_next, e_prob: &self.e_prob },
             backend,
             &mut self.factorization.borrow_mut(),
         )
@@ -369,13 +347,6 @@ impl Graph {
         let mut rhs = Mat::<f64>::from_fn(self.n(), 1, |i, _| self.pair_cost[policy[i]]);
         lu.solve(&mut rhs);
         (0..self.n()).map(|i| rhs[(i, 0)]).collect()
-    }
-
-    /// The policy's values with chances `prob`; None if it doesn't surely finish under them.
-    pub(super) fn values_with(&self, policy: &[usize], prob: &[f64], backend: Backend) -> Option<Vec<f64>> {
-        let lu = self.factor_with(policy, prob, backend)?;
-        let v = self.evaluate(&lu, policy);
-        v.iter().all(|x| x.is_finite()).then_some(v)
     }
 
     /// Expected times each state is acted on, starting from state `start`.

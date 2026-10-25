@@ -52,23 +52,16 @@ fn plans_cost_what_the_simulator_says() {
         let batches: Vec<f64> = (0..6).map(|seed| simulate(&p, &plan, &f.prices, &settings, 500, 11 + seed, 100_000)).collect();
         let replay = batches.iter().sum::<f64>() / batches.len() as f64;
         let se = (batches.iter().map(|b| (b - replay).powi(2)).sum::<f64>() / (batches.len() * (batches.len() - 1)) as f64).sqrt();
-        let b = plan.bounds;
         let off = (replay - plan.cost) / plan.cost;
         eprintln!(
-            "{:<34} plan {:>10.1}  replay {:>10.1} ±{:>6.1}  {:>+6.1}%   bounds [{:>10.1}, {:>10.1}]",
+            "{:<34} plan {:>10.1}  replay {:>10.1} ±{:>6.1}  {:>+6.1}%{}",
             f.name,
             plan.cost,
             replay,
             se,
             100.0 * off,
-            b.lower,
-            b.upper
+            if plan.approximate { "  (lumped)" } else { "" }
         );
-        // Following the plan on real items costs at most its upper bound, and the best way to
-        // craft costs at least the lower one; the replay is an estimate of the first.
-        if replay > b.upper + 4.0 * se || replay < b.lower - 4.0 * se {
-            bad.push(format!("{}: replay {replay:.1} ± {se:.1} outside the bounds [{:.1}, {:.1}]", f.name, b.lower, b.upper));
-        }
         if off.abs() > TOLERANCE && (replay - plan.cost).abs() > 4.0 * se {
             bad.push(format!("{}: replay {replay:.1} vs plan {:.1} ({:+.1}%)", f.name, plan.cost, 100.0 * off));
         }
@@ -77,7 +70,7 @@ fn plans_cost_what_the_simulator_says() {
 }
 
 /// Rolls are exact; what is left is the lumped state not knowing which groups its other mods
-/// are, so exalts and annulments after a roll use expected weights (within the plan's bounds).
+/// are, so exalts and annulments after a roll use expected weights.
 const TOLERANCE: f64 = 0.06;
 
 #[test]

@@ -25,14 +25,6 @@ pub struct ProtectedRecipe {
 }
 
 impl ProtectedRecipe {
-    pub fn upper_bound(&self) -> Option<f64> {
-        if self.plan.bounds.upper != self.plan.cost || self.finishing.bounds.upper < self.finishing.cost {
-            return None;
-        }
-        let upper = self.cost - self.finishing.cost + self.finishing.bounds.upper;
-        upper.is_finite().then_some(upper)
-    }
-
     pub fn to_dict(&self, problem: &Problem) -> Value {
         json!({
             "side": self.side,

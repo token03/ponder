@@ -132,6 +132,10 @@ fn planner_builds_padded_leaves_and_a_tree() {
     let problem = gear::problem_spec_on(db, &base, targets, 84, &BTreeSet::new(), None, pricing).compile();
     let mut planner = Planner::new(db, &problem, &base, 84, pricing);
     assert!(planner.leaves().iter().any(|d| !d.on_target && !d.padding.is_empty())); // partner bases with NNN pads
+    // padded donors wait for their problems until a padded tree could pay
+    assert!(planner.leaves().iter().all(|d| d.padded == d.problem.is_none()));
+    assert!(planner.leaves().iter().filter(|d| d.padded).all(|d| d.singles.len() == d.carries.len()));
+    planner.prepare_padded(db, pricing);
     assert!(planner.leaves().iter().all(|d| d.problem.as_ref().unwrap().junk_cap == Some((0, 0)))); // donors must be clean
     for d in planner.leaves_mut() {
         // stand-in costs: padding costs more

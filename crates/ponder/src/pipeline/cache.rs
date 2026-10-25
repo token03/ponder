@@ -5,11 +5,11 @@ use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use indexmap::IndexMap;
-use ponder_core::{Bounds, JUNK_SLOTS, MAX_TARGETS, Plan, Prices, Problem, SelfFracture, Settings, SolveError, State};
+use ponder_core::{JUNK_SLOTS, MAX_TARGETS, Plan, Prices, Problem, SelfFracture, Settings, SolveError, State};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the solver's answers (or this file format) change, to drop cached plans.
-pub const PLAN_VERSION: u32 = 17;
+pub const PLAN_VERSION: u32 = 18;
 
 /// `float(f"{x:.{sig}g}")`: `x` to `sig` significant figures.
 pub fn round_sig(x: f64, sig: usize) -> f64 {
@@ -68,17 +68,6 @@ impl PlanCache {
 
     pub fn failure(&self, key: &str) -> Option<SolveError> {
         serde_json::from_slice(&std::fs::read(self.dir.as_ref()?.join(format!("{key}.failure"))).ok()?).ok()
-    }
-
-    pub fn lower_bound(&self, key: &str) -> Option<f64> {
-        let bound: f64 = serde_json::from_slice(&std::fs::read(self.dir.as_ref()?.join(format!("{key}.bound"))).ok()?).ok()?;
-        bound.is_finite().then_some(bound)
-    }
-
-    pub fn put_lower_bound(&self, key: &str, lower_bound: f64) {
-        if lower_bound.is_finite() {
-            self.store(&format!("{key}.bound"), &serde_json::to_vec(&lower_bound).expect("finite bound"));
-        }
     }
 
     pub fn put_failure(&self, key: &str, error: &SolveError) {
@@ -180,7 +169,7 @@ struct CachedPlan {
     cost: f64,
     hours: f64,
     states: usize,
-    bounds: Bounds,
+    approximate: bool,
     unpriced: Vec<String>,
     usage: std::collections::BTreeMap<String, f64>,
     actions: Vec<String>,
@@ -214,7 +203,7 @@ fn encode(plan: &Plan) -> Option<Vec<u8>> {
         cost: plan.cost,
         hours: plan.hours,
         states: plan.states,
-        bounds: plan.bounds,
+        approximate: plan.approximate,
         unpriced: plan.unpriced.clone(),
         usage: plan.usage.iter().map(|(k, v)| (k.clone(), *v)).collect(),
         actions: actions.into_keys().map(str::to_owned).collect(),
@@ -244,7 +233,7 @@ fn decode(raw: &[u8]) -> Option<Plan> {
         cost: cached.cost,
         hours: cached.hours,
         states: cached.states,
-        bounds: cached.bounds,
+        approximate: cached.approximate,
         unpriced: cached.unpriced,
         usage: cached.usage.into_iter().collect(),
         restart_values: cached.restart_values.into_iter().map(|(s, v)| (unpack_state(s), v)).collect(),
@@ -285,8 +274,7 @@ mod tests {
         let s = State::new(2, &[1, 0, 2], &[1, 0, 0, 3]);
         let t = State::new(2, &[], &[]).with_meta(3);
         let u = State::new(1, &[0, 1], &[]);
-        let bounds = Bounds { lower: 11.0, upper: f64::INFINITY };
-        let mut plan = Plan { cost: 12.5, hours: 0.25, states: 9, unpriced: vec!["x".into()], bounds, ..Plan::default() };
+        let mut plan = Plan { cost: 12.5, hours: 0.25, states: 9, unpriced: vec!["x".into()], approximate: true, ..Plan::default() };
         plan.usage.insert("chaos".into(), 3.5);
         plan.initial = vec![(0.25, s), (0.75, t)];
         plan.recovery = vec![(1.0, s)];
@@ -318,17 +306,11 @@ mod tests {
         assert_eq!(cache.failure("abc"), Some(SolveError::Unreachable));
         cache.put_failure("numerical", &SolveError::Singular("retry".into()));
         assert!(cache.failure("numerical").is_none());
-        cache.put_failure("dominated", &SolveError::Dominated { lower_bound: 10.0, ceiling: 5.0 });
-        assert!(cache.failure("dominated").is_none());
-        cache.put_lower_bound("dominated", 10.0);
-        assert_eq!(cache.lower_bound("dominated"), Some(10.0));
-        cache.put_lower_bound("invalid-bound", f64::NAN);
-        assert!(cache.lower_bound("invalid-bound").is_none());
         cache.put("abc", &plan);
         assert!(cache.failure("abc").is_none());
         let back = cache.get("abc").expect("saved");
         assert_eq!((back.cost, back.hours, back.states, &back.unpriced, &back.usage), (12.5, 0.25, 9, &plan.unpriced, &plan.usage));
-        assert_eq!(back.bounds, bounds);
+        assert!(back.approximate);
         assert!(std::sync::Arc::ptr_eq(&back.policy[&s], &back.policy[&u]));
         assert_eq!(back.restart_values, plan.restart_values);
         assert_eq!(back.sell_states, plan.sell_states);

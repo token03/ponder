@@ -890,7 +890,7 @@ impl Planner {
                 if !d.padded || d.plan.is_some() || d.singles.len() != d.carries.len() {
                     return None;
                 }
-                d.singles.iter().map(|&i| self.donors[i].plan.as_ref().map_or(f64::INFINITY, |p| p.bounds.lower)).reduce(f64::max)
+                d.singles.iter().map(|&i| self.donors[i].plan.as_ref().map_or(f64::INFINITY, |p| p.cost)).reduce(f64::max)
             })
             .collect();
         for (donor, lower) in self.donors.iter_mut().zip(lower) {

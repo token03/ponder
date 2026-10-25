@@ -110,22 +110,6 @@ pub struct RecombInfo {
 }
 
 impl RecombInfo {
-    pub fn upper_bound(&self) -> Option<f64> {
-        let finishing = self.finishing.as_ref()?;
-        if finishing.bounds.upper < finishing.cost || self.recovery.as_ref().is_some_and(|r| r.plan.bounds.upper != r.plan.cost) {
-            return None;
-        }
-        let mut upper = self.cost? - finishing.cost + finishing.bounds.upper;
-        for (donor, copies) in &self.donors {
-            let plan = donor.plan.as_ref()?;
-            if plan.bounds.upper < plan.cost {
-                return None;
-            }
-            upper += copies * (plan.bounds.upper - plan.cost).max(0.0);
-        }
-        upper.is_finite().then_some(upper)
-    }
-
     pub fn to_dict(&self, problem: Option<&Problem>) -> Value {
         let mut json = self.json.clone();
         for (i, (donor, _)) in self.donors.iter().enumerate() {
@@ -425,21 +409,6 @@ impl Estimate {
         Some(self.protected.as_ref()?.cost + self.bench_cost() + self.base_price.map_or(0.0, |b| b.0))
     }
 
-    pub fn upper_bound(&self) -> Option<f64> {
-        let bench = self.bench_cost();
-        let base = self.base_price.map_or(0.0, |b| b.0);
-        let direct = (!self.needs_base_price())
-            .then(|| self.plan.as_ref().filter(|p| p.bounds.upper >= p.cost).map(|p| p.bounds.upper + bench + base))
-            .flatten();
-        let fractures = self
-            .fractures
-            .iter()
-            .filter_map(|f| Some(f.plan.as_ref().filter(|p| p.bounds.upper >= p.cost)?.bounds.upper + f.base_cost()? + f.bench_cost));
-        let protected = self.protected.as_ref().and_then(|r| r.upper_bound()).map(|upper| upper + bench + base);
-        let recomb = self.recomb.as_ref().and_then(RecombInfo::upper_bound).map(|upper| upper + bench);
-        direct.into_iter().chain(fractures).chain(protected).chain(recomb).filter(|upper| upper.is_finite()).min_by(f64::total_cmp)
-    }
-
     /// The cheapest of crafting from scratch, the best priced fracture and recombining.
     pub fn cheapest(&self) -> Option<f64> {
         match self.cheapest_route()? {
@@ -642,8 +611,8 @@ impl Estimate {
             "item_level": self.item_level,
             "craft_cost": craft_cost,
             "direct_lower_bound": self.direct_lower_bound(),
-            // certified range of the crafting plan's expected chaos (the solver's model, base and bench excluded)
-            "craft_bounds": self.cheapest_plan().map(|(_, p)| p.bounds).map(|b| json!({"lower": b.lower, "upper": b.upper})),
+            // the plan uses lumped (estimated) chances somewhere it goes
+            "approximate": self.cheapest_plan().map(|(_, p)| p.approximate),
             "bench": self.bench.iter().map(|(label, c)| json!({"mod": label, "chaos": c})).collect::<Vec<_>>(),
             "base_price": self.base_price.map(|b| b.0),
             "base_source": if self.base_source.is_empty() { None } else { Some(&self.base_source) },

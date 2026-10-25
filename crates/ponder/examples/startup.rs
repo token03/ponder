@@ -108,29 +108,6 @@ fn main() {
                 .collect();
             std::fs::write(path, serde_json::to_vec_pretty(&estimates).unwrap()).unwrap();
         }
-        if std::env::args().any(|arg| arg == "--pruning-profile") {
-            let mut total = 0;
-            let mut dominated = 0;
-            let mut certified = 0;
-            let mut bounded_recipes = 0;
-            let mut dominated_direct = 0;
-            for e in &report.estimates {
-                let upper = e.plan.as_ref().map_or(f64::INFINITY, |p| p.bounds.upper + e.bench_cost() + e.base_price.map_or(0.0, |b| b.0));
-                if let Some(upper) = e.upper_bound() {
-                    bounded_recipes += 1;
-                    dominated_direct += usize::from(e.plan.as_ref().is_some_and(|p| p.bounds.lower + e.bench_cost() > upper));
-                }
-                for f in &e.fractures {
-                    total += 1;
-                    if let Some(base) = f.base_cost() {
-                        dominated += usize::from(e.cheapest().is_some_and(|cost| base + f.bench_cost >= cost));
-                        certified += usize::from(base + f.bench_cost >= upper);
-                    }
-                }
-            }
-            println!("fractures={total} nominal_dominated={dominated} certified_by_direct={certified}");
-            println!("bounded_recipes={bounded_recipes} dominated_direct={dominated_direct}");
-        }
         for estimate in &report.estimates {
             if let Some(error) = &estimate.error {
                 eprintln!(

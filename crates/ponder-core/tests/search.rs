@@ -67,7 +67,7 @@ fn search_handles_retries_and_dead_ends_without_a_crafting_catalogue() {
     };
     let solution = search::solve(&mut model, Options::default()).unwrap();
     assert_eq!(solution.cost, 2.0);
-    assert_eq!(solution.bounds, Bounds::exact(2.0));
+    assert!(!solution.approximate);
     assert_eq!(solution.policy, vec![10]);
     assert_eq!(solution.states, vec![state(0)]);
     let policy = solution.states.iter().copied().zip(solution.policy).collect();
@@ -75,41 +75,16 @@ fn search_handles_retries_and_dead_ends_without_a_crafting_catalogue() {
 }
 
 #[test]
-fn interval_evaluation_and_refinement_share_the_same_model_contract() {
+fn lumped_chances_are_flagged_and_refined_where_the_plan_uses_them() {
     let mut model =
         RetryModel { actions: vec![Decision { id: 10, cost: 1.0 }, Decision { id: 20, cost: 3.0 }], interval: true, refinable: false };
-    let bounded = search::solve(&mut model, Options::default()).unwrap();
-    assert!((bounded.cost - 2.5).abs() < 1e-10);
-    assert!((bounded.bounds.lower - 1.25).abs() < 1e-10);
-    assert!((bounded.bounds.upper - 5.0).abs() < 1e-10);
-    model.actions[0].cost = 2.0;
-    let fixed = search::solve(&mut model, Options::default()).unwrap();
-    assert_eq!(fixed.bounds.upper, 3.0);
-    model.actions[0].cost = 1.0;
+    let lumped = search::solve(&mut model, Options::default()).unwrap();
+    assert!((lumped.cost - 2.5).abs() < 1e-10);
+    assert!(lumped.approximate);
     model.refinable = true;
     let refined = search::solve(&mut model, Options::default()).unwrap();
     assert_eq!(refined.cost, 2.0);
-    assert_eq!(refined.bounds, Bounds::exact(2.0));
-    assert!(!model.interval);
-}
-
-#[test]
-fn competitive_search_requires_a_certificate_and_keeps_equal_cost_plans() {
-    let mut model = RetryModel { actions: vec![Decision { id: 10, cost: 1.0 }], interval: true, refinable: false };
-    let Err(error) = search::solve(&mut model, Options { cost_ceiling: Some(1.0), ..Default::default() }) else {
-        panic!("the certified lower bound exceeds the ceiling");
-    };
-    assert!(matches!(error, SolveError::Dominated { lower_bound, ceiling: 1.0 } if (lower_bound - 1.25).abs() < 1e-10));
-    assert!(model.interval);
-
-    model.refinable = false;
-    let uncertain = search::solve(&mut model, Options { cost_ceiling: Some(2.0), ..Default::default() }).unwrap();
-    assert!((uncertain.cost - 2.5).abs() < 1e-10);
-    assert!(uncertain.bounds.lower < 2.0);
-
-    model.refinable = true;
-    let tied = search::solve(&mut model, Options { cost_ceiling: Some(2.0), ..Default::default() }).unwrap();
-    assert_eq!(tied.cost, 2.0);
+    assert!(!refined.approximate);
     assert!(!model.interval);
 }
 
@@ -185,30 +160,6 @@ fn following_a_zero_cost_closed_cycle_is_singular_in_both_backends() {
     }
 }
 
-#[test]
-fn interval_certificates_match_closed_form_for_large_positive_and_negative_cost_models() {
-    for (retry, cost, range, lower, upper) in
-        [(0.99, 0.02, (0.97, 0.995), 0.02 / 0.03, 0.02 / 0.005), (0.5, -0.1, (0.25, 0.75), -0.1 / 0.25, -0.1 / 0.75)]
-    {
-        for backend in [Backend::Dense, Backend::Split] {
-            let mut model = LongRetryModel {
-                actions: vec![
-                    Decision { id: 0, cost: 3.0 },
-                    Decision { id: 1, cost },
-                    Decision { id: 2, cost: 0.25 },
-                    Decision { id: 3, cost: 0.0 },
-                ],
-                retry,
-                range: Some(range),
-            };
-            let solution = search::solve(&mut model, Options { backend, ..Default::default() }).unwrap();
-            assert!((solution.cost - cost / (1.0 - retry)).abs() < 1e-10);
-            assert!((solution.bounds.lower - lower).abs() < 1e-10, "{backend:?}: {:?}", solution.bounds);
-            assert!((solution.bounds.upper - upper).abs() < 1e-10, "{backend:?}: {:?}", solution.bounds);
-        }
-    }
-}
-
 struct SharedRetryModel {
     actions: Vec<Decision>,
     outcomes: Vec<std::sync::Arc<Distribution>>,
@@ -249,26 +200,6 @@ fn shared_retry_distributions_preserve_reachability_and_exclude_dead_ends() {
     assert!(solution.values.iter().all(|&value| (value - 33.0).abs() < 1e-10));
 }
 
-#[test]
-fn interval_policies_detect_a_closed_adversarial_cycle_and_a_forced_escape() {
-    let outcomes = vec![(0.25, state(0)), (0.25, state(1)), (0.5, state(32))];
-    let mut model = SharedRetryModel {
-        actions: vec![Decision { id: 0, cost: 1.0 }],
-        outcomes: vec![std::sync::Arc::new(Distribution::Bounded {
-            outcomes: outcomes.clone(),
-            bounds: vec![(0.0, 0.5), (0.0, 0.5), (0.0, 1.0)],
-        })],
-    };
-    let unbounded = search::solve(&mut model, Options::default()).unwrap();
-    assert!((unbounded.cost - 2.0).abs() < 1e-10);
-    assert_eq!(unbounded.bounds.upper, f64::INFINITY);
-    assert!((unbounded.bounds.lower - 1.0).abs() < 1e-10);
-    model.outcomes[0] = std::sync::Arc::new(Distribution::Bounded { outcomes, bounds: vec![(0.0, 0.5), (0.0, 0.5), (0.1, 1.0)] });
-    let bounded = search::solve(&mut model, Options::default()).unwrap();
-    assert!((bounded.cost - 2.0).abs() < 1e-10);
-    assert!((bounded.bounds.upper - 10.0).abs() < 1e-10);
-}
-
 struct UnusedUncertainty {
     actions: Vec<Decision>,
 }
@@ -299,12 +230,12 @@ impl Model for UnusedUncertainty {
 }
 
 #[test]
-fn uncertainty_in_an_unused_route_does_not_invalidate_the_selected_policy_bound() {
+fn lumped_chances_in_an_unused_route_leave_the_plan_exact() {
     let mut model =
         UnusedUncertainty { actions: vec![Decision { id: 0, cost: 1.0 }, Decision { id: 1, cost: 10.0 }, Decision { id: 2, cost: 1.0 }] };
     let plan = search::solve(&mut model, Options::default()).unwrap();
     assert_eq!(plan.cost, 1.0);
-    assert_eq!(plan.bounds, Bounds::exact(1.0));
+    assert!(!plan.approximate);
     assert_eq!(plan.states.len(), 2);
 }
 
@@ -356,7 +287,7 @@ impl Model for CompetingRefinements {
 }
 
 #[test]
-fn competing_uncertain_actions_are_refined_together_before_rebuilding_the_graph() {
+fn lumped_actions_the_plan_does_not_use_are_never_refined() {
     let mut model = CompetingRefinements {
         actions: vec![
             Decision { id: 10, cost: 1.0 },
@@ -368,8 +299,8 @@ fn competing_uncertain_actions_are_refined_together_before_rebuilding_the_graph(
         passes: 0,
     };
     let plan = search::solve(&mut model, Options::default()).unwrap();
-    assert_eq!(model.passes, 1);
-    assert_eq!(model.refined, [true; 3]);
+    assert_eq!(model.passes, 0);
+    assert_eq!(model.refined, [false; 3]);
     assert_eq!(plan.cost, 3.0);
-    assert_eq!(plan.bounds, Bounds::exact(3.0));
+    assert!(!plan.approximate);
 }
