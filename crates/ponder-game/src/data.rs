@@ -12,8 +12,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 /// Where repoe-fork publishes its exports (`{SOURCE}/data/{name}.json`, `{SOURCE}/exported-version.txt`).
 pub const SOURCE: &str = "https://raw.githubusercontent.com/repoe-fork/repoe-fork.github.io/master";
@@ -74,17 +74,13 @@ pub fn data_dir() -> PathBuf {
 /// Are the files matching needs (mods and base items) in `dest` (default: [`data_dir`])?
 pub fn available(dest: Option<&Path>) -> bool {
     let dest = dest.map(Path::to_path_buf).unwrap_or_else(data_dir);
-    ["mods", "base_items"]
-        .iter()
-        .all(|n| dest.join(format!("{n}.json")).is_file() || dest.join(format!("{n}.json.gz")).is_file())
+    ["mods", "base_items"].iter().all(|n| dest.join(format!("{n}.json")).is_file() || dest.join(format!("{n}.json.gz")).is_file())
 }
 
 /// The game version the data was exported from, if recorded.
 pub fn version(dest: Option<&Path>) -> Option<String> {
     let dest = dest.map(Path::to_path_buf).unwrap_or_else(data_dir);
-    std::fs::read_to_string(dest.join("version.txt"))
-        .ok()
-        .map(|s| s.trim().to_string())
+    std::fs::read_to_string(dest.join("version.txt")).ok().map(|s| s.trim().to_string())
 }
 
 // -- loading --------------------------------------------------------------------------
@@ -108,10 +104,7 @@ pub fn load_from<T: DeserializeOwned>(dir: &Path, name: &str) -> Result<T, DataE
 }
 
 /// `load_from` in [`data_dir`], remembered in `slot` for the life of the process.
-fn cached<T: DeserializeOwned>(
-    slot: &'static OnceLock<Arc<T>>,
-    name: &str,
-) -> Result<Arc<T>, DataError> {
+fn cached<T: DeserializeOwned>(slot: &'static OnceLock<Arc<T>>, name: &str) -> Result<Arc<T>, DataError> {
     if let Some(v) = slot.get() {
         return Ok(v.clone());
     }
@@ -127,12 +120,7 @@ pub fn load(name: &str) -> Result<Arc<serde_json::Value>, DataError> {
         return Ok(v.clone());
     }
     let v = Arc::new(load_from::<serde_json::Value>(&data_dir(), name)?);
-    Ok(cache
-        .lock()
-        .unwrap()
-        .entry(name.to_string())
-        .or_insert(v)
-        .clone())
+    Ok(cache.lock().unwrap().entry(name.to_string()).or_insert(v).clone())
 }
 
 pub type OrderedMap<T> = indexmap::IndexMap<String, T>;
@@ -241,7 +229,7 @@ pub struct Essence {
     pub spawn_level_min: i64,
     /// Item class -> forced mod id.
     #[serde(default)]
-    pub mods: BTreeMap<String, String>,
+    pub mods: BTreeMap<String, Option<String>>,
     #[serde(rename = "type")]
     pub type_: EssenceType,
 }
@@ -299,9 +287,7 @@ pub struct BenchOption {
 impl BenchOption {
     /// The mod id this option adds, if any (Python `(o.get("actions") or {}).get("add_explicit_mod")`).
     pub fn add_explicit_mod(&self) -> Option<&str> {
-        self.actions
-            .as_ref()
-            .and_then(|a| a.add_explicit_mod.as_deref())
+        self.actions.as_ref().and_then(|a| a.add_explicit_mod.as_deref())
     }
 }
 
@@ -399,8 +385,7 @@ mod tests {
 
     #[test]
     fn ordered_map_keeps_file_order_and_first_position() {
-        let m: OrderedMap<i32> =
-            serde_json::from_str(r#"{"b": 1, "a": 2, "c": 3, "b": 4}"#).unwrap();
+        let m: OrderedMap<i32> = serde_json::from_str(r#"{"b": 1, "a": 2, "c": 3, "b": 4}"#).unwrap();
         assert_eq!(m.keys().collect::<Vec<_>>(), ["b", "a", "c"]);
         assert_eq!(m["b"], 4);
         assert_eq!(m.get_index_of("c"), Some(2));
@@ -416,18 +401,14 @@ mod tests {
                 "text":"+(8-12) to Strength","type":"Strength","gold_value":null,"grants_effects":[]}"#,
         )
         .unwrap();
-        assert_eq!(
-            (m.type_.as_str(), m.stats[0].min, m.spawn_weights[0].weight),
-            ("Strength", 8.0, 1000)
-        );
+        assert_eq!((m.type_.as_str(), m.stats[0].min, m.spawn_weights[0].weight), ("Strength", 8.0, 1000));
         let none: Mod = serde_json::from_str(r#"{"text":null}"#).unwrap();
         assert_eq!(none.text_or_empty(), "");
     }
 
     #[test]
     fn missing_file_is_a_missing_error() {
-        let err = load_from::<serde_json::Value>(Path::new("/nonexistent-ponder-dir"), "mods")
-            .unwrap_err();
+        let err = load_from::<serde_json::Value>(Path::new("/nonexistent-ponder-dir"), "mods").unwrap_err();
         assert!(matches!(err, DataError::Missing(_)));
         assert!(!available(Some(Path::new("/nonexistent-ponder-dir"))));
     }

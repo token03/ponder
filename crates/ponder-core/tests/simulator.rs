@@ -52,7 +52,7 @@ fn plans_cost_what_the_simulator_says() {
         let batches: Vec<f64> = (0..6).map(|seed| simulate(&p, &plan, &f.prices, &settings, 500, 11 + seed, 100_000)).collect();
         let replay = batches.iter().sum::<f64>() / batches.len() as f64;
         let se = (batches.iter().map(|b| (b - replay).powi(2)).sum::<f64>() / (batches.len() * (batches.len() - 1)) as f64).sqrt();
-        let b = plan.bounds.expect("solve gives bounds");
+        let b = plan.bounds;
         let off = (replay - plan.cost) / plan.cost;
         eprintln!(
             "{:<34} plan {:>10.1}  replay {:>10.1} ±{:>6.1}  {:>+6.1}%   bounds [{:>10.1}, {:>10.1}]",

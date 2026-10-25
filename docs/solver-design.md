@@ -93,7 +93,7 @@ The existing crates remain. The module boundaries are:
 | Module | Owns | Must not own |
 |---|---|---|
 | `ponder/actions/{essence,fossils,harvest,bench}.rs` | Available actions, profiles, costs and timing metadata | Search or state compression |
-| `ponder/gear.rs::configure_actions` | One catalogue assembly path for products, components and relevelled items; explicit capabilities and fossil shortlist limits | Currency transition implementations |
+| `ponder/gear/catalog.rs::configure_actions` | One catalogue assembly path for products, components and relevelled items; explicit capabilities and fossil shortlist limits | Currency transition implementations |
 | `ponder-core/action.rs` | Typed `ActionKind` and shared `Effect` definitions; duration and currency cost | Search policy |
 | `ponder-core/mechanics.rs` | Real-mod draws and effects; shared mod-count, affix-limit and removal rules | Goal classification or policy selection |
 | `ponder-core/problem/projection.rs` | Per-goal classification and completion | Market value |
@@ -109,10 +109,10 @@ that specification and compile it. There is no manual cache-reset API. Solving s
 and equivalent actions by stable catalogue indices without modifying the problem; changing
 prices and solving again cannot lose previously excluded actions.
 
-Actions carry typed kinds and explicit seconds. The JSON kind names remain compatible with
-the existing fixtures; deserialization infers missing duration metadata from the kind and
-currency inputs. Display names never determine behavior or timing. Unknown kinds fail to
-load. Fossil combinations supply their socketing time explicitly.
+Actions carry typed kinds and explicit seconds. The current JSON format requires timing;
+fixtures have been converted instead of retaining an old-format deserializer. Display names
+never determine behavior or timing. Unknown kinds fail to load. Fossil combinations supply
+their socketing time explicitly.
 
 `Distribution` distinguishes exact probabilities from bounded probabilities. Public roll
 queries request refinement and retain the returned bounds when exact computation cannot be
@@ -128,9 +128,8 @@ the reachable graph; this seam makes a focused backend possible without rewritin
 
 Model action IDs stay stable across refinement. Buffered transitions start with a cleared
 buffer and contain a normalized distribution with feasible probability intervals. Refinement
-returns true only when its transitions change and must preserve their soundness. The current
-SSP backend assumes nonnegative costs and a proper finishing policy; market-credit models
-must establish those conditions separately. `solve_with` takes one `SolveOptions` value for
+returns true only when its transitions change and must preserve their soundness. The SSP backend supports market credits and requires a finite proper finishing policy.
+Negative net costs are valid; a singular or non-finite policy is reported. `solve_with` takes one `SolveOptions` value for
 backend, iteration and resource limits; `solve` uses its defaults.
 
 The exact mechanics engine and compressed mathematics deliberately have different item
@@ -149,8 +148,8 @@ Extension checklist:
 - Assembly and future value exits consume component plans and transition contracts. Their
   market assumptions must remain outside the mechanics layer.
 
-Plan cache version 9 covers the action metadata and exact-fracturing changes. Cached plan
-attachment no longer edits a problem's catalogue. Legacy problem JSON still deserializes.
+Plan cache version 17 covers current goal, continuation, bench and recovery semantics. Older
+plans are invalidated. Every solved plan includes bounds; there is no pre-bounds plan format.
 
 ## 5. Pivots and opportunities, priced in
 
@@ -198,3 +197,97 @@ Still to model (from the earlier plan, unchanged): the 3.26 special-mod penalty 
 recombinators, exclusive-mod rules, beast lock + Awakener preview as observation nodes
 (`E[max_d V(preview(s, d))]`), and influence as its own stage. Every community-derived
 number lives in one versioned table so a patch is a data update.
+
+## 7. Implemented recipe stages and recovery
+
+Gear completion uses named useful requirements, plus interchangeable single elemental
+resistance counts. Suppression and chaos resistance cannot be exchanged for elemental
+resistance. Each requirement has one acceptable floor; stronger rolls qualify without adding
+separate T1/T3 state dimensions. Accepted substitutes retain the same conflict-group footprint,
+so a hybrid armour/ES mod cannot silently block an otherwise independent armour target.
+
+Eligible complete natural sides are prepared as small component goals, then handed to an
+independent finisher. Lock/scour and full-suffix Matron/scour are exact compound operations.
+The finisher can annul; losing its preserved targets returns to a priced acquisition node.
+Awakener acquisition preserves its transferred pair and includes its random reforge. Its
+recovery repeats both donor preparation and transfer. Recombination retains its separate join
+kernel and never receives that reforge. Supported natural asymmetric joins include Focused
+and Simplex; side capacities above three and special/exclusive or influenced recombination
+remain outside the validated kernel.
+
+The repeated-acquisition node solves the regenerative equation rather than pricing only the
+first donor pair. Its value includes all expected retries, currency and clicking time. It adds
+no physical inventory dimension. A full blocked item retaining the quoted core also offers a
+sale/replacement action. Its toll is replacement preparation plus base and trade time minus
+explicit sale proceeds. Lost-core outcomes cannot claim that quote. Without a quote, a
+baseline policy supplies state-specific break-even premiums. Quotes are scoped to both the
+goal and its preserved core. Negative net replacement credits are supported, including finite negative expected finishing
+costs. Singular policies are reported rather than assigned a fake cost.
+
+A single observed bench craft becomes a normal stat requirement: stronger natural rolls
+can satisfy it, or a terminal bench action can finish it. It allows the source to be chosen by the recipe. Full blocked results remain
+possible, and the terminal bench action checks the actual free slot. Ordinary bench crafts
+can finish a goal as absorbing actions. Temporary unveil blockers are
+modeled before the three offers are drawn. Multiple concurrent intermediate bench crafts,
+elevation, imprint/restore and preview-lock stages are not yet general route providers.
+Route decomposition produces a feasible-policy estimate, not a proof of global optimality
+over systems the model does not represent. Initial unquoted donor-base prices remain excluded.
+
+Upper-bound certification follows only states reachable under the selected policy, using
+positive probability upper limits for reachability. Uncertainty in an unused route cannot
+invalidate that policy's bound. Adversarial choices keep their prior probabilities on equal
+expected value; repeated numerical policies and unresolved convergence leave conservative
+bounds rather than producing a finite certificate from unstable arithmetic. Closed interval
+classes are detected before attempting a singular worst-case solve.
+
+When optimistic bounds identify uncertainty, all competing actions that could improve the
+incumbent at the optimistic policy's visited states are refined together. This preserves the
+previous refinement candidates and avoids rebuilding the whole graph once per fossil or
+Harvest profile. The six-goal amulet diagnostic in `target/craft-cases` dropped from an
+unfinished run exceeding six minutes, through 43 seconds after policy projection, to 6.3
+seconds after batching. Its nominal cost and 40,631 discovered states were unchanged.
+
+With shared modifier pools and profiles, failed-shape reuse and block substitution,
+the full local workload takes 11.2 seconds in the cached benchmark and 175.2 seconds
+to fill an empty plan directory, compared with
+14.1 and 290.2 seconds for the previous binary on the same inputs. Cold peak resident
+memory remains high at 6,404 MiB; the cached run peaks at 5,172 MiB. It finds priced
+routes for 433 of 437 crafts. Recipe decomposition improves coverage without making
+the entire portfolio a proof of optimality, and the ten-second full-startup target
+remains open.
+
+## 8. Competitive route evaluation
+
+Policy matrices retain their exact stochastic equations. The sparse part of the
+Woodbury decomposition is factored by strongly connected components: cycles remain
+inside their own LU factors, while dependencies between components use substitution.
+The transpose solve processes components in the opposite order. Dense and sparse
+oracles cover multiple right-hand sides, shared resets between cyclic blocks,
+singular cycles, and both positive costs and finite negative credits.
+
+The block factors retain only external component dependencies after construction.
+Consecutive scalar components share a column-wise substitution pass. These changes
+preserve the stochastic equations and their evaluation order within each column.
+Shared pools and weight profiles change ownership, not mechanics or serialized
+problem contents. Failed-roll shape reuse preserves the existing bounded fallback;
+it does not impose a new search cutoff or discard a crafting method.
+
+A complete policy supplies an upper bound for its route. Comparing a different
+candidate uses its own certified lower bound, including acquisition and final bench
+costs on both sides of the comparison. Search stops only when the lower bound is
+strictly greater than the incumbent, with the numerical comparison tolerance; ties
+remain eligible. Probability intervals that straddle the incumbent do not justify
+pruning. Lower certificates are cached separately from plans and failures.
+
+Protected recovery can certify an incumbent only when its preparation price is
+already an upper bound: an uncertain preparation price cannot be multiplied by the
+nominal retry count and called a certificate. Recombination adds each donor's
+upper-cost premium multiplied by its expected copies, since the join kernel is
+exact in the supported model. The independent finishing policy contributes its
+own upper bound. Uncertified recipe costs remain useful estimates but cannot stop
+another search.
+
+Promising fracture variants run before the direct craft so their complete costs
+can provide incumbents. A later trade quote or removal of a quoted sale recipe can
+make an alternative competitive again; the pipeline retries it rather than treating
+the earlier comparison as a permanent failure.

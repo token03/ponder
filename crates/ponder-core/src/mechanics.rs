@@ -6,27 +6,40 @@ use crate::types::*;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ItemRules {
-    pub rare_limit: usize,
+    pub rare_limits: [usize; 2],
+    magic_base: usize,
     pub notable_cap: usize,
     rare_counts: &'static [(usize, f64)],
 }
 
 impl ItemRules {
-    pub fn new(kind: Kind, notable_cap: usize) -> ItemRules {
+    pub fn new(kind: Kind, notable_cap: usize, limits: Option<[usize; 2]>) -> ItemRules {
         let (rare_limit, rare_counts) = match kind {
             Kind::Jewel => (RARE_AFFIX_LIMIT_JEWEL, RARE_MOD_COUNTS_JEWEL.as_slice()),
             Kind::Gear => (RARE_AFFIX_LIMIT_GEAR, RARE_MOD_COUNTS_GEAR.as_slice()),
         };
-        ItemRules { rare_limit, rare_counts, notable_cap }
+        ItemRules { magic_base: rare_limit - 1, rare_limits: limits.unwrap_or([rare_limit; 2]), rare_counts, notable_cap }
     }
 
-    pub fn limit(self, rarity: u8) -> usize {
-        if rarity == MAGIC { 1 } else { self.rare_limit }
+    pub fn limit(self, rarity: u8, side: Side) -> usize {
+        let limit = self.rare_limits[side.index()];
+        if rarity == MAGIC { (limit as isize - self.magic_base as isize).max(0) as usize } else { limit }
     }
 
-    pub fn counts(self, rarity: u8) -> &'static [(usize, f64)] {
+    pub fn counts(self, rarity: u8) -> Vec<(usize, f64)> {
         const MAGIC_COUNTS: [(usize, f64); 2] = [(1, 1.0 - MAGIC_TWO_MOD_CHANCE), (2, MAGIC_TWO_MOD_CHANCE)];
-        if rarity == MAGIC { &MAGIC_COUNTS } else { self.rare_counts }
+        let counts = if rarity == MAGIC { &MAGIC_COUNTS[..] } else { self.rare_counts };
+        let cap = self.limit(rarity, Side::Prefix) + self.limit(rarity, Side::Suffix);
+        let mut out: Vec<(usize, f64)> = Vec::new();
+        for &(n, p) in counts {
+            let n = n.min(cap);
+            if let Some(entry) = out.iter_mut().find(|e| e.0 == n) {
+                entry.1 += p;
+            } else {
+                out.push((n, p));
+            }
+        }
+        out
     }
 }
 
@@ -69,7 +82,7 @@ impl Rng {
 /// Most mods an item carries while replaying: a rare holds 6, fractured and forced ones included.
 const MAX_MODS: usize = 8;
 
-/// (rarity, profile, the item's mods sorted and padded with `u16::MAX`, side + 1 or 0, the
+/// (rarity, profile, the item's draw classes sorted and padded with `u16::MAX`, side + 1 or 0, the
 /// metamod on the item)
 type DrawKey = (u8, u16, [u16; MAX_MODS], u8, u8);
 
@@ -84,7 +97,11 @@ pub(crate) struct PreparedEffect<'p> {
 
 pub(crate) struct Mechanics<'p> {
     rules: ItemRules,
-    profile_weights: &'p std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    problem: &'p Problem,
+    pub(crate) offers: Vec<u16>,
+    pub(crate) veiled: Option<u16>,
+    pub(crate) pending_side: Option<Side>,
+    profile_weights: &'p std::collections::BTreeMap<String, WeightProfile>,
     /// every mod a replay can place, pool first (only pool mods are drawn)
     pub(crate) mods: Vec<&'p Mod>,
     pool: usize,
@@ -92,6 +109,7 @@ pub(crate) struct Mechanics<'p> {
     notable: Vec<bool>,
     pub(crate) fixed: Vec<bool>,
     groups: Vec<Vec<u32>>,
+    draw_classes: Vec<u16>,
     /// which of `META_TAGS` each mod carries, as bits
     tags: Vec<u8>,
     /// profile ("base" first) -> pool mod -> weight
@@ -117,7 +135,7 @@ impl<'p> Mechanics<'p> {
             }
         }
         let mut group_ids: FxHashMap<&str, u32> = FxHashMap::default();
-        let groups = mods
+        let groups: Vec<Vec<u32>> = mods
             .iter()
             .map(|m| {
                 m.groups
@@ -129,17 +147,34 @@ impl<'p> Mechanics<'p> {
                     .collect()
             })
             .collect();
+        let mut classes = FxHashMap::default();
+        let draw_classes = mods
+            .iter()
+            .zip(&groups)
+            .map(|(m, groups)| {
+                let mut groups = groups.clone();
+                groups.sort_unstable();
+                groups.dedup();
+                let next = classes.len() as u16;
+                *classes.entry((m.side, m.notable, groups)).or_insert(next)
+            })
+            .collect();
         let tags = mods
             .iter()
             .map(|m| META_TAGS.iter().enumerate().filter(|(_, t)| m.tags.iter().any(|x| x == *t)).fold(0u8, |b, (i, _)| b | 1 << i))
             .collect();
         let mut sim = Mechanics {
-            rules: ItemRules::new(problem.kind, problem.notable_cap),
+            problem,
+            offers: Vec::new(),
+            veiled: None,
+            pending_side: None,
+            rules: ItemRules::new(problem.kind, problem.notable_cap, problem.affix_limits),
             profile_weights: &problem.profiles,
             tags,
             side: mods.iter().map(|m| m.side).collect(),
             notable: mods.iter().map(|m| m.notable).collect(),
             groups,
+            draw_classes,
             fixed,
             pool,
             mods,
@@ -200,7 +235,7 @@ impl<'p> Mechanics<'p> {
                 match meta_locks(*meta) {
                     Some(keep) => {
                         item.retain(|&k| self.side[k as usize] == keep || self.fixed[k as usize]);
-                        let n = self.count(self.rules.counts(RARE));
+                        let n = self.count(&self.rules.counts(RARE));
                         let mut profile = act.first.unwrap_or(act.profile);
                         while item.len() < n {
                             let Some(m) = self.draw(RARE, item, profile, None, 0) else { break };
@@ -220,6 +255,98 @@ impl<'p> Mechanics<'p> {
                 }
                 rarity
             }
+            Effect::RerollSide(side) => {
+                item.retain(|&k| self.side[k as usize] != side || self.fixed[k as usize]);
+                if meta_side(*meta) == Some(side) {
+                    *meta = 0;
+                }
+                let n = self.count(&self.rules.counts(RARE));
+                while item.len() + ((*meta != 0) as usize) < n {
+                    let Some(m) = self.draw(RARE, item, 0, Some(side), *meta) else { break };
+                    item.push(m);
+                }
+                RARE
+            }
+            Effect::RemoveAdd(side) => {
+                self.remove(item, Some(side), meta, false);
+                if let Some(m) = self.draw(RARE, item, 0, Some(side.other()), *meta) {
+                    item.push(m);
+                }
+                rarity
+            }
+            Effect::RandomMeta => {
+                let mut state = State::new(rarity, &[], &[]).with_meta(*meta);
+                let mut candidates = Vec::new();
+                for m in [META_LOCK_PREFIXES, META_LOCK_SUFFIXES, META_NO_ATTACK, META_NO_CASTER, META_MULTIMOD] {
+                    let side = meta_side(m).unwrap();
+                    let on = item.iter().filter(|&&k| self.side[k as usize] == side).count();
+                    if state.meta == 0 && on < self.rules.limit(rarity, side) {
+                        candidates.push(m);
+                    }
+                }
+                if !candidates.is_empty() {
+                    state.meta = candidates[(self.rng.random() * candidates.len() as f64) as usize];
+                    *meta = state.meta;
+                }
+                rarity
+            }
+            Effect::Veil(chaos) => {
+                if chaos {
+                    let keep = meta_locks(*meta);
+                    item.retain(|&k| self.fixed[k as usize] || keep == Some(self.side[k as usize]));
+                    *meta = 0;
+                } else {
+                    self.remove(item, None, meta, false);
+                }
+                let sides: Vec<Side> = [Side::Prefix, Side::Suffix]
+                    .into_iter()
+                    .filter(|&side| {
+                        self.problem.unveils.iter().any(|m| m.side == side && m.weight > 0.0)
+                            && item.iter().filter(|&&k| self.side[k as usize] == side).count() + ((meta_side(*meta) == Some(side)) as usize)
+                                < self.rules.limit(RARE, side)
+                    })
+                    .collect();
+                let side = sides[(self.rng.random() * sides.len() as f64) as usize];
+                let placeholder = if side == Side::Prefix { "VeiledPrefix" } else { "VeiledSuffix" };
+                let index = self.mods.iter().position(|m| m.id == placeholder).expect("a veil placeholder") as u16;
+                item.push(index);
+                if chaos {
+                    let n = self.count(&self.rules.counts(RARE));
+                    while item.len() < n {
+                        let Some(m) = self.draw(RARE, item, 0, None, *meta) else { break };
+                        item.push(m);
+                    }
+                }
+                item.retain(|&k| k != index);
+                self.veiled = None;
+                self.pending_side = Some(side);
+                self.offers.clear();
+                if self.problem.blockers.is_empty() {
+                    self.draw_offers(item, side, None);
+                }
+                RARE
+            }
+            Effect::RevealUnveil(blocker) => {
+                let side = self.pending_side.expect("an unrevealed modifier");
+                self.draw_offers(item, side, blocker.checked_sub(1).map(usize::from));
+                rarity
+            }
+            Effect::Unveil(class) => {
+                let k = *self
+                    .offers
+                    .iter()
+                    .find(|&&k| {
+                        let (i, v) = self.problem.classify_mod(self.mods[k as usize]);
+                        let code = if i >= 0 { i as u8 * 2 + v - 1 } else { UNVEIL_TARGET_CLASSES + v };
+                        code == class
+                    })
+                    .expect("the selected modifier was offered");
+                item.push(k);
+                self.veiled = Some(k);
+                self.pending_side = None;
+                self.offers.clear();
+                rarity
+            }
             Effect::Meta(m) => {
                 *meta = m;
                 rarity
@@ -234,6 +361,60 @@ impl<'p> Mechanics<'p> {
                 *meta = 0;
                 if item.is_empty() { NORMAL } else { RARE }
             }
+            Effect::ProtectedScour { side: keep, .. } => {
+                item.retain(|&k| self.side[k as usize] == keep || self.fixed[k as usize]);
+                *meta = 0;
+                if item.is_empty() { NORMAL } else { RARE }
+            }
+            Effect::FinishBench => {
+                item.push(act.forced.expect("a terminal bench modifier"));
+                rarity
+            }
+        }
+    }
+
+    fn draw_offers(&mut self, item: &[u16], side: Side, blocker: Option<usize>) {
+        self.offers.clear();
+        for _ in 0..3 {
+            let candidates: Vec<(u16, f64)> = self
+                .problem
+                .unveils
+                .iter()
+                .filter(|m| m.side == side && m.weight > 0.0)
+                .filter(|m| blocker.is_none_or(|i| !groups_overlap(&m.groups, &self.problem.blockers[i].groups)))
+                .filter_map(|m| {
+                    let k = self.mods.iter().position(|x| x.id == m.id)? as u16;
+                    item.iter()
+                        .chain(&self.offers)
+                        .all(|&j| !groups_overlap(&self.groups[k as usize], &self.groups[j as usize]))
+                        .then_some((k, m.weight))
+                })
+                .collect();
+            if candidates.is_empty() {
+                break;
+            }
+            let mut total = 0.0;
+            let cumulative: Vec<f64> = candidates
+                .iter()
+                .map(|(_, weight)| {
+                    total += weight;
+                    total
+                })
+                .collect();
+            self.offers.push(candidates[self.rng.choose(&cumulative)].0);
+        }
+    }
+
+    pub(crate) fn project_veil(&self, state: &mut State, item: &[u16]) {
+        let class = |k: u16| {
+            let (i, v) = self.problem.classify_mod(self.mods[k as usize]);
+            if i >= 0 { i as u8 * 2 + v - 1 } else { UNVEIL_TARGET_CLASSES + v }
+        };
+        if let Some(side) = self.pending_side {
+            state.veiled = VEILED_PREFIX + side.index() as u8;
+            state.unveil = self.offers.iter().fold(0, |mask, &k| mask | 1 << class(k));
+        } else if let Some(k) = self.veiled.filter(|k| item.contains(k)) {
+            state.veiled = class(k) + 1;
         }
     }
 
@@ -273,7 +454,7 @@ impl<'p> Mechanics<'p> {
     }
 
     fn roll(&mut self, rarity: u8, act: &PreparedEffect, item: &mut Vec<u16>, first_meta: u8) {
-        let n = self.count(self.rules.counts(rarity));
+        let n = self.count(&self.rules.counts(rarity));
         item.retain(|&k| self.fixed[k as usize]);
         if let Some(f) = act.forced {
             item.push(f);
@@ -307,14 +488,16 @@ impl<'p> Mechanics<'p> {
     fn draw(&mut self, rarity: u8, item: &[u16], profile: u16, side: Option<Side>, meta: u8) -> Option<u16> {
         assert!(item.len() <= MAX_MODS, "an item with {} mods", item.len());
         let mut sorted = [u16::MAX; MAX_MODS];
-        sorted[..item.len()].copy_from_slice(item);
+        for (slot, &mod_index) in sorted.iter_mut().zip(item) {
+            *slot = self.draw_classes[mod_index as usize];
+        }
         sorted.sort_unstable();
         let key = (rarity, profile, sorted, side.map_or(0, |s| s.index() as u8 + 1), meta);
         let (pool, cum) = self.cache.entry(key).or_insert_with(|| {
-            let limit = self.rules.limit(rarity);
+            let limit = [self.rules.limit(rarity, Side::Prefix), self.rules.limit(rarity, Side::Suffix)];
             let skip = meta_tag(meta).map_or(0, |t| 1u8 << t);
             let on = |s: Side| item.iter().filter(|&&k| self.side[k as usize] == s).count() + (meta_side(meta) == Some(s)) as usize;
-            let room = [on(Side::Prefix) < limit, on(Side::Suffix) < limit];
+            let room = [on(Side::Prefix) < limit[0], on(Side::Suffix) < limit[1]];
             let taken: Vec<u32> = item.iter().flat_map(|&k| self.groups[k as usize].iter().copied()).collect();
             let cap_hit = item.iter().filter(|&&k| self.notable[k as usize]).count() >= self.rules.notable_cap;
             let weights = &self.weights[profile as usize];
@@ -338,5 +521,29 @@ impl<'p> Mechanics<'p> {
             (pool, cum)
         });
         if pool.is_empty() { None } else { Some(pool[self.rng.choose(cum)]) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProblemSpec;
+
+    #[test]
+    fn tiers_with_identical_draw_constraints_share_the_same_sampling_table() {
+        let pool = vec![
+            Mod::new("low", Side::Prefix, 1.0, &["life"], false, "", &[]),
+            Mod::new("high", Side::Prefix, 4.0, &["life"], false, "", &["attack"]),
+            Mod::new("damage", Side::Prefix, 2.0, &["damage"], false, "", &[]),
+            Mod::new("resistance", Side::Suffix, 3.0, &["resistance"], false, "", &[]),
+        ];
+        let problem = ProblemSpec::new(pool, vec![], 0, vec![], Kind::Gear).compile();
+        let mut sim = Mechanics::new(&problem, 7);
+        let low: Vec<_> = (0..1000).map(|_| sim.draw(RARE, &[0], 0, None, 0)).collect();
+        sim.rng = Rng::new(7);
+        let high: Vec<_> = (0..1000).map(|_| sim.draw(RARE, &[1], 0, None, 0)).collect();
+        assert_eq!(low, high);
+        assert_eq!(sim.cache.len(), 1);
+        assert!(low.iter().all(|m| matches!(m, Some(2 | 3))));
     }
 }

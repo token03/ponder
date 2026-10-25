@@ -41,7 +41,7 @@ impl SelfFracture {
 /// good tier on an item with k mods. Fracturing only at k <= K costs
 /// (reroll / P(k <= K) + orb) / E[1/k | k <= K]; the best reroll and K win.
 pub fn self_fracture(problem: &Problem, target: usize, prices: &Prices, settings: &Settings) -> Option<SelfFracture> {
-    if !problem.fixed.is_empty() || !prices.contains_key(FRACTURE_ORB) {
+    if !problem.fixed.is_empty() || !problem.influences.is_empty() || !prices.contains_key(FRACTURE_ORB) {
         return None;
     }
     let orb = prices[FRACTURE_ORB] + FRACTURE_SECONDS * settings.chaos_per_hour / 3600.0;

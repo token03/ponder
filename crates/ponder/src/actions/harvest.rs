@@ -50,7 +50,7 @@ pub fn harvest(pool: &[Mod]) -> (Vec<Action>, Profiles) {
             continue;
         }
         let profile = format!("harvest:{name}");
-        profiles.insert(profile.clone(), tagged);
+        profiles.insert(profile.clone(), tagged.into());
         let mut action = act(&format!("harvest {name}"), ActionKind::Reforge, &[(lifeforce, amount)], &[RARE]).with_first_profile(&profile);
         let rancour = match name {
             "minion" => 3.0,

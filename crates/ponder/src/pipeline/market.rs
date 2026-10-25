@@ -71,15 +71,26 @@ enum Job {
 
 /// The indices of `e`'s fractures that have a query and a plan, cheapest to finish first.
 fn ranked_fractures(e: &Estimate) -> Vec<usize> {
-    let mut v: Vec<usize> = (0..e.fractures.len()).filter(|&j| e.fractures[j].query.is_some() && e.fractures[j].plan.is_some()).collect();
-    v.sort_by(|&a, &b| e.fractures[a].craft_cost().partial_cmp(&e.fractures[b].craft_cost()).unwrap_or(std::cmp::Ordering::Equal));
+    let mut v: Vec<usize> = (0..e.fractures.len())
+        .filter(|&j| e.fractures[j].query.is_some() && (e.fractures[j].plan.is_some() || e.fractures[j].craft_lower_bound.is_some()))
+        .collect();
+    let cost = |i: usize| e.fractures[i].craft_cost().or(e.fractures[i].craft_lower_bound);
+    v.sort_by(|&a, &b| cost(a).partial_cmp(&cost(b)).unwrap_or(std::cmp::Ordering::Equal));
     v
 }
 
 /// Price `estimates[i]` for each `i` in `order`: each one's selling price, then its fractured
 /// base, then fracture bases. Stops after `budget` searches that weren't cached.
 /// Returns searches used.
-pub fn price_on_trade(cx: &Context, estimates: &mut [Estimate], order: &[usize], table: &Prices, league: &str, budget: usize, progress: Option<Progress>) -> usize {
+pub fn price_on_trade(
+    cx: &Context,
+    estimates: &mut [Estimate],
+    order: &[usize],
+    table: &Prices,
+    league: &str,
+    budget: usize,
+    progress: Option<Progress>,
+) -> usize {
     let say = |m: &str| {
         if let Some(p) = progress {
             p(m)
@@ -121,11 +132,20 @@ pub fn price_on_trade(cx: &Context, estimates: &mut [Estimate], order: &[usize],
             Job::Fracture(i, j) => lookup(cx, Lookup::Fracture(&mut estimates[i].fractures[j]), table, league),
         };
     }
+    super::solving::solve_estimates(cx, estimates, table, None, progress);
     used
 }
 
 /// Batch-price fractured bases: each item's `per_item` most promising fractures (cheapest to finish).
-pub fn price_fractures(cx: &Context, estimates: &mut [Estimate], table: &Prices, league: &str, per_item: usize, budget: usize, progress: Option<Progress>) -> usize {
+pub fn price_fractures(
+    cx: &Context,
+    estimates: &mut [Estimate],
+    table: &Prices,
+    league: &str,
+    per_item: usize,
+    budget: usize,
+    progress: Option<Progress>,
+) -> usize {
     let say = |m: &str| {
         if let Some(p) = progress {
             p(m)
@@ -145,5 +165,6 @@ pub fn price_fractures(cx: &Context, estimates: &mut [Estimate], table: &Prices,
         say(&format!("fractured base {}/{}: {}", n + 1, jobs.len(), estimates[i].fractures[j].target));
         used += lookup(cx, Lookup::Fracture(&mut estimates[i].fractures[j]), table, league);
     }
+    super::solving::solve_estimates(cx, estimates, table, None, progress);
     used
 }

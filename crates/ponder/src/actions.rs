@@ -14,7 +14,7 @@ use ponder_game::data::DataError;
 /// `[(price id, quantity)]`
 pub type Cost = Vec<(String, f64)>;
 /// weight profile name -> mod id -> weight
-pub type Profiles = BTreeMap<String, BTreeMap<String, f64>>;
+pub type Profiles = BTreeMap<String, ponder_core::WeightProfile>;
 
 pub(crate) fn loaded<T>(r: Result<Arc<T>, DataError>) -> Arc<T> {
     r.unwrap_or_else(|e| panic!("{e}"))
@@ -63,7 +63,9 @@ mod essence;
 mod fossils;
 mod harvest;
 
-pub use bench::{BENCH_CURRENCY, LOCK_PREFIXES, LOCK_SUFFIXES, MULTIMOD, NO_ATTACK, NO_CASTER, bench_cost, eldritch, metamods};
+pub use bench::{
+    BENCH_CURRENCY, LOCK_PREFIXES, LOCK_SUFFIXES, MULTIMOD, NO_ATTACK, NO_CASTER, beasts, bench_cost, bench_crafts, eldritch, metamods,
+};
 pub use essence::{essence_profiles, essences};
 pub use fossils::{
     FOSSIL_COMBOS_KEPT, FossilOpts, FossilRow, RESONATOR, RESONATORS, fossil_combos, fossil_combos_with, fossil_rows, fossils,
@@ -133,13 +135,23 @@ mod tests {
         assert_eq!(profiles["fossil:hot+icy"]["p0"], 1000.0);
         let names: Vec<&str> = acts.iter().map(|a| a.name.as_str()).collect();
         assert!(names.contains(&"hot fossil") && names.contains(&"icy fossil")); // each want alone: its own fossil
+        prices.insert("hot-fossil".into(), 1e12);
+        let expensive =
+            fossil_combos_with(&rows, &pool, &[&x, &y], &prices, &Settings::default(), FossilOpts { keep: 1, ..Default::default() });
+        assert_eq!(expensive.0[0].name, "icy fossil");
+        prices.insert("hot-fossil".into(), 1.0);
+        let mut changed = rows;
+        changed[0].mult[0] = 0.01;
+        let suppressed =
+            fossil_combos_with(&changed, &pool, &[&x, &y], &prices, &Settings::default(), FossilOpts { keep: 1, ..Default::default() });
+        assert_eq!(suppressed.0[0].name, "icy fossil");
     }
 
     #[test]
     fn eldritch_needs_a_plain_armour_slot() {
         assert!(eldritch("Gloves", &["shaper".to_string()].into()).is_empty());
         assert!(eldritch("Ring", &BTreeSet::new()).is_empty());
-        assert_eq!(eldritch("Gloves", &BTreeSet::new()).len(), 4);
+        assert_eq!(eldritch("Gloves", &BTreeSet::new()).len(), 6);
     }
 
     #[test]

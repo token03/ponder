@@ -13,6 +13,7 @@ use super::*;
 /// whichever real item the state stands for, lies between them. Lists with exact chances
 /// have both equal to `e_prob`.
 pub(super) struct Graph {
+    pub(super) factorization: std::cell::RefCell<linear::FactorizationCache>,
     pub states: Vec<State>, // open states, in the order they were first acted on
     pub seen: usize,        // every state found, finished ones too
     pub(super) state_ptr: Vec<usize>,
@@ -44,13 +45,13 @@ struct Builder {
 impl Builder {
     pub(super) fn push_list(&mut self, out: &[Outcome], bounds: Option<&[Bound]>, limits: SolveLimits) -> Result<usize, SolveError> {
         if self.e_id.len().saturating_add(out.len()) > limits.transitions {
-            return Err(SolveError::ResourceLimit { resource: "transitions", limit: limits.transitions });
+            return Err(SolveError::ResourceLimit { resource: "transitions".into(), limit: limits.transitions });
         }
         let loose = bounds.is_some_and(|b| b.iter().zip(out).any(|(&(lo, hi), &(p, _))| lo != p || hi != p));
         for (k, &(p, n)) in out.iter().enumerate() {
             let next_id = self.by_id.len() as u32;
             if self.by_id.len() >= limits.states && !self.seen.contains_key(&n) {
-                return Err(SolveError::ResourceLimit { resource: "states", limit: limits.states });
+                return Err(SolveError::ResourceLimit { resource: "states".into(), limit: limits.states });
             }
             let id = *self.seen.entry(n).or_insert(next_id);
             if id == next_id {
@@ -73,7 +74,7 @@ impl Builder {
 /// action it names in each state (an error if it names none there).
 pub(super) fn explore(model: &impl Model, limits: SolveLimits, only: Option<&StateMap<usize>>) -> Result<Graph, SolveError> {
     if limits.states == 0 {
-        return Err(SolveError::ResourceLimit { resource: "states", limit: 0 });
+        return Err(SolveError::ResourceLimit { resource: "states".into(), limit: 0 });
     }
     let origin = model.origin();
     let mut b = Builder {
@@ -122,7 +123,7 @@ pub(super) fn explore(model: &impl Model, limits: SolveLimits, only: Option<&Sta
                 },
             };
             if pair_action.len() >= limits.state_actions {
-                return Err(SolveError::ResourceLimit { resource: "state/action pairs", limit: limits.state_actions });
+                return Err(SolveError::ResourceLimit { resource: "state/action pairs".into(), limit: limits.state_actions });
             }
             pair_action.push(ai);
             pair_cost.push(cost);
@@ -140,6 +141,7 @@ pub(super) fn explore(model: &impl Model, limits: SolveLimits, only: Option<&Sta
         index[id as usize] = k as i32;
     }
     Ok(Graph {
+        factorization: Default::default(),
         states: open.iter().map(|&id| b.by_id[id as usize]).collect(),
         seen: b.by_id.len(),
         state_ptr,
@@ -202,7 +204,7 @@ impl Graph {
                     }
                 }
                 let current = q[policy[i]];
-                if best < current - 1e-9 * current.max(1.0) { candidate } else { policy[i] }
+                if best < current - 1e-9 * current.abs().max(1.0) { candidate } else { policy[i] }
             })
             .collect()
     }
@@ -272,16 +274,19 @@ impl Graph {
             // States that finish with some chance using the valid actions.
             alive = vec![false; n];
             loop {
+                let reaches: Vec<bool> = (0..self.lists())
+                    .map(|l| {
+                        (self.list_ptr[l]..self.list_ptr[l + 1])
+                            .any(|e| self.e_prob[e] > 0.0 && (self.e_next[e] < 0 || alive[self.e_next[e] as usize]))
+                    })
+                    .collect();
                 let mut grew = false;
                 for p in 0..pairs {
                     let i = owner[p];
                     if alive[i] || !valid[p] {
                         continue;
                     }
-                    let l = self.pair_list[p];
-                    if (self.list_ptr[l]..self.list_ptr[l + 1])
-                        .any(|e| self.e_prob[e] > 0.0 && (self.e_next[e] < 0 || alive[self.e_next[e] as usize]))
-                    {
+                    if reaches[self.pair_list[p]] {
                         alive[i] = true;
                         grew = true;
                     }
@@ -290,9 +295,12 @@ impl Graph {
                     break;
                 }
             }
+            let dead: Vec<bool> = (0..self.lists())
+                .map(|l| (self.list_ptr[l]..self.list_ptr[l + 1]).any(|e| self.e_next[e] >= 0 && !alive[self.e_next[e] as usize]))
+                .collect();
             let mut cut = false;
             for (ok, &l) in valid.iter_mut().zip(&self.pair_list) {
-                if *ok && (self.list_ptr[l]..self.list_ptr[l + 1]).any(|e| self.e_next[e] >= 0 && !alive[self.e_next[e] as usize]) {
+                if *ok && dead[l] {
                     *ok = false;
                     cut = true;
                 }
@@ -327,6 +335,7 @@ impl Graph {
         // Lists only cut actions used may still point at dead states; nothing reads them.
         let e_next = self.e_next.iter().map(|&x| if x >= 0 { index[x as usize].max(-1) } else { x }).collect();
         Some(Graph {
+            factorization: Default::default(),
             states,
             seen: self.seen,
             state_ptr,
@@ -349,7 +358,11 @@ impl Graph {
 
     pub(super) fn factor_with(&self, policy: &[usize], prob: &[f64], backend: Backend) -> Option<Lu> {
         let rows = policy.iter().map(|&p| self.pair_list[p]).collect();
-        linear::factor(&System { rows, list_ptr: &self.list_ptr, e_next: &self.e_next, e_prob: prob }, backend)
+        linear::factor(
+            &System { rows, list_ptr: &self.list_ptr, e_next: &self.e_next, e_prob: prob },
+            backend,
+            &mut self.factorization.borrow_mut(),
+        )
     }
 
     pub(super) fn evaluate(&self, lu: &Lu, policy: &[usize]) -> Vec<f64> {
@@ -362,7 +375,7 @@ impl Graph {
     pub(super) fn values_with(&self, policy: &[usize], prob: &[f64], backend: Backend) -> Option<Vec<f64>> {
         let lu = self.factor_with(policy, prob, backend)?;
         let v = self.evaluate(&lu, policy);
-        v.iter().all(|x| x.is_finite() && *x >= -1e-9).then_some(v)
+        v.iter().all(|x| x.is_finite()).then_some(v)
     }
 
     /// Expected times each state is acted on, starting from state `start`.

@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use ponder::{demand, gear};
 use ponder::pipeline::{self, Context, LadderOpts, RunOpts};
+use ponder::{demand, gear};
 use ponder_game::item::parse_item;
 use ponder_game::mods::ModDB;
 use ponder_net::ladder::Sample;
@@ -68,9 +68,6 @@ struct RunArgs {
     /// also cost starting from a base with each target already fractured
     #[arg(long)]
     fractures: bool,
-    /// also cost recombinator trees
-    #[arg(long)]
-    recomb: bool,
     /// every mod as on the PoB item (resistances aren't interchangeable filler)
     #[arg(long)]
     exact: bool,
@@ -78,7 +75,7 @@ struct RunArgs {
     #[arg(long, default_value_t = 0)]
     settle: i64,
     /// skip items with more target mods than this
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 6)]
     max_targets: usize,
     #[arg(long, default_value_t = 2)]
     min_builds: usize,
@@ -168,9 +165,6 @@ struct CraftsArgs {
     trade: bool,
     #[arg(long, default_value_t = 40)]
     trade_budget: usize,
-    /// skip recombinator trees (recombining part of an item, then crafting the rest)
-    #[arg(long)]
-    no_recomb: bool,
     /// only the best N estimates (all by default)
     #[arg(long)]
     top: Option<usize>,
@@ -232,7 +226,10 @@ fn ladder_worn(cx: &Context, progress: &(dyn Fn(&str) + Sync)) -> Result<(ModDB,
 /// Gear archetypes (the ladder run's settings), only base groups containing `group`.
 fn archetypes(worn: &[demand::Worn], min_characters: usize, group: Option<&str>) -> Vec<demand::Archetype> {
     let group = group.map(str::to_lowercase);
-    demand::archetypes(worn, min_characters, 4, 2, 0.7).into_iter().filter(|a| group.as_ref().is_none_or(|g| a.group.to_lowercase().contains(g.as_str()))).collect()
+    demand::archetypes(worn, min_characters, 4, 2, 0.7)
+        .into_iter()
+        .filter(|a| group.as_ref().is_none_or(|g| a.group.to_lowercase().contains(g.as_str())))
+        .collect()
 }
 
 fn trade_error(e: &anyhow::Error) -> String {
@@ -265,7 +262,8 @@ fn run(cli: &Cli) -> Result<Value> {
         Command::Data { action } => {
             let dir = ponder_game::data::data_dir();
             if action == "fetch" {
-                let version = ponder_net::repoe::fetch(&*ponder_net::http::real(), &dir, ponder_game::data::SOURCE, ponder_game::data::FILES)?;
+                let version =
+                    ponder_net::repoe::fetch(&*ponder_net::http::real(), &dir, ponder_game::data::SOURCE, ponder_game::data::FILES)?;
                 json!({"version": version, "dir": dir})
             } else {
                 json!({"version": ponder_game::data::version(Some(&dir)), "dir": dir})
@@ -302,7 +300,6 @@ fn run(cli: &Cli) -> Result<Value> {
                 exact: a.exact,
                 trade_lookup: a.trade,
                 trade_budget: a.trade_budget,
-                recombs: a.recomb,
                 workers: a.workers,
                 ..RunOpts::default()
             };
@@ -330,7 +327,6 @@ fn run(cli: &Cli) -> Result<Value> {
                 group: a.group.clone(),
                 trade_lookup: a.trade,
                 trade_budget: a.trade_budget,
-                recombs: !a.no_recomb,
                 workers: a.workers,
             };
             let mut r = pipeline::ladder(&cx, &db, None, &opts, Some(progress))?;
@@ -341,7 +337,12 @@ fn run(cli: &Cli) -> Result<Value> {
                 let (table, _) = cx.prices.load()?;
                 let order: Vec<usize> = {
                     let ranked = r.ranked();
-                    ranked.iter().filter(|e| e.plan.is_some() && e.kind == "gear").take(a.starts).map(|e| r.estimates.iter().position(|x| std::ptr::eq(x, *e)).expect("ranked from estimates")).collect()
+                    ranked
+                        .iter()
+                        .filter(|e| e.plan.is_some() && e.kind == "gear")
+                        .take(a.starts)
+                        .map(|e| r.estimates.iter().position(|x| std::ptr::eq(x, *e)).expect("ranked from estimates"))
+                        .collect()
                 };
                 for (n, i) in order.iter().enumerate() {
                     progress(&format!("half-done items {}/{}: {}", n + 1, order.len(), r.estimates[*i].title));
@@ -378,7 +379,8 @@ fn run(cli: &Cli) -> Result<Value> {
         Command::Ladder(LadderCmd::Tiers { group, min_characters }) => {
             let (db, worn) = ladder_worn(&context(cli.quiet), progress)?;
             let want = group.as_ref().map(|g| g.to_lowercase());
-            let worn: Vec<_> = worn.into_iter().filter(|w| want.as_ref().is_none_or(|g| w.group.to_lowercase().contains(g.as_str()))).collect();
+            let worn: Vec<_> =
+                worn.into_iter().filter(|w| want.as_ref().is_none_or(|g| w.group.to_lowercase().contains(g.as_str()))).collect();
             let stats = demand::family_stats(&db, &worn, *min_characters);
             done();
             json!({"families": stats.iter().map(|f| json!({
@@ -396,12 +398,16 @@ fn run(cli: &Cli) -> Result<Value> {
             let mut out = Vec::new();
             for a in archetypes(&worn, *min_characters, group.as_deref()).iter().filter(|a| a.families.len() >= 2).take(*top) {
                 let keys: Vec<&str> = a.families.iter().map(String::as_str).collect();
-                let Some(query) = ponder::pricing::archetype_query(&db, &a.examples[0], &keys, ponder::pricing::FLOOR_TIER, td) else { continue };
+                let Some(query) = ponder::pricing::archetype_query(&db, &a.examples[0], &keys, ponder::pricing::FLOOR_TIER, td) else {
+                    continue;
+                };
                 progress(&format!("trade: {}", a.group));
                 let url = ponder_net::trade::search_url(&league, &query);
                 let row = match cx.trade.listings(&league, &query, *listings, None) {
                     // one failure (a 403, a rate limit) doesn't stop the rest
-                    Err(e) => json!({"group": a.group, "mods": demand::archetype_names(&db, a), "search": url, "error": trade_error(&e)}),
+                    Err(e) => {
+                        json!({"group": a.group, "mods": demand::archetype_names(&db, a), "search": url, "error": trade_error(&e)})
+                    }
                     Ok(found) => {
                         let model = ponder::pricing::fit(&db, &a.group, &keys, &found, &table);
                         json!({"group": a.group, "mods": demand::archetype_names(&db, a), "search": url, "model": model.map(|m| json!({

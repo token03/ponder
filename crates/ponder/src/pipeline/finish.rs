@@ -148,7 +148,7 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
     let mut on: Vec<craft::Mod> = Vec::new();
     let mut fractured: BTreeSet<String> = BTreeSet::new();
     for x in &m.mods {
-        if x.source == "crafted" || x.source == "legacy-crafted" {
+        if x.source == "crafted" {
             continue;
         }
         let Some(data_mod) = mods_db.get(&x.mod_id) else { continue };

@@ -1,13 +1,13 @@
 //! What the pipeline needs from the outside world, injected: settings, the prices, trade and
 //! ladder clients, the plan cache and the repoe lookups the trade queries use.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use ponder_core::Settings;
 use ponder_net::http::{self, Transport};
 use ponder_net::ladder::Ladder;
 use ponder_net::prices::Prices as PriceClient;
-use ponder_net::trade::{StatIds, Trade, Translations};
+use ponder_net::trade::{StatIds, Trade};
 use serde_json::{Number, Value};
 
 use super::cache::PlanCache;
@@ -20,11 +20,6 @@ pub type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 pub fn settings_from_env() -> Settings {
     let per_hour = ponder_net::env::env("PONDER_CHAOS_PER_HOUR").and_then(|v| v.trim().parse::<f64>().ok());
     per_hour.map_or_else(Settings::default, |chaos_per_hour| Settings { chaos_per_hour })
-}
-
-struct Stats {
-    mods: Arc<Value>,
-    translations: Translations,
 }
 
 /// Everything a pipeline run talks to. `Context::real()` is the real thing; tests build one with
@@ -42,13 +37,24 @@ pub struct Context {
     pub http: Arc<dyn Transport>,
     /// Solved plans, by problem.
     pub plans: PlanCache,
-    stats: OnceLock<Stats>,
+    resale_quotes: RwLock<std::collections::BTreeMap<String, super::resale::ResaleQuote>>,
     clusters: OnceLock<Vec<Value>>,
 }
 
 impl Context {
     pub fn new(settings: Settings, prices: PriceClient, trade: Trade, ladder: Ladder, http: Arc<dyn Transport>) -> Context {
-        Context { settings, prices, trade, ladder, http, plans: PlanCache::default(), stats: OnceLock::new(), clusters: OnceLock::new() }
+        let quotes =
+            std::fs::read(".cache/recovery-quotes.json").ok().and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default();
+        Context {
+            settings,
+            prices,
+            trade,
+            ladder,
+            http,
+            plans: PlanCache::default(),
+            resale_quotes: RwLock::new(quotes),
+            clusters: OnceLock::new(),
+        }
     }
 
     /// The real network and caches under the working directory; settings from the environment.
@@ -62,28 +68,49 @@ impl Context {
         self
     }
 
-    fn stats(&self) -> &Stats {
-        self.stats.get_or_init(|| {
-            let mods = ponder_game::data::load("mods").unwrap_or_else(|e| panic!("{e}"));
-            let translations = ponder_game::data::load("stat_translations").unwrap_or_else(|e| panic!("{e}"));
-            Stats { mods, translations: Translations::new(&translations) }
-        })
+    pub fn resale_quote(&self, problem: &ponder_core::Problem, core: ponder_core::Preservation) -> Option<super::resale::ResaleQuote> {
+        self.resale_quotes
+            .read()
+            .expect("resale quotes")
+            .get(&format!("{}/{}/{:?}", problem.fingerprint(), core.targets, core.filler))
+            .copied()
     }
 
-    /// `trade.stat_min(mod_ids)`
+    pub fn set_resale_quote(
+        &self,
+        problem: &ponder_core::Problem,
+        core: ponder_core::Preservation,
+        quote: Option<super::resale::ResaleQuote>,
+    ) -> Result<(), String> {
+        if let Some(quote) = quote {
+            quote.validate()?;
+        }
+        let mut quotes = self.resale_quotes.write().expect("resale quotes");
+        let mut updated = quotes.clone();
+        let key = format!("{}/{}/{:?}", problem.fingerprint(), core.targets, core.filler);
+        match quote {
+            Some(quote) => {
+                updated.insert(key, quote);
+            }
+            None => {
+                updated.remove(&key);
+            }
+        }
+        let raw = serde_json::to_vec_pretty(&updated).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(".cache").map_err(|e| e.to_string())?;
+        std::fs::write(".cache/recovery-quotes.json.tmp", raw).map_err(|e| e.to_string())?;
+        std::fs::rename(".cache/recovery-quotes.json.tmp", ".cache/recovery-quotes.json").map_err(|e| e.to_string())?;
+        *quotes = updated;
+        Ok(())
+    }
     pub fn stat_min(&self, mod_ids: &[&str]) -> Option<Number> {
-        ponder_net::trade::stat_min(&self.stats().mods, mod_ids)
+        crate::pricing::TradeData::load().stat_min(mod_ids)
     }
-
-    /// `trade.stat_id(mod_id, kind)`
     pub fn stat_id(&self, mod_id: &str, kind: &str) -> Option<String> {
-        let s = self.stats();
-        ponder_net::trade::stat_id(&s.mods, &s.translations, mod_id, kind)
+        crate::pricing::TradeData::load().stat_id(mod_id, kind)
     }
-
-    /// repoe's `mods.json`, untyped.
-    pub fn mods_json(&self) -> &Value {
-        &self.stats().mods
+    pub fn mods(&self) -> &ponder_game::data::Mods {
+        &crate::pricing::TradeData::load().mods
     }
 
     /// poe.ninja's cluster jewel listings, read once.

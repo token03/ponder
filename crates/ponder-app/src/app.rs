@@ -128,7 +128,6 @@ impl App {
                     ui.add(egui::DragValue::new(&mut r.chaos_per_hour).range(0.0..=100_000.0).speed(10.0).suffix("c"));
                     ui.end_row();
                 });
-                ui.checkbox(&mut r.recombs, "recombinator trees").on_hover_text("recombine part of an item, then craft the rest");
                 ui.add_enabled_ui(s.has_cookie, |ui| {
                     ui.checkbox(&mut r.trade, "price on trade").on_disabled_hover_text("needs POESESSID in .env");
                     if r.trade {
@@ -153,13 +152,17 @@ impl App {
             ui.label(&s.status);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(d) = &s.data {
-                    ui.label(RichText::new(format!("{} · divine {:.0}c · prices {}", d.report.league, d.report.divine, d.report.prices_source)).weak());
+                    ui.label(
+                        RichText::new(format!("{} · divine {:.0}c · prices {}", d.report.league, d.report.divine, d.report.prices_source))
+                            .weak(),
+                    );
                 }
                 if s.data.is_some() && !s.has_cookie {
                     ui.separator();
                 }
                 if !s.has_cookie {
-                    ui.label(RichText::new("no POESESSID: trade off").weak()).on_hover_text("put POESESSID=... in a git-ignored .env to price on trade");
+                    ui.label(RichText::new("no POESESSID: trade off").weak())
+                        .on_hover_text("put POESESSID=... in a git-ignored .env to price on trade");
                 }
             });
         });
@@ -206,7 +209,9 @@ fn filters(ui: &mut Ui, s: &mut State) {
     if f.items != before.items {
         f.group.clear();
     }
-    if !f.group.is_empty() && ui.small_button(format!("Group: {} ×", f.group)).on_hover_text("Saved group filter; click to remove").clicked() {
+    if !f.group.is_empty()
+        && ui.small_button(format!("Group: {} ×", f.group)).on_hover_text("Saved group filter; click to remove").clicked()
+    {
         f.group.clear();
     }
     egui::Grid::new("filters").num_columns(2).show(ui, |ui| {

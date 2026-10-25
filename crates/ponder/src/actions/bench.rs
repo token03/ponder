@@ -62,6 +62,10 @@ pub fn bench_cost(item_class: &str, mod_id: &str) -> Option<Cost> {
     bench_index().get(mod_id)?.get(item_class).cloned()
 }
 
+pub fn bench_crafts(item_class: &str) -> Vec<(String, Cost)> {
+    bench_index().iter().filter_map(|(id, classes)| classes.get(item_class).map(|cost| (id.clone(), cost.clone()))).collect()
+}
+
 /// Bench metamods (`ponder_core::META_NAMES`), taking them off ("remove crafted mods": a
 /// scour), and scouring a locked item. "Cannot roll Attack/Caster" only where the pool has such
 /// mods. None where the bench can't craft them (jewels).
@@ -79,6 +83,9 @@ pub fn metamods(item_class: &str, pool: &[Mod]) -> Vec<Action> {
             a.cost = cost;
             acts.push(a);
         }
+    }
+    if bench_cost(item_class, MULTIMOD).is_some() {
+        acts.push(act("wild bristle matron", ActionKind::BristleMatron, &[("wild-bristle-matron", 1.0)], &[RARE]).with_seconds(15.0));
     }
     if !acts.is_empty() {
         acts.push(act("remove crafted mods", ActionKind::RemoveCrafted, &[("scour", 1.0)], &[RARE]));
@@ -99,9 +106,21 @@ pub fn eldritch(item_class: &str, influences: &BTreeSet<String>) -> Vec<Action> 
         return Vec::new();
     }
     vec![
+        act("eldritch chaos (prefix)", ActionKind::ChaosPrefix, &[("eldritch-chaos-orb", 1.0)], &[RARE]),
+        act("eldritch chaos (suffix)", ActionKind::ChaosSuffix, &[("eldritch-chaos-orb", 1.0)], &[RARE]),
         act("eldritch exalt (prefix)", ActionKind::ExaltPrefix, &[("eldritch-exalted-orb", 1.0)], &[RARE]),
         act("eldritch exalt (suffix)", ActionKind::ExaltSuffix, &[("eldritch-exalted-orb", 1.0)], &[RARE]),
         act("eldritch annul (prefix)", ActionKind::AnnulPrefix, &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
         act("eldritch annul (suffix)", ActionKind::AnnulSuffix, &[("eldritch-orb-of-annulment", 1.0)], &[RARE]),
+    ]
+}
+
+pub fn beasts(item_class: &str) -> Vec<Action> {
+    if bench_cost(item_class, MULTIMOD).is_none() {
+        return Vec::new();
+    }
+    vec![
+        act("beast remove prefix/add suffix", ActionKind::BeastPrefixToSuffix, &[("farric-lynx-alpha", 1.0)], &[RARE]).with_seconds(15.0),
+        act("beast remove suffix/add prefix", ActionKind::BeastSuffixToPrefix, &[("farric-wolf-alpha", 1.0)], &[RARE]).with_seconds(15.0),
     ]
 }

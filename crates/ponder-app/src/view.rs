@@ -34,24 +34,12 @@ pub fn hours(h: f64) -> String {
 }
 
 pub fn percent(p: f64) -> String {
-    if p >= 0.1 { format!("{:.0}%", p * 100.0) } else if p >= 0.001 { format!("{:.1}%", p * 100.0) } else { "<0.1%".into() }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Kind {
-    #[default]
-    All,
-    Gear,
-    Cluster,
-}
-
-impl Kind {
-    fn admits(self, e: &Estimate) -> bool {
-        match self {
-            Kind::All => true,
-            Kind::Gear => e.kind == "gear",
-            Kind::Cluster => e.kind == "cluster",
-        }
+    if p >= 0.1 {
+        format!("{:.0}%", p * 100.0)
+    } else if p >= 0.001 {
+        format!("{:.1}%", p * 100.0)
+    } else {
+        "<0.1%".into()
     }
 }
 
@@ -59,7 +47,6 @@ impl Kind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Filters {
-    pub kind: Kind,
     pub items: ItemSelection,
     /// words that must all appear in the title, base, mods or skills
     pub text: String,
@@ -77,7 +64,6 @@ pub struct Filters {
 impl Default for Filters {
     fn default() -> Self {
         Filters {
-            kind: Kind::All,
             items: ItemSelection::default(),
             text: String::new(),
             group: String::new(),
@@ -92,27 +78,15 @@ impl Default for Filters {
 }
 
 impl Filters {
-    pub fn migrate_kind(&mut self) {
-        if self.items.paths.is_empty() {
-            let paths: Vec<Vec<&str>> = match self.kind {
-                Kind::All => Vec::new(),
-                Kind::Gear => vec![vec!["Gear"], vec!["Jewels", "Base jewels"], vec!["Jewels", "Abyss jewels"]],
-                Kind::Cluster => vec![vec!["Jewels", "Clusters"]],
-            };
-            self.items.paths = paths.into_iter().map(|path| path.into_iter().map(String::from).collect()).collect();
-        }
-        self.kind = Kind::All;
-    }
-
     pub fn is_default(&self) -> bool {
         *self == Filters::default()
     }
 
     pub fn admits(&self, e: &Estimate) -> bool {
-        if !self.kind.admits(e) || e.demand < self.min_demand {
+        if e.demand < self.min_demand {
             return false;
         }
-        if self.hide_errors && e.error.is_some() {
+        if self.hide_errors && e.failure().is_some() {
             return false;
         }
         if !self.group.is_empty() && e.title != self.group {
@@ -169,8 +143,19 @@ pub enum Col {
 }
 
 impl Col {
-    pub const ALL: [Col; 11] =
-        [Col::Rank, Col::Item, Col::Demand, Col::Cheapest, Col::Market, Col::Margin, Col::Hole, Col::Craft, Col::Fractured, Col::Recomb, Col::Mods];
+    pub const ALL: [Col; 11] = [
+        Col::Rank,
+        Col::Item,
+        Col::Demand,
+        Col::Cheapest,
+        Col::Market,
+        Col::Margin,
+        Col::Hole,
+        Col::Craft,
+        Col::Fractured,
+        Col::Recomb,
+        Col::Mods,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -211,7 +196,7 @@ impl Col {
 
     pub fn value(self, e: &Estimate) -> Option<f64> {
         match self {
-            Col::Craft => e.total(),
+            Col::Craft => e.total().or_else(|| e.direct_lower_bound()),
             Col::Fractured => e.best_fracture().and_then(|f| f.total()),
             Col::Recomb => e.recomb_total(),
             Col::Cheapest => e.cheapest(),
@@ -315,8 +300,6 @@ mod tests {
         let all = Filters { hide_errors: false, ..Filters::default() };
         assert_eq!(visible(&es, &all, Sort { col: Col::Cheapest, descending: false }), vec![2, 1, 0]);
         assert_eq!(visible(&es, &all, Sort { col: Col::Demand, descending: true }), vec![2, 0, 1]);
-        let gear = Filters { kind: Kind::Gear, ..all.clone() };
-        assert_eq!(visible(&es, &gear, Sort::default()).len(), 2);
         let cheap = Filters { max_cost: 100.0, ..all.clone() };
         assert_eq!(visible(&es, &cheap, Sort { col: Col::Item, descending: false }), vec![2, 1]);
         let text = Filters { text: "vermillion RING".into(), ..all.clone() };
@@ -337,24 +320,5 @@ mod tests {
         assert!(s.descending);
         s.click(Col::Margin);
         assert!(!s.descending);
-    }
-
-    #[test]
-    fn saved_legacy_filters_migrate_without_losing_other_constraints() {
-        let mut filters: Filters = serde_json::from_value(serde_json::json!({
-            "kind": "Cluster", "group": "Medium cluster · Area Damage · 4p", "min_demand": 20
-        })).unwrap();
-        filters.migrate_kind();
-        assert_eq!(filters.kind, Kind::All);
-        assert_eq!(filters.items.paths.into_iter().collect::<Vec<_>>(), vec![vec!["Jewels".to_string(), "Clusters".to_string()]]);
-        assert_eq!(filters.min_demand, 20);
-        assert_eq!(filters.group, "Medium cluster · Area Damage · 4p");
-        let mut gear: Filters = serde_json::from_value(serde_json::json!({ "kind": "Gear" })).unwrap();
-        gear.migrate_kind();
-        assert_eq!(gear.items.paths.len(), 3);
-        let saved = serde_json::to_string(&gear).unwrap();
-        let mut restored: Filters = serde_json::from_str(&saved).unwrap();
-        restored.migrate_kind();
-        assert_eq!(restored, gear);
     }
 }

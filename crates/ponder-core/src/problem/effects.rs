@@ -7,6 +7,7 @@ pub(crate) struct PreparedAction {
     pub(super) profile: usize,
     pub(super) first: Option<usize>,
     pub(super) roll: Option<Arc<Distribution>>,
+    bench: Option<(usize, Side)>,
 }
 
 impl Problem {
@@ -17,6 +18,10 @@ impl Problem {
         let mut out = *s;
         out.rarity = RARE;
         out.meta = 0;
+        if self.veiled_side(s).is_some_and(|veiled| veiled != side) {
+            out.veiled = 0;
+            out.unveil = 0;
+        }
         for i in 0..c.t_side.len() {
             if c.t_side[i] != side {
                 out.status[i] = c.base.status[i];
@@ -67,12 +72,11 @@ impl Problem {
         out: &mut Vec<Outcome>,
         bounds: &mut Vec<Bound>,
     ) {
-        let limit = if s.rarity == MAGIC { 1 } else { self.limit() };
         let cap_hit = self.notables_in(c, s) >= self.notable_cap;
         let counts = self.counts(c, s);
         let mut cands: Vec<(State, f64, f64, f64)> = Vec::new();
         for &side in sides {
-            if counts[side.index()] + taken >= limit {
+            if counts[side.index()] + taken >= self.side_limit(s.rarity, side) {
                 continue;
             }
             for i in 0..c.t_side.len() {
@@ -176,6 +180,9 @@ impl Problem {
             if hi > 0.0 {
                 let mut n = *s;
                 n.status[i] = MISSING;
+                if s.veiled > 0 && s.veiled < 17 && (s.veiled - 1) as usize / 2 == i {
+                    n.veiled = 0;
+                }
                 cands.push((n, w, lo, hi));
             }
         }
@@ -207,7 +214,27 @@ impl Problem {
             if hi > 0.0 {
                 let mut m = *s;
                 m.junk[slot] -= 1;
-                cands.push((m, w, lo, hi));
+                if s.veiled == 17 + slot as u8 {
+                    let share = 1.0 / n;
+                    let mut removed_veil = m;
+                    removed_veil.veiled = 0;
+                    cands.push((
+                        removed_veil,
+                        w * share,
+                        if tag.is_none() { w * share } else { 0.0 },
+                        if tag.is_none() { w * share } else { hi.min(1.0) },
+                    ));
+                    if share < 1.0 {
+                        cands.push((
+                            m,
+                            w * (1.0 - share),
+                            if tag.is_none() { w * (1.0 - share) } else { 0.0 },
+                            if tag.is_none() { w * (1.0 - share) } else { hi },
+                        ));
+                    }
+                } else {
+                    cands.push((m, w, lo, hi));
+                }
             }
         }
         if let Some(ms) = meta_side(s.meta)
@@ -243,6 +270,7 @@ impl Problem {
                     x.junk[k] -= s.junk[k] - r.junk[k];
                 }
                 x.meta = r.meta;
+                x.veiled = r.veiled;
                 d.add(x, p * q, pl * q, ph * q);
             }
         }
@@ -253,17 +281,29 @@ impl Problem {
     }
 
     pub(crate) fn prepare(&self, a: &Action) -> PreparedAction {
+        self.prepare_with_roll(a, true)
+    }
+
+    pub(crate) fn prepare_with_roll(&self, a: &Action, full_roll: bool) -> PreparedAction {
         let kind = a.kind.effect();
         let mask = a.from_rarity.iter().filter(|&&r| r < 8).fold(0u8, |m, &r| m | 1 << r);
-        let mut c = PreparedAction { kind, mask, profile: 0, first: None, roll: None };
+        let mut c = PreparedAction { kind, mask, profile: 0, first: None, roll: None, bench: None };
         match kind {
             Effect::Roll(_) => c.roll = self.rolled_listed(a),
             Effect::Reforge => {
-                c.roll = self.rolled_listed(a);
+                if full_roll {
+                    c.roll = self.rolled_listed(a);
+                }
                 c.profile = self.profile_index(&a.profile);
                 c.first = a.first_profile.as_deref().filter(|f| !f.is_empty()).map(|f| self.profile_index(f));
             }
             Effect::Augment => c.profile = self.profile_index(&a.profile),
+            Effect::FinishBench => {
+                c.bench = a.forced.as_deref().and_then(|id| {
+                    let (i, status) = self.classify(id);
+                    (i >= 0 && status == GOOD).then(|| (i as usize, self.targets[i as usize].side))
+                });
+            }
             _ => {}
         }
         c
@@ -280,6 +320,12 @@ impl Problem {
         let c = self.c();
         scratch.clear();
         bounds.clear();
+        if s.unveil != 0 && !matches!(a.kind, Effect::Unveil(_)) {
+            return TransitionResult::Empty;
+        }
+        if Self::pending_side(s).is_some() && s.unveil == 0 && !matches!(a.kind, Effect::RevealUnveil(_)) {
+            return TransitionResult::Empty;
+        }
         if s.rarity >= 8 || a.mask & (1 << s.rarity) == 0 {
             return TransitionResult::Empty;
         }
@@ -304,7 +350,7 @@ impl Problem {
                 };
             }
             Effect::Add(rarity, side) => {
-                let limit = if rarity == MAGIC { 2 } else { 2 * self.limit() };
+                let limit = both.iter().map(|&side| self.side_limit(rarity, side)).sum();
                 if self.total(s) < limit {
                     self.add_mod_into(
                         c,
@@ -318,10 +364,41 @@ impl Problem {
                 }
             }
             Effect::Annul(side) => self.annul_into(c, s, side, scratch, bounds),
+            Effect::RerollSide(side) => {
+                return self.reroll_side(s, side).map_or(TransitionResult::Empty, TransitionResult::Shared);
+            }
+            Effect::RemoveAdd(side) => self.remove_add(c, s, side, scratch, bounds),
+            Effect::Veil(chaos) => {
+                return self.veil_action(s, chaos).map_or(TransitionResult::Empty, TransitionResult::Shared);
+            }
+            Effect::RevealUnveil(blocker) => {
+                return self.reveal_unveil(s, blocker).map_or(TransitionResult::Empty, |offers| TransitionResult::Shared(Arc::new(offers)));
+            }
+            Effect::Unveil(class) => {
+                if class < UNVEIL_CLASSES && s.unveil & (1 << class) != 0 {
+                    let mut next = *s;
+                    next.unveil = 0;
+                    next.veiled = class + 1;
+                    if class < UNVEIL_TARGET_CLASSES {
+                        next.status[class as usize / 2] = 1 + class % 2;
+                    } else {
+                        next.junk[class as usize - 16] += 1;
+                    }
+                    sure(scratch, bounds, next);
+                }
+            }
+            Effect::RandomMeta => {
+                let candidates = self.available_metas(s);
+                let p = 1.0 / candidates.len() as f64;
+                for m in candidates {
+                    scratch.push((p, s.with_meta(m)));
+                    bounds.push((p, p));
+                }
+            }
             Effect::Augment => self.augment_into(c, s, a.profile, scratch, bounds),
             Effect::Meta(m) => {
                 let side = meta_side(m).expect("a metamod has a side");
-                if s.meta == 0 && self.counts(c, s)[side.index()] < self.limit() {
+                if s.meta == 0 && self.counts(c, s)[side.index()] < self.side_limit(s.rarity, side) {
                     sure(scratch, bounds, s.with_meta(m));
                 }
             }
@@ -336,6 +413,23 @@ impl Problem {
                         scratch.push((p, n));
                         bounds.push((p, p));
                     }
+                }
+            }
+            Effect::ProtectedScour { side, require_full_side } => {
+                if s.meta == 0 && (!require_full_side || self.count(s, side) == self.side_limit(s.rarity, side)) && self.count(s, side.other()) < self.side_limit(s.rarity, side.other()) {
+                    for (p, next) in self.keep(s, side) {
+                        scratch.push((p, next));
+                        bounds.push((p, p));
+                    }
+                }
+            }
+            Effect::FinishBench => {
+                if self.allow_terminal_bench && self.bench.is_empty() && self.reserve.is_empty() && s.meta == 0
+                    && let Some((i, side)) = a.bench
+                    && s.status[i] == MISSING && self.count(s, side) < self.side_limit(s.rarity, side) {
+                    let mut next = *s;
+                    next.status[i] = GOOD;
+                    if self.done(&next) { sure(scratch, bounds, next); }
                 }
             }
         }

@@ -7,11 +7,12 @@ rust-version.workspace = true
 description = "Crafting solver: lumped item states, currency outcomes, policy iteration. No I/O."
 
 [dependencies]
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 faer.workspace = true
 rustc-hash = "2"
 rayon.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 flate2 = "1"

@@ -21,12 +21,24 @@ pub enum ActionKind {
     ExaltSuffix,
     AnnulPrefix,
     AnnulSuffix,
+    ChaosPrefix,
+    ChaosSuffix,
+    BeastPrefixToSuffix,
+    BeastSuffixToPrefix,
+    BristleMatron,
+    VeiledChaos,
+    VeiledExalt,
+    Unveil(u8),
+    RevealUnveil(u8),
     MetaLockPrefixes,
     MetaLockSuffixes,
     MetaNoAttack,
     MetaNoCaster,
     RemoveCrafted,
     Scour,
+    ProtectedScour(Side),
+    MatronScour,
+    FinishBench,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,9 +48,17 @@ pub enum Effect {
     Annul(Option<Side>),
     Reforge,
     Augment,
+    RerollSide(Side),
+    RemoveAdd(Side),
+    RandomMeta,
+    Veil(bool),
+    Unveil(u8),
+    RevealUnveil(u8),
     Meta(u8),
     Unmeta,
     Scour,
+    ProtectedScour { side: Side, require_full_side: bool },
+    FinishBench,
 }
 
 impl ActionKind {
@@ -54,6 +74,15 @@ impl ActionKind {
             Annul => Effect::Annul(None),
             AnnulPrefix => Effect::Annul(Some(Side::Prefix)),
             AnnulSuffix => Effect::Annul(Some(Side::Suffix)),
+            ChaosPrefix => Effect::RerollSide(Side::Prefix),
+            ChaosSuffix => Effect::RerollSide(Side::Suffix),
+            BeastPrefixToSuffix => Effect::RemoveAdd(Side::Prefix),
+            BeastSuffixToPrefix => Effect::RemoveAdd(Side::Suffix),
+            BristleMatron => Effect::RandomMeta,
+            VeiledChaos => Effect::Veil(true),
+            VeiledExalt => Effect::Veil(false),
+            Unveil(class) => Effect::Unveil(class),
+            RevealUnveil(blocker) => Effect::RevealUnveil(blocker),
             Reforge => Effect::Reforge,
             Augment => Effect::Augment,
             MetaLockPrefixes => Effect::Meta(META_LOCK_PREFIXES),
@@ -62,6 +91,9 @@ impl ActionKind {
             MetaNoCaster => Effect::Meta(META_NO_CASTER),
             RemoveCrafted => Effect::Unmeta,
             Scour => Effect::Scour,
+            ProtectedScour(side) => Effect::ProtectedScour { side, require_full_side: false },
+            MatronScour => Effect::ProtectedScour { side: Side::Suffix, require_full_side: true },
+            FinishBench => Effect::FinishBench,
         }
     }
 }
@@ -90,44 +122,11 @@ fn default_seconds<'a>(kind: ActionKind, inputs: impl Iterator<Item = &'a str>) 
     }
 }
 
-#[derive(Deserialize)]
-struct ActionData {
-    name: String,
-    kind: ActionKind,
-    cost: Vec<(String, f64)>,
-    #[serde(default)]
-    seconds: Option<f64>,
-    from_rarity: Vec<u8>,
-    #[serde(default = "base_profile")]
-    profile: String,
-    #[serde(default)]
-    first_profile: Option<String>,
-    #[serde(default)]
-    forced: Option<String>,
-}
-
-impl From<ActionData> for Action {
-    fn from(a: ActionData) -> Action {
-        let seconds = a.seconds.unwrap_or_else(|| default_seconds(a.kind, a.cost.iter().map(|(id, _)| id.as_str())));
-        Action {
-            name: a.name,
-            kind: a.kind,
-            cost: a.cost,
-            seconds,
-            from_rarity: a.from_rarity,
-            profile: a.profile,
-            first_profile: a.first_profile,
-            forced: a.forced,
-        }
-    }
-}
-
 fn base_profile() -> String {
     "base".into()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "ActionData")]
 pub struct Action {
     pub name: String,
     pub kind: ActionKind,

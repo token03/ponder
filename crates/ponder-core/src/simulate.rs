@@ -47,7 +47,7 @@ pub fn replay_with_meta<'p>(
     mut on_click: impl FnMut(&State, &'p Action, u8, &[&'p Mod], u8),
 ) -> Option<State> {
     let mut sim = Mechanics::new(problem, seed);
-    let used: FxHashSet<&str> = plan.policy.values().map(String::as_str).collect();
+    let used: FxHashSet<&str> = plan.policy.values().map(|name| name.as_ref()).collect();
     let acts: Vec<PreparedEffect> = problem.actions.iter().filter(|a| used.contains(a.name.as_str())).map(|a| sim.act(a)).collect();
     let by_name: FxHashMap<&str, usize> = acts.iter().enumerate().map(|(i, a)| (a.action.name.as_str(), i)).collect();
     let class: Vec<_> = sim.mods.iter().map(|m| problem.classify_mod(m)).collect();
@@ -69,6 +69,7 @@ pub fn replay_with_meta<'p>(
                     (_, slot) => state.junk[slot as usize] += 1,
                 }
             }
+            sim.project_veil(&mut state, &item);
             if problem.done(&state) {
                 break;
             }
@@ -76,7 +77,7 @@ pub fn replay_with_meta<'p>(
                 lost = Some(state);
                 break;
             };
-            let act = &acts[by_name[name.as_str()]];
+            let act = &acts[by_name[name.as_ref()]];
             rarity = sim.apply(act, rarity, &mut item, &mut meta);
             view.clear();
             view.extend(item.iter().map(|&k| sim.mods[k as usize]));

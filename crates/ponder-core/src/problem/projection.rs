@@ -17,11 +17,15 @@ pub(super) fn classify_in(targets: &[Target], filler: &BTreeSet<String>, m: &Mod
 
 impl Problem {
     pub fn limit(&self) -> usize {
-        crate::mechanics::ItemRules::new(self.kind, self.notable_cap).rare_limit
+        self.side_limit(RARE, Side::Prefix).max(self.side_limit(RARE, Side::Suffix))
     }
 
-    pub fn rare_counts(&self) -> &'static [(usize, f64)] {
-        crate::mechanics::ItemRules::new(self.kind, self.notable_cap).counts(RARE)
+    pub fn rare_counts(&self) -> Vec<(usize, f64)> {
+        crate::mechanics::ItemRules::new(self.kind, self.notable_cap, self.affix_limits).counts(RARE)
+    }
+
+    pub fn side_limit(&self, rarity: u8, side: Side) -> usize {
+        crate::mechanics::ItemRules::new(self.kind, self.notable_cap, self.affix_limits).limit(rarity, side)
     }
 
     /// A fresh base (with its fractured mods).
@@ -39,18 +43,6 @@ impl Problem {
     pub fn classify(&self, mod_id: &str) -> (i32, u8) {
         let m = self.mods().get(mod_id).unwrap_or_else(|| panic!("unknown mod {mod_id:?}"));
         self.classify_mod(m)
-    }
-
-    /// `classify` for any mod, also one outside the pool (a crafted or influence mod on a bought item).
-    pub fn classify_mod(&self, m: &Mod) -> (i32, u8) {
-        let found = classify_in(&self.targets, &self.filler, m);
-        if found.0 >= 0 {
-            return found;
-        }
-        self.bench
-            .iter()
-            .position(|b| m.groups.iter().any(|g| b.groups.contains(g)))
-            .map_or(found, |i| ((self.targets.len() + i) as i32, BLOCKED))
     }
 
     /// The state of a real item with these mods (fractured ones included, as in `fixed`).
@@ -81,6 +73,9 @@ impl Problem {
         if let Some(side) = meta_side(s.meta) {
             n[side.index()] += 1;
         }
+        if let Some(side) = Self::pending_side(s) {
+            n[side.index()] += 1;
+        }
         n
     }
 
@@ -99,7 +94,11 @@ impl Problem {
     }
 
     pub fn done(&self, s: &State) -> bool {
-        if s.meta != 0 || s.status[self.targets.len()..self.targets.len() + self.bench.len()].iter().any(|&v| v != MISSING) {
+        if s.unveil != 0
+            || matches!(s.veiled, VEILED_PREFIX | VEILED_SUFFIX)
+            || s.meta != 0
+            || s.status[self.targets.len()..self.targets.len() + self.bench.len()].iter().any(|&v| v != MISSING)
+        {
             return false; // the bench has to take it off
         }
         let c = self.c();
@@ -117,11 +116,25 @@ impl Problem {
         {
             return false;
         }
-        let limit = if s.rarity == MAGIC { 1 } else { self.limit() };
         let counts = self.counts(c, s);
         if counts[0] + counts[1] + self.reserve.values().sum::<usize>() < self.min_mods {
             return false;
         }
-        self.reserve.iter().all(|(side, n)| counts[side.index()] + n <= limit)
+        self.reserve.iter().all(|(side, n)| counts[side.index()] + n <= self.side_limit(s.rarity, *side))
+    }
+}
+
+impl ProblemSpec {
+    /// `classify` for any mod, also one outside the pool (a crafted or influence mod on a bought item).
+    pub fn classify_mod(&self, m: &Mod) -> (i32, u8) {
+        let found = classify_in(&self.targets, &self.filler, m);
+        if found.0 >= 0 {
+            return found;
+        }
+        self.bench
+            .iter()
+            .chain(&self.blockers)
+            .position(|b| m.groups.iter().any(|g| b.groups.contains(g)))
+            .map_or(found, |i| ((self.targets.len() + i) as i32, BLOCKED))
     }
 }

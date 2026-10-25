@@ -9,9 +9,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use ponder_core::{self as craft, GOOD, MISSING, Mod, Problem, State};
-use rustc_hash::FxHashMap;
 use rayon::prelude::*;
 use regex::Regex;
+use rustc_hash::FxHashMap;
 use serde_json::{Value, json};
 
 use super::types::{Estimate, ProductRef};
@@ -86,7 +86,9 @@ struct Seen {
 /// The pivots crafting `estimates[i]` (along its cheapest route) runs into.
 pub fn pivots_of(estimates: &[Estimate], i: usize) -> Vec<Pivot> {
     let e = &estimates[i];
-    let Some((problem, plan)) = e.cheapest_plan() else { return Vec::new() };
+    let Some((problem, plan)) = e.cheapest_plan() else {
+        return Vec::new();
+    };
     if problem.begin.is_some() {
         return Vec::new(); // the replay starts from a fresh base
     }
@@ -102,6 +104,8 @@ pub fn pivots_of(estimates: &[Estimate], i: usize) -> Vec<Pivot> {
     if others.is_empty() {
         return Vec::new();
     }
+    let replay_problem = problem.fresh_transition_cache();
+    let problem = &replay_problem;
     let steps = craft::steps(problem, plan, 0.02);
     let numbers: HashMap<(u8, u8), usize> = steps
         .iter()
@@ -123,7 +127,9 @@ pub fn pivots_of(estimates: &[Estimate], i: usize) -> Vec<Pivot> {
     let mut clicks: HashMap<usize, usize> = HashMap::new();
     let mut seen: HashMap<(usize, usize), Seen> = HashMap::new();
     let _ = craft::replay_with_meta(problem, plan, runs, 7, max_steps, |before, _, rarity, mods, meta| {
-        let Some(&step) = numbers.get(&step_key(problem, before)) else { return };
+        let Some(&step) = numbers.get(&step_key(problem, before)) else {
+            return;
+        };
         *clicks.entry(step).or_default() += 1;
         let mut key = [u16::MAX; 8];
         for (k, m) in key.iter_mut().zip(mods) {
@@ -145,7 +151,14 @@ pub fn pivots_of(estimates: &[Estimate], i: usize) -> Vec<Pivot> {
                         (_, slot) => s.junk[slot as usize] += 1,
                     }
                 }
-                let left = bench + if p.done(&s) { 0.0 } else if let Some(&v) = other.values.get(&s) { v } else { continue };
+                let left = bench
+                    + if p.done(&s) {
+                        0.0
+                    } else if let Some(&v) = other.values.get(&s) {
+                        v
+                    } else {
+                        continue;
+                    };
                 if fresh - left >= PIVOT_MIN_CHAOS.max(PIVOT_SHARE * fresh) {
                     out.push((o, left, s));
                 }

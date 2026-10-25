@@ -1,6 +1,24 @@
 //! demand: archetype helpers on small made-up inputs.
 
 use ponder::demand::{Archetype, Counter};
+use ponder_game::mods::IdMods;
+
+mod common;
+
+#[test]
+fn mined_goals_keep_an_observed_combination_and_allow_the_solver_to_choose_fracturing() {
+    let db = common::db();
+    let item = db.match_ids("Bone Ring", &IdMods { explicit: vec!["IncreasedLife7".into()], fractured: vec!["IncreasedEnergyShield10".into()], ..Default::default() }, Some(84), &Default::default(), "RARE", "", &Default::default());
+    assert!(item.mods.iter().any(|m| m.fractured()));
+    let keys = ponder::demand::stat_keys(&item).into_iter().map(str::to_owned).collect();
+    let mut archetype = Archetype::new("Ring", keys, 1, 1);
+    archetype.examples.push(std::sync::Arc::new(item.clone()));
+    let goal = ponder::demand::archetype_match(db, &archetype).unwrap();
+    assert_eq!(goal.mods.iter().map(|m| &m.mod_id).collect::<Vec<_>>(), item.mods.iter().map(|m| &m.mod_id).collect::<Vec<_>>());
+    assert!(goal.mods.iter().all(|m| !m.fractured()));
+    assert!(item.mods.iter().any(|m| m.fractured()));
+    assert!(goal.finish.is_none());
+}
 
 #[test]
 fn niche_and_usual_tier() {

@@ -22,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 use ponder_game::data;
 use ponder_game::mods::{ItemMatch, ModDB};
-use ponder_net::trade::{self, ItemQuery, Rates, StatIds, Translations};
+use ponder_net::trade::{self, ItemQuery, Rates, StatIds};
 use serde_json::Value;
 
 use crate::demand::{RES, stat_key};
@@ -33,24 +33,33 @@ pub const FLOOR_TIER: i64 = 4;
 
 /// Repoe's raw `mods.json` and indexed `stat_translations.json`: what trade searches read.
 pub struct TradeData {
-    pub mods: Arc<Value>,
-    pub translations: Translations,
+    pub mods: Arc<data::Mods>,
+    translations: HashMap<(String, String), String>,
 }
 
 impl TradeData {
-    pub fn new(mods: Arc<Value>, stat_translations: &Value) -> TradeData {
-        TradeData {
-            mods,
-            translations: Translations::new(stat_translations),
+    pub fn new(mods: Arc<data::Mods>, stat_translations: &[data::StatTranslation]) -> TradeData {
+        let mut translations = HashMap::new();
+        for entry in stat_translations {
+            for id in &entry.ids {
+                for stat in entry.trade_stats.iter().flatten() {
+                    translations.entry((id.clone(), stat.type_.clone())).or_insert_with(|| stat.id.clone());
+                }
+            }
         }
+        TradeData { mods, translations }
+    }
+
+    pub fn stat_min(&self, mod_ids: &[&str]) -> Option<serde_json::Number> {
+        mod_ids.iter().filter_map(|id| self.mods.get(*id)?.stats.first().map(|s| s.min)).min_by(f64::total_cmp).map(trade::num)
     }
 
     /// The default repoe data (as Python's `trade.stat_id` reads it); panics if it is missing.
     pub fn load() -> &'static TradeData {
         static T: OnceLock<TradeData> = OnceLock::new();
         T.get_or_init(|| {
-            let mods = data::load("mods").unwrap_or_else(|e| panic!("{e}"));
-            let translations = data::load("stat_translations").unwrap_or_else(|e| panic!("{e}"));
+            let mods = data::mods().unwrap_or_else(|e| panic!("{e}"));
+            let translations = data::stat_translations().unwrap_or_else(|e| panic!("{e}"));
             TradeData::new(mods, &translations)
         })
     }
@@ -58,7 +67,8 @@ impl TradeData {
 
 impl StatIds for TradeData {
     fn stat_id(&self, mod_id: &str, kind: &str) -> Option<String> {
-        trade::stat_id(&self.mods, &self.translations, mod_id, kind)
+        let first = &self.mods.get(mod_id)?.stats.first()?.id;
+        self.translations.get(&(first.clone(), kind.into())).cloned()
     }
 }
 
@@ -92,13 +102,7 @@ pub struct PriceModel {
 ///
 /// `example` is one of the archetype's matches (`demand.archetype_match`); None when no core
 /// mod has a trade stat.
-pub fn archetype_query(
-    db: &ModDB,
-    example: &ItemMatch,
-    keys: &[&str],
-    floor: i64,
-    td: &TradeData,
-) -> Option<Value> {
+pub fn archetype_query(db: &ModDB, example: &ItemMatch, keys: &[&str], floor: i64, td: &TradeData) -> Option<Value> {
     let grp = gear::group(db, example);
     let base_id = example.base_id.as_deref().expect("an example with a base");
     let mut q = ItemQuery::default();
@@ -114,13 +118,11 @@ pub fn archetype_query(
         }
         let mods: Vec<&str> = pool
             .iter()
-            .filter(|m| {
-                stat_key(&m.id) == *key && db.tier(&m.id, &example.tags).unwrap_or(99) <= floor
-            })
+            .filter(|m| stat_key(&m.id) == *key && db.tier(&m.id, &example.tags).unwrap_or(99) <= floor)
             .map(|m| m.id.as_str())
             .collect();
         if let Some(sid) = mods.first().and_then(|m| td.stat_id(m, "explicit")) {
-            q.stats.push((sid, trade::stat_min(&td.mods, &mods)));
+            q.stats.push((sid, td.stat_min(&mods)));
         }
     }
     (!q.stats.is_empty()).then(|| trade::item_query(&q))
@@ -145,13 +147,7 @@ pub fn lstsq(x: &[Vec<f64>], y: &[f64]) -> Vec<f64> {
 }
 
 /// Fit the price model for an archetype from its trade listings; None if there are too few usable ones.
-pub fn fit(
-    db: &ModDB,
-    group: &str,
-    keys: &[&str],
-    listings: &[Value],
-    rates: &Rates,
-) -> Option<PriceModel> {
+pub fn fit(db: &ModDB, group: &str, keys: &[&str], listings: &[Value], rates: &Rates) -> Option<PriceModel> {
     let core: Vec<&str> = keys.iter().copied().filter(|k| *k != RES).collect();
     let (mut rows, mut prices): (Vec<Vec<f64>>, Vec<f64>) = (Vec::new(), Vec::new());
     let mut counts: HashMap<&str, [i64; 2]> = core.iter().map(|k| (*k, [0, 0])).collect();
@@ -164,7 +160,7 @@ pub fn fit(
         let mut best: HashMap<&str, i64> = HashMap::new();
         let mut res = 0;
         for mod_ in &m.mods {
-            if matches!(mod_.source, "crafted" | "legacy-crafted") {
+            if mod_.source == "crafted" {
                 continue;
             }
             if gear::is_filler_family(&mod_.family) {
@@ -176,8 +172,7 @@ pub fn fit(
                 *t = (*t).min(mod_.tier.unwrap());
             }
         }
-        let open_affixes =
-            (6 - m.mods.iter().filter(|x| x.source != "crafted").count() as i64).max(0);
+        let open_affixes = (6 - m.mods.iter().filter(|x| x.source != "crafted").count() as i64).max(0);
         let mut row = vec![1.0];
         for k in &core {
             let t = best.get(k).copied().unwrap_or(99);
@@ -197,10 +192,7 @@ pub fn fit(
     }
     let coef = lstsq(&rows, &prices);
     let y = prices;
-    let fitted: Vec<f64> = rows
-        .iter()
-        .map(|r| r.iter().zip(&coef).map(|(a, b)| a * b).sum())
-        .collect();
+    let fitted: Vec<f64> = rows.iter().map(|r| r.iter().zip(&coef).map(|(a, b)| a * b).sum()).collect();
     let mean = y.iter().sum::<f64>() / y.len() as f64;
     let ss_res: f64 = y.iter().zip(&fitted).map(|(a, b)| (a - b) * (a - b)).sum();
     let ss_tot: f64 = y.iter().map(|a| (a - mean) * (a - mean)).sum();

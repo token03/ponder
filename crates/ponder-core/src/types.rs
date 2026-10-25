@@ -28,6 +28,10 @@ pub const BLOCKED: u8 = 2;
 /// Most targets a problem may have (`State` stores their status inline).
 pub const MAX_TARGETS: usize = 8;
 pub const JUNK_SLOTS: usize = 6;
+pub const UNVEIL_TARGET_CLASSES: u8 = (2 * MAX_TARGETS) as u8;
+pub const UNVEIL_CLASSES: u8 = UNVEIL_TARGET_CLASSES + JUNK_SLOTS as u8;
+pub const VEILED_PREFIX: u8 = 31;
+pub const VEILED_SUFFIX: u8 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -112,8 +116,15 @@ pub const META_LOCK_PREFIXES: u8 = 1;
 pub const META_LOCK_SUFFIXES: u8 = 2;
 pub const META_NO_ATTACK: u8 = 3;
 pub const META_NO_CASTER: u8 = 4;
-pub const META_NAMES: [&str; 5] =
-    ["", "Prefixes Cannot Be Changed", "Suffixes Cannot Be Changed", "Cannot roll Attack Modifiers", "Cannot roll Caster Modifiers"];
+pub const META_MULTIMOD: u8 = 5;
+pub const META_NAMES: [&str; 6] = [
+    "",
+    "Prefixes Cannot Be Changed",
+    "Suffixes Cannot Be Changed",
+    "Cannot roll Attack Modifiers",
+    "Cannot roll Caster Modifiers",
+    "Can have up to 3 Crafted Modifiers",
+];
 /// The mod tags "Cannot roll Attack/Caster Modifiers" keep off the item, by `meta_tag`.
 pub const META_TAGS: [&str; 2] = ["attack", "caster"];
 
@@ -155,13 +166,15 @@ pub struct State {
     pub status: [u8; MAX_TARGETS],
     pub junk: [u8; JUNK_SLOTS],
     pub meta: u8,
+    pub veiled: u8,
+    pub unveil: u32,
 }
 
 impl State {
     pub fn new(rarity: u8, status: &[u8], junk: &[u8]) -> State {
         assert!(status.len() <= MAX_TARGETS, "at most {MAX_TARGETS} targets");
         assert!(junk.len() <= JUNK_SLOTS, "at most {JUNK_SLOTS} junk slots");
-        let mut s = State { rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS], meta: 0 };
+        let mut s = State { rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS], meta: 0, veiled: 0, unveil: 0 };
         s.status[..status.len()].copy_from_slice(status);
         s.junk[..junk.len()].copy_from_slice(junk); // short junk is padded with zeros
         s
@@ -182,10 +195,17 @@ impl Hash for State {
         j[JUNK_SLOTS + 1] = self.meta;
         h.write_u64(u64::from_le_bytes(self.status));
         h.write_u64(u64::from_le_bytes(j));
+        if self.veiled != 0 || self.unveil != 0 {
+            h.write_u64(self.veiled as u64 | (self.unveil as u64) << 8);
+        }
     }
 }
 
 fn is_zero(x: &u8) -> bool {
+    *x == 0
+}
+
+fn is_zero_u32(x: &u32) -> bool {
     *x == 0
 }
 
@@ -197,22 +217,40 @@ struct StateRepr {
     junk: Vec<u8>,
     #[serde(default, skip_serializing_if = "is_zero")]
     meta: u8,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    veiled: u8,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    unveil: u32,
 }
 
 impl Serialize for State {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         // Trailing status zeros can't be told from missing targets, so all slots are written.
-        StateRepr { rarity: self.rarity, status: self.status.to_vec(), junk: self.junk.to_vec(), meta: self.meta }.serialize(ser)
+        StateRepr {
+            rarity: self.rarity,
+            status: self.status.to_vec(),
+            junk: self.junk.to_vec(),
+            meta: self.meta,
+            veiled: self.veiled,
+            unveil: self.unveil,
+        }
+        .serialize(ser)
     }
 }
 
 impl<'de> Deserialize<'de> for State {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<State, D::Error> {
         let r = StateRepr::deserialize(de)?;
-        if r.status.len() > MAX_TARGETS || r.junk.len() > JUNK_SLOTS || r.meta as usize >= META_NAMES.len() {
+        if r.status.len() > MAX_TARGETS
+            || r.junk.len() > JUNK_SLOTS
+            || r.meta as usize >= META_NAMES.len()
+            || (r.veiled > UNVEIL_CLASSES && !matches!(r.veiled, VEILED_PREFIX | VEILED_SUFFIX))
+            || r.unveil >> UNVEIL_CLASSES != 0
+            || (r.unveil != 0 && !matches!(r.veiled, VEILED_PREFIX | VEILED_SUFFIX))
+        {
             return Err(serde::de::Error::custom("state has too many targets or junk slots, or an unknown metamod"));
         }
-        Ok(State::new(r.rarity, &r.status, &r.junk).with_meta(r.meta))
+        Ok(State { veiled: r.veiled, unveil: r.unveil, ..State::new(r.rarity, &r.status, &r.junk).with_meta(r.meta) })
     }
 }
 
@@ -232,6 +270,7 @@ impl Default for Settings {
 }
 
 pub type Prices = std::collections::HashMap<String, f64>;
+pub type WeightProfile = std::sync::Arc<std::collections::BTreeMap<String, f64>>;
 
 /// One entry of an outcome distribution: (probability, next state).
 pub type Outcome = (f64, State);

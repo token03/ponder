@@ -83,7 +83,7 @@ pub fn normalized(mut m: Value, with_tags: bool) -> Value {
 }
 
 fn sort_values(v: &mut Value) {
-    v.as_array_mut().unwrap().sort_by_key(|x| x.to_string());
+    v.as_array_mut().unwrap().sort_by_key(|x| x.as_str().or_else(|| x["mod_id"].as_str()).unwrap().to_owned());
 }
 
 /// Do the mods agree, in the same order too?

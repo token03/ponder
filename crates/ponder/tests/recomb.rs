@@ -12,7 +12,6 @@ use ponder_core::{Plan, Prices, Rng, Settings, Side, Target};
 use ponder_game::mods::ModDB;
 use serde_json::{Value, json};
 
-
 // -- helpers ----------------------------------------------------------------------------
 
 fn table() -> &'static Prices {
@@ -20,25 +19,15 @@ fn table() -> &'static Prices {
     T.get_or_init(|| fixture("prices.json.gz"))
 }
 
-const SETTINGS: Settings = Settings {
-    chaos_per_hour: 1500.0,
-};
-const FREE_CLICKS: Settings = Settings {
-    chaos_per_hour: 0.0,
-};
+const SETTINGS: Settings = Settings { chaos_per_hour: 1500.0 };
+const FREE_CLICKS: Settings = Settings { chaos_per_hour: 0.0 };
 
 fn approx(a: f64, b: f64) {
-    assert!(
-        (a - b).abs() <= 1e-12 + 1e-9 * a.abs().max(b.abs()),
-        "{a} != {b}"
-    );
+    assert!((a - b).abs() <= 1e-12 + 1e-9 * a.abs().max(b.abs()), "{a} != {b}");
 }
 
-fn plan_costing(cost: f64) -> Option<Plan> {
-    Some(Plan {
-        cost,
-        ..Plan::default()
-    })
+fn plan_costing(cost: f64) -> Option<Arc<Plan>> {
+    Some(Arc::new(Plan { cost, ..Plan::default() }))
 }
 
 fn donor(base: &str, base_id: &str, carries: &[&str], cost: f64) -> Donor {
@@ -63,10 +52,7 @@ fn leaf_node(d: &Donor) -> Node {
 fn side_counts_are_distributions() {
     for (n, row) in recomb::SIDE_COUNTS.iter().enumerate() {
         approx(row.iter().map(|(_, p)| p).sum::<f64>(), 1.0);
-        assert!(
-            row.iter().map(|(k, _)| *k).max().unwrap() <= n.min(3),
-            "{n}"
-        );
+        assert!(row.iter().map(|(k, _)| *k).max().unwrap() <= n.min(3), "{n}");
     }
 }
 
@@ -97,16 +83,8 @@ fn step_cost_divides_by_the_chance() {
     approx(paid.cost.unwrap(), (30.0 + 15.0 * 1500.0 / 3600.0) / 0.25);
     // A donor without a plan, or no chance, has no cost.
     let unsolved = Donor::new("C", "c", &["z"]);
-    assert!(
-        Step::new(leaf_node(&a), leaf_node(&unsolved), 0.25, 0.0, 0.0, 0.0)
-            .cost
-            .is_none()
-    );
-    assert!(
-        Step::new(leaf_node(&a), leaf_node(&b), 0.0, 0.0, 0.0, 0.0)
-            .cost
-            .is_none()
-    );
+    assert!(Step::new(leaf_node(&a), leaf_node(&unsolved), 0.25, 0.0, 0.0, 0.0).cost.is_none());
+    assert!(Step::new(leaf_node(&a), leaf_node(&b), 0.0, 0.0, 0.0, 0.0).cost.is_none());
 }
 
 #[test]
@@ -117,57 +95,28 @@ fn step_text_names_the_odds_salvage_and_doubling() {
     assert_eq!(first.carries, ["life", "es"]);
     assert_eq!(first.doubled, ["es"]);
     let c = donor("C", "c", &["int"], 5.0);
-    let top = Step::new(
-        Node::Step(Arc::new(first)),
-        leaf_node(&c),
-        0.59,
-        0.34,
-        0.001,
-        0.0,
-    );
+    let top = Step::new(Node::Step(Arc::new(first)), leaf_node(&c), 0.59, 0.34, 0.001, 0.0);
     let steps = top.steps();
     assert_eq!(steps.len(), 5);
     assert_eq!(steps[0].1, "A: life + es");
     assert_eq!(steps[2].1, "#1 + #2 \u{2192} life + es  (60%; es doubled)");
-    assert_eq!(
-        steps[4].1,
-        "#3 + #4 \u{2192} life + es + int  (59%; #3 back 34%)"
-    );
+    assert_eq!(steps[4].1, "#3 + #4 \u{2192} life + es + int  (59%; #3 back 34%)");
     assert_eq!(top.donors().len(), 3);
     let dict = top.to_dict();
     assert_eq!(dict["table"], "poewiki / Butsicles (Aug 2026)");
     assert_eq!(dict["salvage"], json!([0.34, 0.001]));
-    assert_eq!(
-        dict["steps"][0],
-        json!({"do": "craft", "what": "A: life + es", "chaos": 10.0})
-    );
+    assert_eq!(dict["steps"][0], json!({"do": "craft", "what": "A: life + es", "chaos": 10.0}));
 }
 
-fn target(
-    db: &ModDB,
-    pool: &[ponder_core::Mod],
-    tags: &BTreeSet<String>,
-    family: &str,
-    name: &str,
-) -> Target {
+fn target(db: &ModDB, pool: &[ponder_core::Mod], tags: &BTreeSet<String>, family: &str, name: &str) -> Target {
     let ids: BTreeSet<String> = pool
         .iter()
         .filter(|m| db.mods[m.id.as_str()].type_ == family && db.tier(&m.id, tags).unwrap() <= 2)
         .map(|m| m.id.clone())
         .collect();
     let side = pool.iter().find(|m| ids.contains(&m.id)).unwrap().side;
-    let groups = pool
-        .iter()
-        .filter(|m| ids.contains(&m.id))
-        .flat_map(|m| m.groups.iter().cloned())
-        .collect();
-    Target {
-        name: name.into(),
-        side,
-        good: ids,
-        groups,
-        notable: false,
-    }
+    let groups = pool.iter().filter(|m| ids.contains(&m.id)).flat_map(|m| m.groups.iter().cloned()).collect();
+    Target { name: name.into(), side, good: ids, groups, notable: false }
 }
 
 #[test]
@@ -179,24 +128,11 @@ fn planner_builds_padded_leaves_and_a_tree() {
     let base = db.find_base("Warlock Gloves").unwrap().to_string();
     let tags = db.item_tags(&base, &BTreeSet::new());
     let pool = gear::pool(db, &base, &tags, 84);
-    let targets = vec![
-        target(db, &pool, &tags, "IncreasedLife", "life"),
-        target(db, &pool, &tags, "Intelligence", "int"),
-    ];
+    let targets = vec![target(db, &pool, &tags, "IncreasedLife", "life"), target(db, &pool, &tags, "Intelligence", "int")];
     let problem = gear::problem_spec_on(db, &base, targets, 84, &BTreeSet::new(), None, pricing).compile();
     let mut planner = Planner::new(db, &problem, &base, 84, pricing);
-    assert!(
-        planner
-            .leaves()
-            .iter()
-            .any(|d| !d.on_target && !d.padding.is_empty())
-    ); // partner bases with NNN pads
-    assert!(
-        planner
-            .leaves()
-            .iter()
-            .all(|d| d.problem.as_ref().unwrap().junk_cap == Some((0, 0)))
-    ); // donors must be clean
+    assert!(planner.leaves().iter().any(|d| !d.on_target && !d.padding.is_empty())); // partner bases with NNN pads
+    assert!(planner.leaves().iter().all(|d| d.problem.as_ref().unwrap().junk_cap == Some((0, 0)))); // donors must be clean
     for d in planner.leaves_mut() {
         // stand-in costs: padding costs more
         d.plan = plan_costing(5.0 + 3.0 * d.padding.values().sum::<usize>() as f64);
@@ -221,26 +157,12 @@ fn filler_slots_get_distinct_resistance_families() {
     spec.filler = res;
     spec.filler_need = 3;
     let problem = spec.compile();
-    let slots: Vec<Target> = recomb::wants(&problem)
-        .into_iter()
-        .map(|w| w.target.unwrap())
-        .collect();
+    let slots: Vec<Target> = recomb::wants(&problem).into_iter().map(|w| w.target.unwrap()).collect();
     assert!(slots.len() == 3 && slots.iter().all(|t| !t.good.is_empty()));
-    let groups: Vec<BTreeSet<String>> = slots
-        .iter()
-        .map(|t| {
-            t.good
-                .iter()
-                .flat_map(|m| problem.mods()[m].groups.iter().cloned())
-                .collect()
-        })
-        .collect();
+    let groups: Vec<BTreeSet<String>> =
+        slots.iter().map(|t| t.good.iter().flat_map(|m| problem.mods()[m].groups.iter().cloned()).collect()).collect();
     // two donors can't both bring fire
-    assert!(
-        groups[0].is_disjoint(&groups[1])
-            && groups[0].is_disjoint(&groups[2])
-            && groups[1].is_disjoint(&groups[2])
-    );
+    assert!(groups[0].is_disjoint(&groups[1]) && groups[0].is_disjoint(&groups[2]) && groups[1].is_disjoint(&groups[2]));
 }
 
 fn lists<'a>(prefix: &[&'a str], suffix: &[&'a str]) -> [Vec<&'a str>; 2] {
@@ -263,25 +185,12 @@ fn failures_that_hand_back_an_input_cut_the_cost() {
     let (a, b) = (counts((1, 0), (0, 0)), counts((0, 0), (1, 0)));
     approx(recomb::salvage(&a, &b, true), 0.59 * 0.41); // life kept, int lost
     // Exact salvage chances plus success and the rest add up over the four outcomes.
-    let total = recomb::chance(&a, &b, true)
-        + recomb::salvage(&a, &b, true)
-        + recomb::salvage(&b, &a, true)
-        + 0.41 * 0.41;
+    let total = recomb::chance(&a, &b, true) + recomb::salvage(&a, &b, true) + recomb::salvage(&b, &a, true) + 0.41 * 0.41;
     approx(total, 1.0);
     let x = donor("A", "a", &["life"], 10.0);
     let y = donor("A", "a", &["int"], 10.0);
-    let step = Step::new(
-        leaf_node(&x),
-        leaf_node(&y),
-        0.59 * 0.59,
-        0.59 * 0.41,
-        0.59 * 0.41,
-        0.0,
-    );
-    approx(
-        step.cost.unwrap(),
-        20.0 * (1.0 - 0.59 * 0.41) / (0.59 * 0.59),
-    );
+    let step = Step::new(leaf_node(&x), leaf_node(&y), 0.59 * 0.59, 0.59 * 0.41, 0.59 * 0.41, 0.0);
+    approx(step.cost.unwrap(), 20.0 * (1.0 - 0.59 * 0.41) / (0.59 * 0.59));
 }
 
 #[test]
@@ -292,17 +201,9 @@ fn salvage_matches_a_simulation() {
     let exact_set: HashSet<&str> = ["life", "es", "res"].into();
     let mut rng = Rng::new(1);
     let trials = 40000;
-    let hits = (0..trials)
-        .filter(|_| {
-            recomb::draw(&mut rng, &a, &b, &legal, false).is_some_and(|kept| kept == exact_set)
-        })
-        .count();
+    let hits = (0..trials).filter(|_| recomb::draw(&mut rng, &a, &b, &legal, false).is_some_and(|kept| kept == exact_set)).count();
     let exact = recomb::salvage(&counts((2, 0), (1, 0)), &counts((0, 1), (1, 1)), false);
-    assert!(
-        (hits as f64 / trials as f64 - exact).abs() < 0.01,
-        "{} vs {exact}",
-        hits as f64 / trials as f64
-    );
+    assert!((hits as f64 / trials as f64 - exact).abs() < 0.01, "{} vs {exact}", hits as f64 / trials as f64);
 }
 
 #[test]
@@ -326,11 +227,7 @@ fn doubling_a_wanted_mod_pads_the_pool_on_the_target_base() {
         (vec!["es"], vec![one(&["es"], 10.0)]),
         (vec!["es", "life"], vec![one(&["es", "life"], 12.0)]),
     ];
-    let planner = Planner::from_leaves(
-        vec![want("life", "l", "L"), want("es", "e", "E")],
-        leaves,
-        0.0,
-    );
+    let planner = Planner::from_leaves(vec![want("life", "l", "L"), want("es", "e", "E")], leaves, 0.0);
     let best = planner.best().unwrap();
     assert_eq!(best.doubled.len(), 1); // either mod, doubled, does it
     approx(best.chance, 0.60); // pool 3 keeps 2+ 60%
@@ -339,21 +236,10 @@ fn doubling_a_wanted_mod_pads_the_pool_on_the_target_base() {
 
 #[test]
 fn a_planner_without_a_plan_or_with_one_want_has_no_tree() {
-    let w = |name: &str| Want {
-        name: name.into(),
-        side: Side::Prefix,
-        target: None,
-    };
-    let leaves = vec![
-        (vec!["a"], vec![Donor::new("T", "t", &["a"])]),
-        (vec!["b"], vec![Donor::new("T", "t", &["b"])]),
-    ];
+    let w = |name: &str| Want { name: name.into(), side: Side::Prefix, target: None };
+    let leaves = vec![(vec!["a"], vec![Donor::new("T", "t", &["a"])]), (vec!["b"], vec![Donor::new("T", "t", &["b"])])];
     // unsolved donors are dropped from the options
-    assert!(
-        Planner::from_leaves(vec![w("a"), w("b")], leaves, 0.0)
-            .best()
-            .is_none()
-    );
+    assert!(Planner::from_leaves(vec![w("a"), w("b")], leaves, 0.0).best().is_none());
 }
 
 #[test]
@@ -366,13 +252,8 @@ fn combination_counts_follow_the_pool_table() {
     approx(recomb::keep_exactly(4, 0, 0), 1.0);
 }
 
-
 fn strings(v: &Value) -> Vec<String> {
-    v.as_array()
-        .unwrap()
-        .iter()
-        .map(|s| s.as_str().unwrap().to_string())
-        .collect()
+    v.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
 }
 
 #[test]

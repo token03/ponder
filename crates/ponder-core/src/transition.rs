@@ -5,7 +5,7 @@ use crate::types::{Outcome, State};
 
 pub type ProbabilityRange = (f64, f64);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Distribution {
     Exact(Vec<Outcome>),
     Bounded { outcomes: Vec<Outcome>, bounds: Vec<ProbabilityRange> },

@@ -9,21 +9,20 @@ pub fn essences(item_class: &str, item_level: i64, min_level: i64) -> (Vec<Actio
     let (mut acts, mut forced): (Vec<Action>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     let classes = loaded(data::item_classes());
     let essence_class = classes.get(item_class).and_then(|c| c.category_id.as_deref()).unwrap_or(item_class);
-    // The raw file: the typed loader rejects the null mods of corruption-only essences.
-    let all = loaded(data::load("essences"));
-    for essence in all.as_object().into_iter().flat_map(|o| o.values()) {
-        let Some(mod_id) = essence["mods"][essence_class].as_str().filter(|m| !m.is_empty()) else {
+    let all = loaded(data::essences());
+    for essence in all.values() {
+        let Some(mod_id) = essence.mods.get(essence_class).and_then(|m| m.as_deref()).filter(|m| !m.is_empty()) else {
             continue;
         };
-        let name = essence["name"].as_str().unwrap_or("");
-        if essence["level"].as_i64().unwrap_or(0) < min_level {
+        let name = essence.name.as_str();
+        if essence.level < min_level {
             continue;
         }
         let pid = slug(name);
         let name = name.replace("Essence of ", "").to_lowercase();
         let label = format!("{name} essence");
         let start = acts.len();
-        if essence["level"].as_i64().unwrap_or(0) >= 5 {
+        if essence.level >= 5 {
             acts.push(act(&label, ActionKind::RerollRare, &[(&pid, 1.0)], &[NORMAL, RARE]).with_forced(mod_id));
         } else {
             acts.push(act(&label, ActionKind::RerollRare, &[(&pid, 1.0)], &[NORMAL]).with_forced(mod_id));
@@ -31,7 +30,7 @@ pub fn essences(item_class: &str, item_level: i64, min_level: i64) -> (Vec<Actio
                 act(&format!("scour+{name} essence"), ActionKind::RerollRare, &[("scour", 1.0), (&pid, 1.0)], &[RARE]).with_forced(mod_id),
             );
         }
-        if let Some(cap) = essence["item_level_restriction"].as_i64().filter(|&cap| cap > 0 && cap < item_level) {
+        if let Some(cap) = essence.item_level_restriction.filter(|&cap| cap > 0 && cap < item_level) {
             for a in &mut acts[start..] {
                 a.profile = format!("essence-ilvl:{cap}");
             }
@@ -50,8 +49,12 @@ pub fn essence_profiles(pool: &[Mod], actions: &[Action]) -> Profiles {
         .iter()
         .filter_map(|a| {
             let cap = a.profile.strip_prefix("essence-ilvl:")?.parse::<i64>().ok()?;
-            let weights = pool.iter().filter(|m| mods[&m.id].required_level <= cap).map(|m| (m.id.clone(), m.weight)).collect();
-            Some((a.profile.clone(), weights))
+            let weights = pool
+                .iter()
+                .filter(|m| mods[&m.id].required_level <= cap)
+                .map(|m| (m.id.clone(), m.weight))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            Some((a.profile.clone(), weights.into()))
         })
         .collect()
 }

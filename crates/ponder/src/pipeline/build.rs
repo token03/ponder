@@ -31,7 +31,7 @@ pub struct GearOpts {
 
 impl Default for GearOpts {
     fn default() -> GearOpts {
-        GearOpts { settle: 0, item_level: None, max_targets: 4, exact: false, solve: true }
+        GearOpts { settle: 0, item_level: None, max_targets: 6, exact: false, solve: true }
     }
 }
 
@@ -58,7 +58,9 @@ pub fn estimate_item(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     let item = &m.item;
     if item.base.ends_with("Cluster Jewel") {
         let (cls, notables) = target_key(m);
-        let Some((size, tag)) = cls.split_once(" cluster: ") else { return Ok(None) };
+        let Some((size, tag)) = cls.split_once(" cluster: ") else {
+            return Ok(None);
+        };
         if notables.is_empty() {
             return Ok(None);
         }
@@ -78,7 +80,15 @@ fn title_case(s: &str) -> String {
 }
 
 /// A cluster jewel craft. With `solve: false` the problem is built but left for `solve_all`.
-pub fn estimate_cluster(cx: &Context, size: &str, enchant: &str, notables: &[String], table: &Prices, league: &str, opts: &ClusterOpts) -> Estimate {
+pub fn estimate_cluster(
+    cx: &Context,
+    size: &str,
+    enchant: &str,
+    notables: &[String],
+    table: &Prices,
+    league: &str,
+    opts: &ClusterOpts,
+) -> Estimate {
     let passives = opts.passives.filter(|p| *p != 0).unwrap_or_else(|| cluster::default_passives(size));
     let ench = match cluster::find_enchant(size, enchant) {
         Ok(e) => e,
@@ -169,8 +179,11 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     let mut bench_ids = gp.bench_ids.clone();
     bench_ids.sort();
     let mut est = Estimate::new("gear", grp.label.clone(), p.targets.iter().map(|t| t.name.clone()).collect());
+    if p.filler_need > 0 {
+        est.targets.push(format!("{} elemental resistance", p.filler_need));
+    }
     est.key = Key::Gear {
-        item_class: grp.item_class.clone(),
+        item_class: grp.label.clone(),
         signature: grp.signature.clone(),
         targets,
         fixed,
@@ -233,6 +246,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     est.problem = Some(gp.problem);
     if est.error.is_none() && opts.solve {
         solve_one(cx, &mut est, table);
+        super::recombs::add_recombs_in_league(cx, db, std::slice::from_mut(&mut est), table, league, None, None);
     }
     Ok(est)
 }
@@ -244,10 +258,10 @@ fn stat_min<'a>(cx: &Context, ids: impl Iterator<Item = &'a str>) -> Option<serd
 
 /// One (trade stat, minimum) per filler family, e.g. fire resistance at its T3 minimum.
 fn filler_stats(cx: &Context, filler: &std::collections::BTreeSet<String>) -> Vec<Stat> {
-    let mods = cx.mods_json();
+    let mods = cx.mods();
     let mut by_family: indexmap::IndexMap<&str, Vec<&str>> = indexmap::IndexMap::new();
     for m in filler {
-        by_family.entry(mods[m.as_str()]["type"].as_str().unwrap_or("")).or_default().push(m);
+        by_family.entry(mods[m.as_str()].type_.as_str()).or_default().push(m);
     }
     by_family.values().filter_map(|ids| Some((cx.stat_id(ids[0], "explicit")?, cx.stat_min(ids)))).collect()
 }
@@ -259,17 +273,21 @@ fn filler_stats(cx: &Context, filler: &std::collections::BTreeSet<String>) -> Ve
 /// costed as self-made (reroll, then a Fracturing Orb: `craft::self_fracture`), which also
 /// covers essence-only mods no bought base has. The solver's numbers come from `solve_all`.
 pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Option<&Prices>, filler: bool) {
-    let Some(p) = est.problem.as_ref() else { return };
+    let Some(p) = est.problem.as_ref() else {
+        return;
+    };
     if est.error.is_some() || !est.can_fracture || !p.fixed.is_empty() || !est.fractures.is_empty() || p.targets.len() + p.filler_need < 2 {
         return;
     }
     let pool: HashMap<&str, &craft::Mod> = p.pool.iter().map(|m| (m.id.as_str(), m)).collect();
-    let mods = cx.mods_json();
+    let mods = cx.mods();
     let bench_cost = est.bench_cost();
+    let self_made = table.map(|table| cx.plans.self_fractures(p, table, &cx.settings));
     let mut made_fractures: Vec<Fracture> = Vec::new();
     let families: &[String] = if filler { &est.filler_families } else { &[] };
     for family in families {
-        let ids: Vec<&str> = p.filler.iter().filter(|m| mods[m.as_str()]["type"] == family.as_str() && pool.contains_key(m.as_str())).map(String::as_str).collect();
+        let ids: Vec<&str> =
+            p.filler.iter().filter(|m| mods[m.as_str()].type_ == *family && pool.contains_key(m.as_str())).map(String::as_str).collect();
         if ids.is_empty() {
             continue;
         }
@@ -285,7 +303,8 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
         let mut f = Fracture::new(format!("{} (filler)", mod_.label), mod_.id.clone(), problem.compile());
         f.bench_cost = bench_cost;
         if est.kind == "gear" {
-            f.donor_query = super::donors::donor_query(cx, &est.base, &[ids.iter().map(|id| (*id).to_string()).collect()], Some(est.item_level), 1, 6);
+            f.donor_query =
+                super::donors::donor_query(cx, &est.base, &[ids.iter().map(|id| (*id).to_string()).collect()], Some(est.item_level), 1, 6);
             f.donor_url = f.donor_query.as_ref().map(|q| trade::search_url(league, q));
         }
         let mut frac: Vec<Stat> = cx.stat_id(&mod_.id, "fractured").map(|sid| (sid, cx.stat_min(&ids))).into_iter().collect();
@@ -302,7 +321,7 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
         made_fractures.push(f);
     }
     for (i, t) in p.targets.iter().enumerate() {
-        let made = table.and_then(|table| craft::self_fracture(p, i, table, &cx.settings));
+        let made = self_made.as_ref().and_then(|made| made[i].clone());
         // In pool order, so ties (tiers of equal weight) go to the same mod every run; Python's set order made them random.
         let mut candidates: Vec<&craft::Mod> = p.pool.iter().filter(|m| t.good.contains(&m.id)).collect();
         if candidates.is_empty() && made.is_some() {
@@ -310,7 +329,9 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
             let all = p.mods();
             candidates = t.good.iter().filter_map(|m| all.get(m)).collect();
         }
-        let Some(&first) = candidates.first() else { continue };
+        let Some(&first) = candidates.first() else {
+            continue;
+        };
         let mod_ = candidates[1..].iter().fold(first, |best, m| if m.weight > best.weight { m } else { best }); // the commonest acceptable tier
         let mut problem = p.to_spec();
         problem.targets.remove(i);
@@ -319,7 +340,9 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
         let mut f = Fracture::new(t.name.clone(), mod_.id.clone(), problem.compile());
         f.bench_cost = bench_cost;
         f.made = made;
-        f.donor_query = (est.kind == "gear").then(|| super::donors::donor_query(cx, &est.base, std::slice::from_ref(&t.good), Some(est.item_level), 1, 6)).flatten();
+        f.donor_query = (est.kind == "gear")
+            .then(|| super::donors::donor_query(cx, &est.base, std::slice::from_ref(&t.good), Some(est.item_level), 1, 6))
+            .flatten();
         f.donor_url = f.donor_query.as_ref().map(|q| trade::search_url(league, q));
         if est.kind == "cluster" {
             if let Search::Cluster { size, enchant, passives } = &est.search {
@@ -333,7 +356,8 @@ pub fn add_fractures(cx: &Context, est: &mut Estimate, league: &str, table: Opti
             ids.extend(est.fixed_ids.iter().map(String::as_str));
             for m in ids {
                 if let Some(sid) = cx.stat_id(m, "fractured") {
-                    let min = if m == mod_.id { cx.stat_min(&t.good.iter().map(|g| g.as_str()).collect::<Vec<_>>()) } else { cx.stat_min(&[m]) };
+                    let min =
+                        if m == mod_.id { cx.stat_min(&t.good.iter().map(|g| g.as_str()).collect::<Vec<_>>()) } else { cx.stat_min(&[m]) };
                     frac.push((sid, min));
                 }
             }

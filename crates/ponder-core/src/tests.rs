@@ -80,7 +80,8 @@ fn toy_with(extra: Vec<Action>, profiles: &[(&str, Vec<(String, f64)>)], fixed: 
     let mut p = ProblemSpec::new(pool.clone(), targets.iter().map(|t| target(&pool, t)).collect(), targets.len(), actions, Kind::Jewel);
     p.fixed = pool.iter().filter(|m| fixed.contains(&m.id.as_str())).cloned().collect();
     for (name, w) in profiles {
-        p.profiles.insert(name.to_string(), w.iter().cloned().collect());
+        std::sync::Arc::make_mut(&mut p.profiles)
+            .insert(name.to_string(), w.iter().cloned().collect::<std::collections::BTreeMap<_, _>>().into());
     }
     p.compile()
 }
@@ -149,7 +150,7 @@ fn harvest_and_fossil_match_simulation() {
 fn policy_beats_alt_spam() {
     let p = toy();
     let plan = solved(&p, &prices());
-    let policy = plan.policy.keys().map(|s| (*s, ["transmute", "alt", "scour+transmute"][s.rarity as usize].to_string())).collect();
+    let policy = plan.policy.keys().map(|s| (*s, ["transmute", "alt", "scour+transmute"][s.rarity as usize].into())).collect();
     let alt_only = Plan { policy, ..Plan::default() };
     assert!(plan.cost < simulated(&p, &alt_only, &prices(), 2000, 0));
 }
@@ -158,7 +159,7 @@ fn policy_beats_alt_spam() {
 fn magic_with_one_target_augments() {
     let p = toy();
     let plan = solved(&p, &prices());
-    assert_eq!(plan.policy[&st(MAGIC, &[GOOD, MISSING], &[])], "aug");
+    assert_eq!(plan.policy[&st(MAGIC, &[GOOD, MISSING], &[])].as_ref(), "aug");
 }
 
 #[test]
@@ -208,7 +209,7 @@ fn force(p: &Problem, plan: &mut Plan, name: &str, when: impl Fn(&State) -> bool
     let a = p.actions.iter().find(|a| a.name == name).unwrap().clone();
     for s in plan.order.clone() {
         if when(&s) && !p.outcomes(&s, &a).is_empty() {
-            plan.policy.insert(s, name.to_string());
+            plan.policy.insert(s, name.into());
         }
     }
 }
@@ -232,7 +233,7 @@ fn a_metamod_takes_a_slot_and_must_come_off() {
     let mut plan = solved(&p, &prices);
     force(&p, &mut plan, "lock prefixes", |s| s.status[1] == MISSING && s.junk[3] != 0 && s.meta == 0);
     force(&p, &mut plan, "scour", |s| s.meta == META_LOCK_PREFIXES && s.junk[3] != 0);
-    assert!(plan.policy.values().any(|a| a == "scour"));
+    assert!(plan.policy.values().any(|a| a.as_ref() == "scour"));
     let exact = evaluate(&p, &plan.policy, &prices, &FREE).unwrap();
     assert!(exact >= plan.cost * (1.0 - 1e-9)); // nothing beats the solver's own plan
     approx(simulated(&p, &plan, &prices, 4000, 4), exact, 0.08);
@@ -537,7 +538,7 @@ fn harvest_removal_does_not_protect_attack_modifiers() {
     let augment = Action::new("harvest cold", ActionKind::Augment, &[("chaos", 1.0)], &[RARE]).with_profile("cold");
     let mut p = toy_with(vec![augment.clone()], &[("cold", vec![("B".into(), 100.0)])], &[], &["A", "B"]);
     let mut spec = p.to_spec();
-    spec.pool[0].tags.push("attack".into());
+    std::sync::Arc::make_mut(&mut spec.pool)[0].tags.push("attack".into());
     p = spec.compile();
     let s = st(RARE, &[GOOD, MISSING], &[]).with_meta(META_NO_ATTACK);
     let out = p.outcomes(&s, &augment);
@@ -551,7 +552,7 @@ fn harvest_first_modifier_respects_cannot_roll() {
     let harvest = Action::new("harvest fire", ActionKind::Reforge, &[("chaos", 1.0)], &[RARE]).with_first_profile("fire");
     let mut p = toy_with(vec![harvest.clone()], &[("fire", vec![("A".into(), 100.0)])], &[], &["A", "B"]);
     let mut spec = p.to_spec();
-    spec.pool[0].tags.push("attack".into());
+    std::sync::Arc::make_mut(&mut spec.pool)[0].tags.push("attack".into());
     p = spec.compile();
     assert!(!p.outcomes(&st(RARE, &[], &[]), &harvest).is_empty());
     assert!(p.outcomes(&st(RARE, &[], &[]).with_meta(META_NO_ATTACK), &harvest).is_empty());
@@ -577,7 +578,7 @@ fn bench_conflicts_must_be_removed_before_finishing() {
     p = spec.compile();
     let plan = solved(&p, &prices);
     assert!(plan.cost > 0.0);
-    assert_eq!(plan.policy[&blocked], "annul");
+    assert_eq!(plan.policy[&blocked].as_ref(), "annul");
 }
 
 #[test]
@@ -609,12 +610,12 @@ fn solving_with_new_prices_preserves_the_catalogue_and_reuses_rolls() {
     let roll = p.roll(&p.actions[0]).unwrap();
     let second = solve(&p, &[("first".into(), 10.0), ("second".into(), 1.0)].into(), &FREE).unwrap();
     assert_eq!(serde_json::to_vec(&p).unwrap(), original);
-    assert!(first.policy.values().all(|a| a == "first"));
-    assert!(second.policy.values().all(|a| a == "second"));
+    assert!(first.policy.values().all(|a| a.as_ref() == "first"));
+    assert!(second.policy.values().all(|a| a.as_ref() == "second"));
     approx(first.cost, second.cost, 1e-10);
     assert!(std::sync::Arc::ptr_eq(&roll, &p.clone().roll(&p.actions[1]).unwrap()));
     let mut changed = p.to_spec();
-    changed.pool[0].weight *= 10.0;
+    std::sync::Arc::make_mut(&mut changed.pool)[0].weight *= 10.0;
     let changed = changed.compile();
     let cost = solve(&changed, &[("first".into(), 1.0)].into(), &FREE).unwrap().cost;
     assert!(cost < first.cost);
@@ -622,10 +623,11 @@ fn solving_with_new_prices_preserves_the_catalogue_and_reuses_rolls() {
 }
 
 #[test]
-fn action_timing_is_independent_of_display_names_and_legacy_json_still_loads() {
+fn action_timing_is_explicit_and_independent_of_display_names() {
     let raw =
         serde_json::json!({"name":"any label", "kind":"reroll_rare", "cost":[["scour",1.0],["dense-fossil",1.0]], "from_rarity":[RARE]});
-    let mut action: Action = serde_json::from_value(raw.clone()).unwrap();
+    assert!(serde_json::from_value::<Action>(raw.clone()).is_err());
+    let mut action = Action::new("any label", ActionKind::RerollRare, &[("scour", 1.0), ("dense-fossil", 1.0)], &[RARE]);
     assert_eq!(action.seconds, 5.0);
     action.name = "harvest something else".into();
     assert_eq!(action.seconds, 5.0);
@@ -634,4 +636,66 @@ fn action_timing_is_independent_of_display_names_and_legacy_json_still_loads() {
     let mut unknown = raw;
     unknown["kind"] = "typo".into();
     assert!(serde_json::from_value::<Action>(unknown).is_err());
+}
+
+#[test]
+fn fracture_rolls_are_shared_across_targets_and_ignore_unrollable_veil_groups() {
+    let base = toy();
+    let mut table = prices();
+    table.insert("fracturing-orb".into(), 100.0);
+    let expected: Vec<_> = (0..base.targets.len()).map(|i| self_fracture(&base, i, &table, &FREE)).collect();
+    let mut spec = base.to_spec();
+    let extra = Mod::new("unrolled veil", Side::Prefix, 1.0, &["unused", "other"], false, "unrolled", &[]);
+    spec.unveils.push(extra.clone());
+    spec.extra_mods.insert(extra.id.clone(), extra);
+    let problem = spec.compile();
+    for (i, expected) in expected.into_iter().enumerate() {
+        let actual = self_fracture(&problem, i, &table, &FREE);
+        assert_eq!(actual, expected);
+        let action = problem.actions.iter().find(|a| problem.roll_key(a).is_some()).unwrap();
+        let first = problem.roll(action).unwrap();
+        let second = problem.roll(action).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+}
+
+#[test]
+fn solve_caches_share_exact_rolls_but_release_state_specific_transitions() {
+    let problem = toy();
+    let action = problem.actions.iter().find(|a| problem.roll_key(a).is_some()).unwrap().clone();
+    let original = problem.roll(&action).unwrap();
+    let locked = State::new(RARE, &[GOOD], &[]).with_meta(META_LOCK_PREFIXES);
+    let reforge = Action::new("chaos", ActionKind::Reforge, &[], &[RARE]);
+    let transient = problem.outcomes(&locked, &reforge);
+    let weak = std::sync::Arc::downgrade(&transient);
+    let fresh = problem.fresh_transition_cache();
+    assert!(std::ptr::eq(problem.mods(), fresh.mods()));
+    assert_eq!(problem.fingerprint(), fresh.fingerprint());
+    let rebuilt = fresh.roll(&action).unwrap();
+    assert_eq!(&original[..], &rebuilt[..]);
+    assert!(std::sync::Arc::ptr_eq(&original, &rebuilt));
+    let rebuilt_transient = fresh.outcomes(&locked, &reforge);
+    assert_eq!(&transient[..], &rebuilt_transient[..]);
+    assert!(!std::sync::Arc::ptr_eq(&transient, &rebuilt_transient));
+    drop(transient);
+    drop(problem);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn unsuccessful_exact_refinement_does_not_request_an_identical_graph() {
+    let action = Action::new("alch", ActionKind::RerollRare, &[], &[NORMAL]);
+    for (classes, kind) in [(256, Kind::Jewel), (60, Kind::Gear)] {
+        let pool = (0..classes)
+            .map(|i| {
+                let side = if i % 2 == 0 { Side::Prefix } else { Side::Suffix };
+                Mod::new(&format!("p{i}"), side, i as f64 + 1.0, &[&format!("p{i}")], false, "", &[])
+            })
+            .collect();
+        let problem = ProblemSpec::new(pool, vec![], 0, vec![action.clone()], kind).compile();
+        let before = problem.outcomes(&problem.start(), &action);
+        assert!(!problem.refine(&action));
+        assert_eq!(before, problem.outcomes(&problem.start(), &action));
+        assert!(!problem.refine(&action));
+    }
 }

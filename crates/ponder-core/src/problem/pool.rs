@@ -1,8 +1,8 @@
 use super::*;
 
 /// Most other mods one slot can hold (a side's affix limit), and on the whole item.
-pub(super) const SLOT_MAX: usize = 3;
-pub(super) const ITEM_MAX: usize = 2 * SLOT_MAX;
+pub(super) const SLOT_MAX: usize = 6;
+pub(super) const ITEM_MAX: usize = 6;
 
 /// One junk slot's weight under a profile.
 ///
@@ -65,9 +65,34 @@ pub(super) struct Compiled {
 }
 
 /// Expected weight `k` groups drawn in proportion to weight (without replacement) take from `classes` (weight, count).
-fn expected_blocked(classes: &mut [(f64, usize)], k: usize) -> f64 {
+fn expected_blocked_small(classes: &mut [(f64, usize)], k: usize) -> f64 {
     if k == 0 {
         return 0.0;
+    }
+    let total: f64 = classes.iter().map(|&(w, n)| w * n as f64).sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    let mut result = 0.0;
+    for i in 0..classes.len() {
+        let (w, n) = classes[i];
+        if n == 0 {
+            continue;
+        }
+        classes[i].1 -= 1;
+        result += w * n as f64 / total * (w + expected_blocked_small(classes, k - 1));
+        classes[i].1 += 1;
+    }
+    result
+}
+
+fn expected_blocked(classes: &mut [(f64, usize)], k: usize, memo: &mut FxHashMap<(usize, Vec<usize>), f64>) -> f64 {
+    if k == 0 {
+        return 0.0;
+    }
+    let key = (k, classes.iter().map(|c| c.1).collect());
+    if let Some(&hit) = memo.get(&key) {
+        return hit;
     }
     let total: f64 = classes.iter().map(|&(w, n)| w * n as f64).sum();
     if total <= 0.0 {
@@ -80,15 +105,16 @@ fn expected_blocked(classes: &mut [(f64, usize)], k: usize) -> f64 {
             continue;
         }
         classes[i].1 -= 1;
-        e += w * n as f64 / total * (w + expected_blocked(classes, k - 1));
+        e += w * n as f64 / total * (w + expected_blocked(classes, k - 1, memo));
         classes[i].1 += 1;
     }
+    memo.insert(key, e);
     e
 }
 
 impl SlotW {
     /// `pos`: the weights the slot's groups roll at; `all`: every group that may be on the item, at those weights.
-    fn new(pos: &[f64], all: &[f64], phantoms: bool) -> SlotW {
+    fn new(pos: &[f64], all: &[f64], phantoms: bool, limit: usize) -> SlotW {
         let mut classes: Vec<(f64, usize)> = Vec::new();
         for &w in pos.iter().filter(|w| **w > 0.0) {
             match classes.iter_mut().find(|c| c.0 == w) {
@@ -103,8 +129,10 @@ impl SlotW {
         sorted.sort_by(f64::total_cmp);
         let rolls = pos.iter().filter(|w| **w > 0.0).count();
         let mut out = SlotW { total: pos.iter().filter(|w| **w > 0.0).sum(), rolls, may: sorted.len(), ..SlotW::default() };
-        for k in 0..=SLOT_MAX {
-            out.blocked[k] = expected_blocked(&mut classes, k);
+        let mut memo = FxHashMap::default();
+        for k in 0..limit {
+            out.blocked[k] =
+                if limit <= 3 { expected_blocked_small(&mut classes, k) } else { expected_blocked(&mut classes, k, &mut memo) };
         }
         for k in 0..=ITEM_MAX {
             out.lo[k] = sorted.iter().take(k).sum();
@@ -116,7 +144,10 @@ impl SlotW {
 
 impl Problem {
     pub(super) fn compile_pool(&self) -> Compiled {
-        assert!(self.targets.len() + self.bench.len() <= MAX_TARGETS, "at most {MAX_TARGETS} targets and bench groups");
+        assert!(
+            self.targets.len() + self.bench.len() + self.blockers.len() <= MAX_TARGETS,
+            "at most {MAX_TARGETS} tracked modifier groups"
+        );
         let mut mods = HashMap::new();
         for (k, m) in &self.extra_mods {
             mods.insert(k.clone(), m.clone());
@@ -176,8 +207,8 @@ impl Problem {
         let mut c = Compiled {
             mods,
             base,
-            t_side: self.targets.iter().map(|t| t.side).chain(self.bench.iter().map(|m| m.side)).collect(),
-            t_notable: self.targets.iter().map(|t| t.notable).chain(self.bench.iter().map(|_| false)).collect(),
+            t_side: self.targets.iter().map(|t| t.side).chain(self.bench.iter().chain(&self.blockers).map(|m| m.side)).collect(),
+            t_notable: self.targets.iter().map(|t| t.notable).chain(self.bench.iter().chain(&self.blockers).map(|_| false)).collect(),
             profile_names,
             keys,
             linked,
@@ -197,7 +228,7 @@ impl Problem {
                 .targets
                 .iter()
                 .map(|t| 2 * t.good.iter().filter(|g| has(g)).count() > t.good.len())
-                .chain(self.bench.iter().map(|m| m.tags.iter().any(|x| x == tag)))
+                .chain(self.bench.iter().chain(&self.blockers).map(|m| m.tags.iter().any(|x| x == tag)))
                 .collect();
             // What an annul may find on a target: one of its good mods, or one sharing its groups.
             c.t_tag_range[k] = self
@@ -220,7 +251,7 @@ impl Problem {
                     }
                     range
                 })
-                .chain(self.bench.iter().map(|m| {
+                .chain(self.bench.iter().chain(&self.blockers).map(|m| {
                     let tagged = m.tags.iter().any(|x| x == tag);
                     [(tagged, !tagged); 2]
                 }))
@@ -269,7 +300,12 @@ impl Problem {
         for (slot, j) in junk.iter_mut().enumerate() {
             // Groups `also` keeps out can't be rolled, but one of them may be on the item (the forced mod).
             let all: Vec<f64> = c.keys.iter().zip(&kw).filter(|(k, _)| k.slots[slot]).map(|(_, w)| w[slot]).collect();
-            *j = SlotW::new(&all, &all, c.phantoms);
+            *j = SlotW::new(
+                &all,
+                &all,
+                c.phantoms,
+                self.side_limit(RARE, if Side::Prefix.slots().contains(&slot) { Side::Prefix } else { Side::Suffix }),
+            );
             for other in (0..JUNK_SLOTS).filter(|&o| c.linked[slot][o]) {
                 cross[slot][other] = kw.iter().map(|w| w[slot] * w[other]).sum::<f64>() / j.total.max(f64::MIN_POSITIVE);
             }
@@ -281,7 +317,7 @@ impl Problem {
         if profile == "base" {
             let mut out: Vec<(&str, f64)> = Vec::new();
             let mut at: HashMap<&str, usize> = HashMap::new();
-            for m in &self.pool {
+            for m in self.pool.iter() {
                 match at.get(m.id.as_str()) {
                     Some(&i) => out[i].1 = m.weight,
                     None => {

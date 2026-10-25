@@ -10,11 +10,11 @@ use ponder_game::pob;
 use ponder_net::ladder::Lite;
 use rayon::prelude::*;
 
-use super::build::{GearOpts, build_gear, add_fractures, estimate_cluster, estimate_item, ClusterOpts};
+use super::build::{ClusterOpts, GearOpts, add_fractures, build_gear, estimate_cluster, estimate_item};
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
-use super::solving::{slots_of, solve_slots};
 use super::pivots::add_pivots;
+use super::solving::{load_estimates, solve_estimates};
 use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
 use crate::demand::{self, Archetype};
 use crate::mine::{self, Candidate};
@@ -31,14 +31,23 @@ pub struct RunOpts {
     pub trade_lookup: bool,
     /// caps trade searches (cached answers are free)
     pub trade_budget: usize,
-    pub recombs: bool,
     /// threads for solving; `Some(1)` solves inline
     pub workers: Option<usize>,
 }
 
 impl Default for RunOpts {
     fn default() -> RunOpts {
-        RunOpts { settle: 0, max_targets: 4, min_builds: 2, top: 30, fractures: false, exact: false, trade_lookup: false, trade_budget: 40, recombs: false, workers: None }
+        RunOpts {
+            settle: 0,
+            max_targets: 6,
+            min_builds: 2,
+            top: 30,
+            fractures: false,
+            exact: false,
+            trade_lookup: false,
+            trade_budget: 40,
+            workers: None,
+        }
     }
 }
 
@@ -53,13 +62,22 @@ pub struct LadderOpts {
     pub group: Option<String>,
     pub trade_lookup: bool,
     pub trade_budget: usize,
-    pub recombs: bool,
     pub workers: Option<usize>,
 }
 
 impl Default for LadderOpts {
     fn default() -> LadderOpts {
-        LadderOpts { gear_top: 80, per_group: 3, niche: 40, cluster_top: 80, min_characters: 5, group: None, trade_lookup: false, trade_budget: 40, recombs: true, workers: None }
+        LadderOpts {
+            gear_top: 80,
+            per_group: 3,
+            niche: 40,
+            cluster_top: 80,
+            min_characters: 5,
+            group: None,
+            trade_lookup: false,
+            trade_budget: 40,
+            workers: None,
+        }
     }
 }
 
@@ -112,7 +130,9 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
                 }
             };
             matched.push((source.clone(), m));
-            let Some(est) = est.filter(|e| !e.targets.is_empty()) else { continue };
+            let Some(est) = est.filter(|e| !e.targets.is_empty()) else {
+                continue;
+            };
             let i = *by_key.entry(est.key.clone()).or_insert_with(|| {
                 estimates.push(est);
                 estimates.len() - 1
@@ -143,15 +163,10 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
             add_fractures(cx, e, &league, Some(&table), true);
         }
     }
-    {
-        let (n, m) = (estimates.len(), extra.len());
-        let mut slots = slots_of(&mut estimates, &(0..n).collect::<Vec<_>>());
-        slots.extend(slots_of(&mut extra, &(0..m).collect::<Vec<_>>()));
-        solve_slots(cx, slots, &table, opts.workers, progress);
-    }
-    if opts.recombs {
-        super::recombs::add_recombs_in_league(cx, db, &mut estimates, &table, &league, opts.workers, progress);
-    }
+    load_estimates(cx, &mut estimates, &table);
+    super::recombs::add_recombs_in_league(cx, db, &mut estimates, &table, &league, opts.workers, progress);
+    solve_estimates(cx, &mut estimates, &table, opts.workers, progress);
+    solve_estimates(cx, &mut extra, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..estimates.len()).collect();
         order.sort_by(|&a, &b| cmp_priority(&estimates[a], &estimates[b]));
@@ -170,7 +185,14 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
 }
 
 /// A cluster combination's estimate: the build's own when it has one, else a new one (kept in `extra`).
-fn shared_estimate(cx: &Context, c: &Candidate, estimates: &[Estimate], extra: &mut Vec<Estimate>, table: &ponder_core::Prices, league: &str) -> Option<Slot> {
+fn shared_estimate(
+    cx: &Context,
+    c: &Candidate,
+    estimates: &[Estimate],
+    extra: &mut Vec<Estimate>,
+    table: &ponder_core::Prices,
+    league: &str,
+) -> Option<Slot> {
     let (size, tag) = c.item_class.split_once(" cluster: ")?;
     let wanted: HashSet<&String> = c.families.iter().collect();
     let own = estimates.iter().position(|e| e.key.is_cluster(size, tag) && e.targets.iter().collect::<HashSet<_>>() == wanted);
@@ -192,7 +214,13 @@ fn head(s: &str, n: usize) -> String {
 /// resistances as filler; clusters by enchant, usual passive count and notables. Trade lookups (in
 /// demand order) give the selling price and how many are listed, which `Estimate::hole` turns
 /// into a market-hole score.
-pub fn ladder(cx: &Context, db: &ModDB, characters: Option<Vec<Lite>>, opts: &LadderOpts, progress: Option<Progress>) -> Result<LadderReport> {
+pub fn ladder(
+    cx: &Context,
+    db: &ModDB,
+    characters: Option<Vec<Lite>>,
+    opts: &LadderOpts,
+    progress: Option<Progress>,
+) -> Result<LadderReport> {
     let (table, prices_source) = cx.prices.load()?;
     let league = current_league(cx);
     let characters = match characters {
@@ -206,8 +234,10 @@ pub fn ladder(cx: &Context, db: &ModDB, characters: Option<Vec<Lite>>, opts: &La
     let worn = demand::wear(db, &characters, None);
     let clusters = demand::wear_clusters(&characters, None);
     let group = opts.group.as_ref().map(|g| g.to_lowercase());
-    let found: Vec<Archetype> =
-        demand::archetypes(&worn, opts.min_characters, 4, 2, 0.7).into_iter().filter(|a| group.as_ref().is_none_or(|g| a.group.to_lowercase().contains(g.as_str()))).collect();
+    let found: Vec<Archetype> = demand::archetypes(&worn, opts.min_characters, 4, 2, 0.7)
+        .into_iter()
+        .filter(|a| group.as_ref().is_none_or(|g| a.group.to_lowercase().contains(g.as_str())))
+        .collect();
     let found_cl: Vec<demand::ClusterArchetype> = demand::cluster_archetypes(&clusters, opts.min_characters, 0.8)
         .into_iter()
         .filter(|a| group.as_ref().is_none_or(|g| a.title().to_lowercase().contains(g.as_str())))
@@ -249,11 +279,14 @@ pub fn ladder(cx: &Context, db: &ModDB, characters: Option<Vec<Lite>>, opts: &La
     }
     picked.extend(niches);
     say(progress, &format!("building {} gear crafts", picked.len()));
-    let built: Vec<Option<Estimate>> = in_pool(opts.workers, || picked.par_iter().map(|&i| build_gear(cx, db, &found[i], &table, &league)).collect());
+    let built: Vec<Option<Estimate>> =
+        in_pool(opts.workers, || picked.par_iter().map(|&i| build_gear(cx, db, &found[i], &table, &league)).collect());
     let mut estimates: indexmap::IndexMap<Key, Estimate> = indexmap::IndexMap::new();
     for (&i, est) in picked.iter().zip(built) {
         let a = &found[i];
-        let Some(mut est) = est.filter(|e| e.error.is_none() && !estimates.contains_key(&e.key)) else { continue };
+        let Some(mut est) = est.filter(|e| e.error.is_none() && !estimates.contains_key(&e.key)) else {
+            continue;
+        };
         est.demand = a.characters;
         est.skills = a.skills.most_common().into_iter().take(3).map(|(s, _)| s.clone()).collect();
         est.used_base = String::new();
@@ -276,11 +309,10 @@ pub fn ladder(cx: &Context, db: &ModDB, characters: Option<Vec<Lite>>, opts: &La
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
-    let all: Vec<usize> = (0..out.len()).collect();
-    solve_slots(cx, slots_of(&mut out, &all), &table, opts.workers, progress);
-    if opts.recombs {
-        super::recombs::add_recombs_in_league(cx, db, &mut out, &table, &league, opts.workers, progress);
-    }
+    load_estimates(cx, &mut out, &table);
+    super::recombs::add_recombs_in_league(cx, db, &mut out, &table, &league, opts.workers, progress);
+    say(progress, &format!("solving {} crafts and fracture options", out.len()));
+    solve_estimates(cx, &mut out, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..out.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(out[i].demand));
@@ -320,7 +352,8 @@ pub fn expand_sources(sources: &[String]) -> Vec<String> {
             && path.extension().is_some_and(|e| e == "txt")
             && let Ok(text) = std::fs::read_to_string(path)
         {
-            let links: Vec<String> = text.lines().map(|l| l.split('#').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect();
+            let links: Vec<String> =
+                text.lines().map(|l| l.split('#').next().unwrap_or("").trim().to_string()).filter(|l| !l.is_empty()).collect();
             if !links.is_empty() && links.iter().all(|l| l.starts_with("http")) {
                 out.extend(links);
                 continue;

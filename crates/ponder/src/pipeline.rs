@@ -20,7 +20,9 @@ mod donors;
 mod finish;
 mod market;
 mod pivots;
+mod protected;
 mod recombs;
+mod resale;
 mod run;
 mod solving;
 mod types;
@@ -31,12 +33,17 @@ pub use context::{Context, Progress, settings_from_env};
 pub use donors::{donor_mod_range, donor_query};
 pub use finish::{Finish, find_starts, finish, finishes};
 pub use market::{Lookup, lookup, lookup_market, price_fractures, price_on_trade};
-pub use pivots::{PIVOT_CLICKS, PIVOT_MIN_CHAOS, PIVOT_MIN_PER_CRAFT, PIVOT_SHARE, PIVOTS_PER_STEP, Pivot, add_pivots, pivots_of, short_name};
+pub use pivots::{
+    PIVOT_CLICKS, PIVOT_MIN_CHAOS, PIVOT_MIN_PER_CRAFT, PIVOT_SHARE, PIVOTS_PER_STEP, Pivot, add_pivots, pivots_of, short_name,
+};
+pub use protected::{ProtectedRecipe, add_protected_routes};
 pub use recombs::{add_recombs, add_recombs_in_league};
+pub use resale::{ResaleQuote, SaleThreshold};
 pub use run::{LadderOpts, RunOpts, build_name, current_league, expand_sources, ladder, load_build, run};
-pub use solving::{SolveSlot, Solvable, slots_of, solve_all, solve_one, solve_slots};
+pub use solving::{Solvable, SolveSlot, slots_of, solve_all, solve_estimates, solve_one, solve_slots};
 pub use types::{
-    BuildInfo, CraftRoute, Estimate, Fracture, JEWELLERY, Key, LadderReport, ProductRef, RecombInfo, Report, Search, Shared, Slot, cmp_ladder, cmp_priority, priority,
+    BuildInfo, CraftRoute, Estimate, Fracture, JEWELLERY, Key, LadderReport, ProductRef, RecombInfo, Report, Search, Shared, Slot,
+    cmp_ladder, cmp_priority, priority,
 };
 
 pub use crate::item::listing_to_item;

@@ -35,8 +35,22 @@ pub fn describe_parts(problem: &Problem, s: &State) -> (&'static str, Vec<(Strin
     }
     for (slot, label) in JUNK_LABELS.iter().enumerate() {
         if s.junk[slot] != 0 {
-            parts.push((format!("{} {label}", s.junk[slot]), if slot >= 4 { "filler" } else { "other" }));
+            let named = slot >= 4 && !problem.filler_label.is_empty();
+            let label = if named { problem.filler_label.as_str() } else { label };
+            parts.push((
+                format!("{} {label}", s.junk[slot]),
+                if named {
+                    "good"
+                } else if slot >= 4 {
+                    "filler"
+                } else {
+                    "other"
+                },
+            ));
         }
+    }
+    if s.unveil != 0 {
+        parts.push(("choose an unveiled modifier".into(), "other"));
     }
     if s.meta != 0 {
         parts.push((format!("\"{}\"", META_NAMES[s.meta as usize]), "other"));
@@ -51,7 +65,7 @@ pub fn recipe_states(plan: &Plan, min_share: f64) -> Vec<(State, String, f64)> {
     let mut rows: Vec<_> = ordered_visits(plan)
         .into_iter()
         .filter(|(_, n)| n / total >= min_share)
-        .map(|(s, n)| (s, plan.policy[&s].clone(), n / total))
+        .map(|(s, n)| (s, plan.policy[&s].to_string(), n / total))
         .collect();
     rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     rows
@@ -108,6 +122,8 @@ type Key = (u8, u8);
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Dest {
     Done,
+    Restart,
+    Sell,
     At(Key),
 }
 
@@ -148,15 +164,25 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
         groups[g].push(st);
     }
     let mut reached = vec![0.0; keys.len()];
-    let origin = problem.origin();
+    let initial = if plan.initial.is_empty() { vec![(1.0, problem.origin())] } else { plan.initial.clone() };
+    let origin = initial[0].1;
     let first = good_key(problem, &origin);
-    if let Some(&g) = gi.get(&first) {
-        reached[g] += 1.0;
+    for &(probability, state) in &initial {
+        if !problem.done(&state)
+            && let Some(&g) = gi.get(&good_key(problem, &state))
+        {
+            reached[g] += probability;
+        }
+    }
+    for &(probability, state) in &plan.recovery {
+        if let Some(&g) = gi.get(&good_key(problem, &state)) {
+            reached[g] += plan.restarts * probability;
+        }
     }
     let mut flow: Vec<Vec<(Dest, f64)>> = vec![Vec::new(); keys.len()]; // group -> next group (or done) -> expected moves
     let mut via: HashMap<(usize, Dest), Vec<(&str, f64)>> = HashMap::new(); // (group, next) -> action -> expected moves
     // Outcomes folded into where they lead; a reroll's list is the same from every state, so it is folded once.
-    let used: FxHashSet<&str> = open_visits.iter().map(|(s, _)| plan.policy[s].as_str()).collect();
+    let used: FxHashSet<&str> = open_visits.iter().map(|(s, _)| plan.policy[s].as_ref()).collect();
     let prepared: FxHashMap<&str, _> = problem
         .actions
         .iter()
@@ -169,7 +195,16 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
     let fold = |out: &[Outcome]| {
         let mut dests = Vec::new();
         for &(p, nxt) in out {
-            bump(&mut dests, if problem.done(&nxt) { Dest::Done } else { Dest::At(good_key(problem, &nxt)) }, p);
+            let dest = if problem.done(&nxt) {
+                Dest::Done
+            } else if plan.sell_states.contains_key(&nxt) {
+                Dest::Sell
+            } else if plan.restarts > 0.0 && !plan.policy.contains_key(&nxt) {
+                Dest::Restart
+            } else {
+                Dest::At(good_key(problem, &nxt))
+            };
+            bump(&mut dests, dest, p);
         }
         dests
     };
@@ -178,7 +213,7 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
     let mut fresh;
     for &(st, v) in &open_visits {
         let g = gi[&good_key(problem, &st)];
-        let a = plan.policy[&st].as_str();
+        let a = plan.policy[&st].as_ref();
         let dests: &[(Dest, f64)] = match problem.outcomes_into(&st, &prepared[a], &mut scratch, &mut bounds) {
             TransitionResult::Empty => &[],
             TransitionResult::Buffered => {
@@ -215,7 +250,7 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
         let (rarity, have) = keys[g];
         let mut acts: Vec<(&str, f64, State, f64)> = Vec::new(); // action, visits, busiest state, its visits
         for &st in &groups[g] {
-            let a = plan.policy[&st].as_str();
+            let a = plan.policy[&st].as_ref();
             let i = acts.iter().position(|x| x.0 == a).unwrap_or_else(|| {
                 acts.push((a, 0.0, st, 0.0));
                 acts.len() - 1
@@ -250,7 +285,7 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
                         got.push(rest.join(", "));
                     }
                     if problem.filler_need > 0 {
-                        got.push("filler".to_string());
+                        got.push(if problem.filler_label.is_empty() { "filler".to_string() } else { problem.filler_label.clone() });
                     }
                     let what = if got.is_empty() { "done".to_string() } else { format!("got {}", got.join(" + ")) };
                     exits.push(Exit { chance, to: None, what, kind: "done".into(), via: by.into() });
@@ -271,6 +306,16 @@ pub fn steps(problem: &Problem, plan: &Plan, min_reach: f64) -> Vec<Step> {
                     exits.push(Exit { chance, to: Some(number[&t]), what, kind: kind.into(), via: by.into() });
                 }
                 Dest::At(_) => rare += chance,
+                Dest::Sell => exits.push(Exit {
+                    chance,
+                    to: None,
+                    what: "sell the blocked item and replace it".into(),
+                    kind: "back".into(),
+                    via: by.into(),
+                }),
+                Dest::Restart => {
+                    exits.push(Exit { chance, to: None, what: "rebuild the crafting core".into(), kind: "back".into(), via: by.into() })
+                }
             }
         }
         if rare > 1e-6 {

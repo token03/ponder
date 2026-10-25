@@ -23,18 +23,9 @@ use crate::actions::{self, loaded};
 use crate::gear::Pricing;
 
 pub const SIZES: [(&str, &str); 3] = [
-    (
-        "small",
-        "Metadata/Items/Jewels/JewelPassiveTreeExpansionSmall",
-    ),
-    (
-        "medium",
-        "Metadata/Items/Jewels/JewelPassiveTreeExpansionMedium",
-    ),
-    (
-        "large",
-        "Metadata/Items/Jewels/JewelPassiveTreeExpansionLarge",
-    ),
+    ("small", "Metadata/Items/Jewels/JewelPassiveTreeExpansionSmall"),
+    ("medium", "Metadata/Items/Jewels/JewelPassiveTreeExpansionMedium"),
+    ("large", "Metadata/Items/Jewels/JewelPassiveTreeExpansionLarge"),
 ];
 /// Most notables a cluster of each size can hold (community knowledge, not in the data).
 pub const NOTABLE_CAP: [(&str, usize); 3] = [("small", 1), ("medium", 2), ("large", 3)];
@@ -46,27 +37,15 @@ pub const GROUP_PREFIX: &str = "AfflictionJewelSmallPassives";
 pub const DEFAULT_ITEM_LEVEL: i64 = 84;
 
 fn size_id(size: &str) -> &'static str {
-    SIZES
-        .iter()
-        .find(|(s, _)| *s == size)
-        .unwrap_or_else(|| panic!("no cluster jewel size {size:?}"))
-        .1
+    SIZES.iter().find(|(s, _)| *s == size).unwrap_or_else(|| panic!("no cluster jewel size {size:?}")).1
 }
 
 pub fn notable_cap(size: &str) -> usize {
-    NOTABLE_CAP
-        .iter()
-        .find(|(s, _)| *s == size)
-        .unwrap_or_else(|| panic!("no cluster jewel size {size:?}"))
-        .1
+    NOTABLE_CAP.iter().find(|(s, _)| *s == size).unwrap_or_else(|| panic!("no cluster jewel size {size:?}")).1
 }
 
 pub fn default_passives(size: &str) -> i64 {
-    DEFAULT_PASSIVES
-        .iter()
-        .find(|(s, _)| *s == size)
-        .unwrap_or_else(|| panic!("no cluster jewel size {size:?}"))
-        .1
+    DEFAULT_PASSIVES.iter().find(|(s, _)| *s == size).unwrap_or_else(|| panic!("no cluster jewel size {size:?}")).1
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,64 +60,33 @@ pub struct Enchant {
 
 impl Enchant {
     pub fn new(id: &str, name: &str, tag: &str, text: Vec<String>) -> Enchant {
-        let short = text
-            .iter()
-            .map(|t| t.strip_prefix(ENCHANT_PREFIX).unwrap_or(t).to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        Enchant {
-            id: id.into(),
-            name: name.into(),
-            tag: tag.into(),
-            text,
-            short,
-        }
+        let short = text.iter().map(|t| t.strip_prefix(ENCHANT_PREFIX).unwrap_or(t).to_string()).collect::<Vec<_>>().join(", ");
+        Enchant { id: id.into(), name: name.into(), tag: tag.into(), text, short }
     }
 }
 
 pub fn enchants(size: &str) -> Vec<Enchant> {
     let jewels = loaded(data::cluster_jewels());
-    jewels[size_id(size)]
-        .passive_skills
-        .iter()
-        .map(|p| Enchant::new(&p.id, &p.name, &p.tag, p.stat_text.clone()))
-        .collect()
+    jewels[size_id(size)].passive_skills.iter().map(|p| Enchant::new(&p.id, &p.name, &p.tag, p.stat_text.clone())).collect()
 }
 
 pub fn find_enchant(size: &str, name: &str) -> Result<Enchant> {
     let options = enchants(size);
     let wanted = name.to_lowercase();
-    let mut hits: Vec<&Enchant> = options
-        .iter()
-        .filter(|e| e.name.to_lowercase() == wanted || e.short.to_lowercase() == wanted)
-        .collect();
+    let mut hits: Vec<&Enchant> = options.iter().filter(|e| e.name.to_lowercase() == wanted || e.short.to_lowercase() == wanted).collect();
     if hits.is_empty() {
         hits = options.iter().filter(|e| e.tag == wanted).collect();
     }
     if hits.is_empty() {
         hits = options
             .iter()
-            .filter(|e| {
-                e.name.to_lowercase().contains(&wanted)
-                    || e.text.iter().any(|t| t.to_lowercase().contains(&wanted))
-            })
+            .filter(|e| e.name.to_lowercase().contains(&wanted) || e.text.iter().any(|t| t.to_lowercase().contains(&wanted)))
             .collect();
     }
     if hits.len() != 1 {
-        let shown = if hits.is_empty() {
-            options.iter().collect()
-        } else {
-            hits.clone()
-        };
-        let names = shown
-            .iter()
-            .map(|e| e.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(anyhow!(
-            "enchant {name:?} matches {} of: {names}",
-            hits.len()
-        ));
+        let shown = if hits.is_empty() { options.iter().collect() } else { hits.clone() };
+        let names = shown.iter().map(|e| e.name.as_str()).collect::<Vec<_>>().join(", ");
+        return Err(anyhow!("enchant {name:?} matches {} of: {names}", hits.len()));
     }
     Ok(hits[0].clone())
 }
@@ -149,21 +97,13 @@ pub fn is_notable(m: &data::Mod) -> bool {
 }
 
 pub fn notable_name(m: &data::Mod) -> String {
-    m.text_or_empty()
-        .strip_prefix(NOTABLE_PREFIX)
-        .unwrap_or("")
-        .to_string()
+    m.text_or_empty().strip_prefix(NOTABLE_PREFIX).unwrap_or("").to_string()
 }
 
 /// Every mod that can roll on this cluster, with its weight.
 pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
     let bases = loaded(data::base_items());
-    let tags: BTreeSet<String> = bases[size_id(size)]
-        .tags
-        .iter()
-        .cloned()
-        .chain([enchant.tag.clone()])
-        .collect();
+    let tags: BTreeSet<String> = bases[size_id(size)].tags.iter().cloned().chain([enchant.tag.clone()]).collect();
     let mut out = Vec::new();
     for (mod_id, m) in loaded(data::mods()).iter() {
         if m.domain != "affliction_jewel"
@@ -177,18 +117,10 @@ pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
             continue;
         }
         let notable = is_notable(m);
-        let label = if notable {
-            notable_name(m)
-        } else {
-            m.text_or_empty().replace('\n', " / ")
-        };
+        let label = if notable { notable_name(m) } else { m.text_or_empty().replace('\n', " / ") };
         out.push(Mod {
             id: mod_id.to_string(),
-            side: if m.generation_type == "prefix" {
-                Side::Prefix
-            } else {
-                Side::Suffix
-            },
+            side: if m.generation_type == "prefix" { Side::Prefix } else { Side::Suffix },
             weight,
             groups: m.groups.clone(),
             notable,
@@ -211,18 +143,12 @@ pub fn tiers(mods: &[Mod]) -> IndexMap<String, i64> {
     }
     let mut out = IndexMap::new();
     for group in by_group.values() {
-        let mut ranks: Vec<i64> = group
-            .iter()
-            .map(|m| levels[m.id.as_str()].required_level)
-            .collect();
+        let mut ranks: Vec<i64> = group.iter().map(|m| levels[m.id.as_str()].required_level).collect();
         ranks.sort_unstable_by(|a, b| b.cmp(a));
         ranks.dedup();
         for m in group {
             let level = levels[m.id.as_str()].required_level;
-            out.insert(
-                m.id.clone(),
-                ranks.iter().position(|&r| r == level).unwrap() as i64 + 1,
-            );
+            out.insert(m.id.clone(), ranks.iter().position(|&r| r == level).unwrap() as i64 + 1);
         }
     }
     out
@@ -237,21 +163,14 @@ pub fn mod_tiers(size: &str, tag: &str) -> IndexMap<String, i64> {
     if let Some(t) = cache.lock().unwrap().get(&key) {
         return t.clone();
     }
-    let made = tiers(&pool(
-        size,
-        &Enchant::new(tag, tag, tag, Vec::new()),
-        DEFAULT_ITEM_LEVEL,
-    ));
+    let made = tiers(&pool(size, &Enchant::new(tag, tag, tag, Vec::new()), DEFAULT_ITEM_LEVEL));
     cache.lock().unwrap().entry(key).or_insert(made).clone()
 }
 
 /// A tiered small-passive mod as a craft names it, e.g. "HaveIncreasedEffect@1".
 pub fn feature(mod_id: &str, tier: i64) -> String {
     let group = &loaded(data::mods())[mod_id].groups[0];
-    format!(
-        "{}@{tier}",
-        group.strip_prefix(GROUP_PREFIX).unwrap_or(group)
-    )
+    format!("{}@{tier}", group.strip_prefix(GROUP_PREFIX).unwrap_or(group))
 }
 
 pub fn is_feature(name: &str) -> bool {
@@ -259,15 +178,8 @@ pub fn is_feature(name: &str) -> bool {
 }
 
 fn parse(name: &str) -> Result<(String, i64)> {
-    let (group, tier) = name
-        .rsplit_once('@')
-        .ok_or_else(|| anyhow!("{name:?} is not a Group@tier"))?;
-    Ok((
-        format!("{GROUP_PREFIX}{group}"),
-        tier.trim()
-            .parse()
-            .map_err(|_| anyhow!("invalid literal for int() with base 10: {tier:?}"))?,
-    ))
+    let (group, tier) = name.rsplit_once('@').ok_or_else(|| anyhow!("{name:?} is not a Group@tier"))?;
+    Ok((format!("{GROUP_PREFIX}{group}"), tier.trim().parse().map_err(|_| anyhow!("invalid literal for int() with base 10: {tier:?}"))?))
 }
 
 /// "HaveIncreasedEffect@1" -> "35% increased Effect"; tiers past 1 read "(T2+)".
@@ -279,39 +191,20 @@ pub fn feature_label(name: &str, mods: &[Mod]) -> String {
         return name.to_string();
     };
     let texts = loaded(data::mods());
-    let hits: Vec<Mod> = mods
-        .iter()
-        .filter(|m| m.groups.first() == Some(&group))
-        .cloned()
-        .collect();
-    let ranked = if hits.is_empty() {
-        IndexMap::new()
-    } else {
-        tiers(&hits)
-    };
+    let hits: Vec<Mod> = mods.iter().filter(|m| m.groups.first() == Some(&group)).cloned().collect();
+    let ranked = if hits.is_empty() { IndexMap::new() } else { tiers(&hits) };
     let mod_id = ranked
         .iter()
         .find(|(_, t)| **t == tier)
         .map(|(m, _)| m.as_str())
-        .or_else(|| {
-            texts
-                .iter()
-                .find(|(_, m)| m.groups.contains(&group))
-                .map(|(id, _)| id.as_str())
-        });
+        .or_else(|| texts.iter().find(|(_, m)| m.groups.contains(&group)).map(|(id, _)| id.as_str()));
     let text = match mod_id {
         Some(id) if !texts[id].text_or_empty().is_empty() => texts[id].text_or_empty(),
         _ => &group,
     };
-    let text = text
-        .replace("Added Small Passive Skills also grant: ", "")
-        .replace("Added Small Passive Skills have ", "")
-        .replace('\n', " / ");
-    if tier > 1 {
-        format!("{text} (T{tier}+)")
-    } else {
-        text
-    }
+    let text =
+        text.replace("Added Small Passive Skills also grant: ", "").replace("Added Small Passive Skills have ", "").replace('\n', " / ");
+    if tier > 1 { format!("{text} (T{tier}+)") } else { text }
 }
 
 /// Targets for notable names and "Group@tier" small-passive mods.
@@ -331,12 +224,8 @@ pub fn resolve(mods: &[Mod], names: &[String]) -> Result<Vec<Target>> {
             continue;
         }
         let (group, tier) = parse(name)?;
-        let good: Vec<&Mod> = mods
-            .iter()
-            .filter(|m| {
-                m.groups.first() == Some(&group) && ranked.get(&m.id).copied().unwrap_or(99) <= tier
-            })
-            .collect();
+        let good: Vec<&Mod> =
+            mods.iter().filter(|m| m.groups.first() == Some(&group) && ranked.get(&m.id).copied().unwrap_or(99) <= tier).collect();
         if good.is_empty() {
             return Err(anyhow!("{name:?} can't roll here"));
         }
@@ -393,13 +282,8 @@ pub fn resolve_fixed(mods: &[Mod], names: &[String]) -> Result<Vec<Mod>> {
             continue;
         }
         let (group, tier) = parse(name)?;
-        let hit = mods
-            .iter()
-            .find(|m| m.groups.first() == Some(&group) && ranked.get(&m.id) == Some(&tier));
-        out.push(
-            hit.ok_or_else(|| anyhow!("{name:?} can't roll here"))?
-                .clone(),
-        );
+        let hit = mods.iter().find(|m| m.groups.first() == Some(&group) && ranked.get(&m.id) == Some(&tier));
+        out.push(hit.ok_or_else(|| anyhow!("{name:?} can't roll here"))?.clone());
     }
     Ok(out)
 }
@@ -412,17 +296,11 @@ pub fn resolve_notables(mods: &[Mod], names: &[String]) -> Result<Vec<Mod>> {
     names
         .iter()
         .map(|name| {
-            by_name
-                .get(name.trim().to_lowercase().as_str())
-                .map(|m| (*m).clone())
-                .ok_or_else(|| {
-                    let mut options: Vec<&str> = by_name.keys().map(String::as_str).collect();
-                    options.sort_unstable();
-                    anyhow!(
-                        "notable {name:?} can't roll here; options: {}",
-                        options.join(", ")
-                    )
-                })
+            by_name.get(name.trim().to_lowercase().as_str()).map(|m| (*m).clone()).ok_or_else(|| {
+                let mut options: Vec<&str> = by_name.keys().map(String::as_str).collect();
+                options.sort_unstable();
+                anyhow!("notable {name:?} can't roll here; options: {}", options.join(", "))
+            })
         })
         .collect()
 }
@@ -467,6 +345,6 @@ pub fn problem(
     let mut p = ponder_core::ProblemSpec::new(mods, targets, need, all, Kind::Jewel);
     p.notable_cap = cap;
     p.fixed = fixed;
-    p.profiles = profiles;
+    p.profiles = profiles.into();
     Ok(p.compile())
 }

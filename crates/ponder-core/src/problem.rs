@@ -21,18 +21,20 @@ fn default_notable_cap() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProblemSpec {
-    pub pool: Vec<Mod>,
+    pub pool: Arc<Vec<Mod>>,
     pub targets: Vec<Target>,
     pub need: usize,
     pub actions: Vec<Action>,
     #[serde(default = "default_kind")]
     pub kind: Kind,
+    #[serde(default)]
+    pub affix_limits: Option<[usize; 2]>,
     #[serde(default = "default_notable_cap")]
     pub notable_cap: usize,
     #[serde(default)]
     pub fixed: Vec<Mod>, // fractured mods, never removed
     #[serde(default)]
-    pub profiles: BTreeMap<String, BTreeMap<String, f64>>, // name -> mod id -> weight
+    pub profiles: Arc<BTreeMap<String, WeightProfile>>, // name -> mod id -> weight
     #[serde(default)]
     pub extra_mods: BTreeMap<String, Mod>, // forced mods outside the pool
     #[serde(default)]
@@ -40,9 +42,17 @@ pub struct ProblemSpec {
     #[serde(default)]
     pub bench: Vec<Mod>,
     #[serde(default)]
+    pub allow_terminal_bench: bool,
+    #[serde(default)]
+    pub blockers: Vec<Mod>,
+    #[serde(default)]
+    pub unveils: Vec<Mod>,
+    #[serde(default)]
     pub influences: BTreeSet<String>,
     #[serde(default)]
     pub filler: BTreeSet<String>, // mods that count as filler (e.g. any resistance at T3+)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub filler_label: String,
     #[serde(default)]
     pub filler_need: usize, // how many filler mods the finished item needs, on top of the targets
     #[serde(default)]
@@ -59,7 +69,9 @@ mod effects;
 mod interval;
 mod pool;
 mod projection;
+mod recipes;
 mod rolls;
+mod unveil;
 
 pub(crate) use effects::PreparedAction;
 use interval::{Dist, normalise};
@@ -70,15 +82,22 @@ type LockKey = (u8, u32, u32, State);
 
 /// (profile, first profile, `META_TAGS` index): a Harvest reforge under a "cannot roll" metamod.
 type RestrictedKey = (usize, usize, usize);
+type OfferKey = (Side, u8, bool, u8);
+type OfferMask = (u32, f64, f64, f64);
 
 #[derive(Default)]
 struct Caches {
-    compiled: OnceLock<Compiled>,
-    rolls: Mutex<HashMap<RollKey, CachedRoll>>,
+    compiled: OnceLock<Arc<Compiled>>,
+    fingerprint: OnceLock<blake3::Hash>,
+    rolls: Mutex<FxHashMap<RollKey, CachedRoll>>,
     locks: Mutex<FxHashMap<LockKey, Arc<Distribution>>>,
-    restricted_rolls: Mutex<HashMap<RestrictedKey, CachedRoll>>,
+    unveils: Mutex<FxHashMap<(bool, State), Arc<Distribution>>>,
+    offer_masks: Mutex<FxHashMap<OfferKey, Vec<OfferMask>>>,
+    offer_relevance: OnceLock<[u8; 2]>,
+    restricted_rolls: Mutex<FxHashMap<RestrictedKey, CachedRoll>>,
 }
 
+#[derive(Clone)]
 struct CachedRoll {
     distribution: Arc<Distribution>,
     attempted_exact: bool,
@@ -92,20 +111,29 @@ impl std::fmt::Debug for Caches {
 
 impl ProblemSpec {
     pub fn new(pool: Vec<Mod>, targets: Vec<Target>, need: usize, actions: Vec<Action>, kind: Kind) -> ProblemSpec {
+        Self::from_shared_pool(Arc::new(pool), targets, need, actions, kind)
+    }
+
+    pub fn from_shared_pool(pool: Arc<Vec<Mod>>, targets: Vec<Target>, need: usize, actions: Vec<Action>, kind: Kind) -> ProblemSpec {
         ProblemSpec {
             pool,
             targets,
             need,
             actions,
             kind,
+            affix_limits: None,
             notable_cap: default_notable_cap(),
             fixed: Vec::new(),
-            profiles: BTreeMap::new(),
+            profiles: Arc::default(),
             extra_mods: BTreeMap::new(),
             reserve: BTreeMap::new(),
             bench: Vec::new(),
+            allow_terminal_bench: false,
+            blockers: Vec::new(),
+            unveils: Vec::new(),
             influences: BTreeSet::new(),
             filler: BTreeSet::new(),
+            filler_label: String::new(),
             filler_need: 0,
             filler_sides: None,
             junk_cap: None,
@@ -114,7 +142,8 @@ impl ProblemSpec {
         }
     }
 
-    pub fn compile(self) -> Problem {
+    pub fn compile(mut self) -> Problem {
+        self.refresh_unveil_actions();
         Problem { spec: Arc::new(self), caches: Arc::new(Caches::default()) }
     }
 }
@@ -150,7 +179,30 @@ impl Problem {
         self.spec.as_ref().clone()
     }
 
+    pub fn fresh_transition_cache(&self) -> Problem {
+        let caches = Caches {
+            rolls: Mutex::new(self.caches.rolls.lock().unwrap().clone()),
+            restricted_rolls: Mutex::new(self.caches.restricted_rolls.lock().unwrap().clone()),
+            ..Caches::default()
+        };
+        if let Some(compiled) = self.caches.compiled.get() {
+            let _ = caches.compiled.set(compiled.clone());
+        }
+        if let Some(fingerprint) = self.caches.fingerprint.get() {
+            let _ = caches.fingerprint.set(*fingerprint);
+        }
+        Problem { spec: self.spec.clone(), caches: Arc::new(caches) }
+    }
+
+    pub fn fingerprint(&self) -> blake3::Hash {
+        *self.caches.fingerprint.get_or_init(|| {
+            let mut hasher = blake3::Hasher::new();
+            serde_json::to_writer(&mut hasher, self.spec.as_ref()).expect("a problem serialises");
+            hasher.finalize()
+        })
+    }
+
     fn c(&self) -> &Compiled {
-        self.caches.compiled.get_or_init(|| self.compile_pool())
+        self.caches.compiled.get_or_init(|| Arc::new(self.compile_pool()))
     }
 }

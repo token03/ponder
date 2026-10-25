@@ -8,6 +8,9 @@ way to craft it, and what the trade site has.
 
 Both sit on one Rust library.
 
+See the [code map and crafting extensions](docs/code-map.md) for file ownership,
+solver seams, asymmetric jewellery and donor recipes.
+
 ## Setup
 
 Needs Rust 1.99 or newer.
@@ -69,7 +72,7 @@ To build the Windows binaries from WSL instead:
 
 ## The desktop app
 
-`ponder-app` runs the ladder pipeline in the background (about 5 s from scratch) and lays
+`ponder-app` runs the ladder pipeline in the background and lays
 the results out in tiles that you can drag, split, close and reopen from the View menu.
 The layout, filters and run settings are remembered.
 
@@ -81,7 +84,7 @@ The layout, filters and run settings are remembered.
 - **Item**: the selected craft's mods (target, filler, bench), its costs and the expected
   currency, with the certified range the crafting cost lies in (see
   [solver design](docs/solver-design.md)). Buttons price it on trade, find half-done items
-  for sale, cost a recombinator tree, or copy its JSON.
+  for sale, set recovery sale quotes, or copy its JSON. Donor routes are evaluated automatically.
 - **Recipe**: the plan as numbered steps. Each outcome links to the step it leads to.
 - **Fractured bases**, **Products & starts**, **Recombinator**: the alternatives to
   crafting from scratch.
@@ -89,7 +92,7 @@ The layout, filters and run settings are remembered.
   what it can become and what finishing it costs.
 
 The left panel holds the run settings (how many archetypes, niche combos and clusters to
-cost, the chaos-per-hour charge, recombinators, trade) and the filters. The item picker
+cost, the chaos-per-hour charge and trade) and the filters. The item picker
 drills from Gear into weapons, armour or accessories, and from Jewels into clusters by
 size, base jewels or abyss jewels. Armour drills into slot, defence and individual
 RePoE bases, such as Gloves → ES → Sage Gloves. Search the tree, select several branches
@@ -109,10 +112,10 @@ ponder ladder archetypes --group Bow         # mod combinations many characters 
 ponder ladder tiers --group "Gloves (ES)"    # how often each mod is worn, and how much its tier matters
 ponder ladder prices --group Bow --top 3     # fit what each tier is worth from trade listings
 ponder ladder crafts                         # cost what the ladder wears (gear + clusters), rank market holes
-ponder ladder crafts --trade                 # ... priced on trade (--no-recomb skips recombinator trees)
+ponder ladder crafts --trade                 # ... priced on trade, including automatic donor routes
 ponder ladder crafts --starts 10 --top 20    # ... and half-done items for sale for the best 10
 ponder ladder finish item.txt                # what an item you have can become, and the recipe from it
-ponder run https://pobb.in/XXXX build.txt    # cost every rare in some builds (--fractures, --trade, --recomb)
+ponder run https://pobb.in/XXXX build.txt    # cost every rare in some builds (--fractures, --trade)
 ponder item item.txt                         # read an item and match its mods to mod ids and tiers
 ponder prices show                           # the poe.ninja prices costs use
 ponder data version
@@ -145,15 +148,11 @@ items and jewels by mod id.
   number of resistances and the open affixes gives the multipliers: what T1 is worth per
   mod, in this market.
 - **crafts**: turns the ladder into crafting candidates and costs them.
-  - **Finished items.** Gear archetypes become finished items, the way their wearers'
-    items are:
-    - the archetype's mods, plus any other mod at least half of its items carry
-      (`demand::COMPLETE_SHARE`), each at the tier most wearers reach;
-    - then each side is filled to the number of useful mods its wearers usually have
-      there, from *filler*: any mod at least 10% of them wear (`demand::FILLER_SHARE`;
-      resistances always count), at the tier 80% of them have or beat;
-    - one open slot is finished at the bench when the bench offers a filler mod for that
-      side.
+  - **Finished items.** Goals retain a complete observed combination of useful stats.
+    Suppression, chaos resistance, all-resistance and defence rolls are explicit requirements.
+    Stronger rolls always satisfy the same acceptable floor. Single fire, cold and lightning
+    resistance rolls are interchangeable, with a count and a T3-or-better floor.
+    Arbitrary affix occupancy cannot complete a missing requirement.
   - **Which archetypes.** The most worn overall (`--gear`), the top few of every base group
     (`--per-group`), and the most *niche* 3+ mod combos (`--niche`): mods worn together far
     more often than chance, which marks one build's item.
@@ -163,13 +162,14 @@ items and jewels by mod id.
     and `hole = margin × wearers / (listed + 5)` ranks the holes: wanted, thinly supplied,
     profitable.
 
-**The product tree.** A product is *under* another of the same base group when every mod
-it wants is one the other makes at the same tier or better, with fewer wanted mods and no
-more filler. For example, "life + block" sits under "life + block + recover on block".
-Products are solved smallest first, and a bigger craft gets "sell as <smaller product>"
-actions: an item that bricks late can be sold for 70% of that product's cheapest cost
-(`SALE_SHARE`), and you start over. The recipe says when to cash out. If a sale would pay
-more than making that item again, the solver plans without sales.
+**Recovery.** Protected finishing compares continuing, risky annuls and rebuilding the
+prepared core. In the Item pane, **Sell blocked rolls** accepts sale proceeds, the replacement
+base price and trade time for full items retaining that core. Quotes are saved by goal and
+core in `.cache/recovery-quotes.json`; CLI runs use the same quotes. Without a quote, the
+app and JSON show a break-even premium: add the replacement base price and trade time in
+chaos. Expected sales, proceeds and repeated preparation are included in the selected route.
+Sale proceeds can exceed the replacement preparation cost; negative net recovery credits
+are supported. A singular policy is reported when no finite priced policy can be evaluated.
 
 **Finishing a real item.** A plan already knows the expected cost to finish from every
 state it reaches, and any other state is solved from where it is. So `ladder finish` takes
@@ -184,8 +184,8 @@ and keeps the cheapest totals of price plus finishing.
 
 A craft doesn't copy an item mod for mod.
 
-- **Resistances are filler.** The item needs as many resistances as it had, any of them,
-  at T3 or better, because buyers want enough res and rarely a particular one. That is what
+- **Single elemental resistances are interchangeable.** The item needs the observed count,
+  at T3 or better, because Harvest can swap the element. Chaos resistance, all-resistance and hybrid rolls remain separate. That is what
   makes resistance-guaranteeing tools (Harvest reforges, essences, fossils) and side-only
   finishing (eldritch currency) worth using. `run --exact` turns this off.
 - **Everything else stays a target** at its tier or better. Hybrid mods count as their main
@@ -216,7 +216,8 @@ regal into a rare, exalt, or annul whenever that is cheaper over the whole remai
 - fossil rerolls of 1-4 fossils in a resonator, with the best combo per subset of wanted
   mods kept;
 - metamods ("Prefixes/Suffixes Cannot Be Changed" with a scour or a reroll);
-- eldritch exalts and annulments on armour pieces without influence;
+- eldritch chaos, exalts and annulments on armour pieces without influence;
+- beast prefix/suffix swaps, Bristle Matron, Veiled Chaos/Exalt and unveil choices;
 - bench crafts as the last step;
 - self-made fractured bases: reroll until the mod lands with few enough mods, then use a
   Fracturing Orb.
@@ -231,7 +232,7 @@ the prices its actions use (to 3 significant figures).
 **Recombinators** (`crates/ponder/src/recomb.rs`): clean donors, then recombinations,
 cheapest first over every split of the wanted mods. A tree may make only part of the item
 (a side, a pair): the rest is crafted from the clean rare it hands over, at what the item's
-own plan says finishing from there costs (`pipeline::recombs::best_part`).
+independently solved continuation costs (`pipeline::recombs::best_part`).
 - The output takes either input's base, 50/50.
 - Per side, how many mods the output keeps depends only on that side's pool size
   (`recomb::SIDE_COUNTS`; edit it when a patch changes the odds).
@@ -245,13 +246,13 @@ craft is an input that you can swap for your own:
 
 | What | Default | Where |
 |---|---|---|
-| Which mods a product wants | the `*_SHARE` constants and `MAX_KEYS` | `demand` |
-| What a brick sells for | 70% (`SALE_SHARE`), at least `MIN_SALE` | `pipeline` |
+| Which mods a product wants | observed joint combinations and frequency thresholds | `demand` |
+| What a blocked roll sells for | explicit per-goal/core quote | `pipeline/resale` |
 | Resistances as filler | T3 or better | `gear::FILLER_FAMILIES`, `FILLER_TIER` |
 | Magic items: 1 or 2 mods | equal chance | `MAGIC_TWO_MOD_CHANCE` |
 | Rare gear: 4 / 5 / 6 mods | 9:3:1 | `RARE_MOD_COUNTS_GEAR` |
 | Harvest costs for tags without a lifeforce source | priced at the dearest lifeforce | `actions::HARVEST` |
-| Clicking time per action | — | `ponder_core::SECONDS` |
+| Clicking time per action | explicit seconds | `ponder_core::Action` |
 | Recombinator odds by pool size | — | `recomb::SIDE_COUNTS` |
 
 ## Prices and the trade site

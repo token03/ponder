@@ -5,8 +5,8 @@
 //! small snapshot (Allflame, October 2026) keeps the numbers on the right scale.
 
 use crate::env::Clock;
-use crate::http::{self, Transport};
 use crate::http::encode_component;
+use crate::http::{self, Transport};
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -53,7 +53,11 @@ impl Prices {
 
     pub fn leagues(&self) -> Result<Vec<String>> {
         let body = self.get(&format!("{API}/leagues"))?;
-        body.as_array().context("leagues is not a list")?.iter().map(|e| Ok(e["id"].as_str().context("league without id")?.to_string())).collect()
+        body.as_array()
+            .context("leagues is not a list")?
+            .iter()
+            .map(|e| Ok(e["id"].as_str().context("league without id")?.to_string()))
+            .collect()
     }
 
     /// Download the prices of `league` (default: the first one listed); returns the league and how many prices.
@@ -71,6 +75,12 @@ impl Prices {
                 table.insert(line["id"].as_str().context("line without id")?.to_string(), line["primaryValue"].clone());
             }
             self.clock.sleep(1.0); // be gentle; the data only refreshes every ~15 minutes anyway
+        }
+        let beasts = self.get(&format!("{API}/stash/current/item/overview?league={}&type=Beast", encode_component(&league)))?;
+        for line in beasts["lines"].as_array().context("no beast prices")? {
+            if let (Some(id), Some(value)) = (line["detailsId"].as_str(), line["chaosValue"].as_f64()) {
+                table.insert(id.to_string(), json!(value));
+            }
         }
         let clusters = self.get(&format!("{API}/stash/current/item/overview?league={}&type=ClusterJewel", encode_component(&league)))?;
         let saved = json!({"league": league, "fetched": self.clock.now(), "prices": table});
@@ -98,7 +108,9 @@ impl Prices {
 
     /// poe.ninja's cluster jewel listings, as saved by `fetch` (empty before the first fetch).
     pub fn cluster_lines(&self) -> Vec<Value> {
-        let Ok(text) = std::fs::read_to_string(self.cache.join("clusters.json")) else { return Vec::new() };
+        let Ok(text) = std::fs::read_to_string(self.cache.join("clusters.json")) else {
+            return Vec::new();
+        };
         serde_json::from_str::<Value>(&text).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default()
     }
 
@@ -157,6 +169,8 @@ mod tests {
                 200,
                 &if u.ends_with("/leagues") {
                     json!([{"id": "Test League"}, {"id": "Standard"}])
+                } else if u.ends_with("type=Beast") {
+                    json!({"lines": [{"detailsId": "wild-bristle-matron", "chaosValue": 30.0}, {"detailsId": "farric-lynx-alpha", "chaosValue": 3.0}, {"detailsId": "farric-wolf-alpha", "chaosValue": 4.0}]})
                 } else if u.contains("stash/") {
                     json!({"lines": [{"name": "Added Small Passive Skills grant: X", "baseType": "Large Cluster Jewel", "variant": "8 passives", "levelRequired": 84, "count": 5, "chaosValue": 12.5,
                         "tradeInfo": [{"mod": ENCHANT_STAT, "option": 42}]}]})
@@ -173,11 +187,12 @@ mod tests {
         let urls = Arc::new(Mutex::new(Vec::new()));
         let p = Prices::with(fake(urls.clone()), dir.path().into(), Clock::new(|| 100_000.0, |_| {}));
         assert_eq!(p.load().unwrap().1, "built-in Allflame snapshot (run `ponder prices fetch`)");
-        assert_eq!(p.fetch(None).unwrap(), ("Test League".to_string(), 3));
+        assert_eq!(p.fetch(None).unwrap(), ("Test League".to_string(), 6));
         assert!(urls.lock().unwrap()[1].ends_with("league=Test%20League&type=Currency"));
         let (table, note) = p.load().unwrap();
         assert_eq!((table["alt"], table["divine"], table["scour"]), (0.1, 300.0, 0.35));
         assert_eq!(note, "poe.ninja Test League, 0h old");
+        assert_eq!((table["wild-bristle-matron"], table["farric-lynx-alpha"], table["farric-wolf-alpha"]), (30.0, 3.0, 4.0));
         assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 75), Some((12.5, 5)));
         assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 85), None);
         assert_eq!(p.enchant_option("Added Small Passive Skills grant: X"), None); // option is a number here; ids are strings on the real site

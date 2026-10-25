@@ -19,6 +19,51 @@ struct Class {
     side: Option<Side>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct RollShape {
+    state: State,
+    placed: usize,
+    restricted: bool,
+    limits: [usize; 2],
+    notable_cap: usize,
+    target_sides: Vec<Side>,
+    target_notables: Vec<bool>,
+    depths: Vec<bool>,
+    first_targets: Vec<u8>,
+    main_targets: Vec<u8>,
+    classes: Vec<(usize, u8, u8, Option<Side>)>,
+}
+
+impl RollShape {
+    fn new(problem: &Problem, state: State, placed: usize, restricted: bool, first: &Lumped, main: &Lumped, classes: &[Class]) -> Self {
+        let support = |weights: &[f64]| weights.iter().enumerate().fold(0, |bits, (i, &weight)| bits | u8::from(weight > 0.0) << i);
+        let counts = problem.counts_for(state.rarity);
+        let top = counts.iter().map(|c| c.0).max().unwrap_or(0);
+        let mut shapes: Vec<_> = classes.iter().map(|class| (class.n.min(6), support(&class.f), support(&class.m), class.side)).collect();
+        shapes.sort_unstable();
+        Self {
+            state,
+            placed,
+            restricted,
+            limits: [problem.side_limit(state.rarity, Side::Prefix), problem.side_limit(state.rarity, Side::Suffix)],
+            notable_cap: problem.notable_cap,
+            target_sides: problem.c().t_side.clone(),
+            target_notables: problem.c().t_notable.clone(),
+            depths: (0..=top)
+                .map(|depth| counts.iter().filter(|count| count.0 > depth).map(|count| count.1).sum::<f64>() > 1e-15)
+                .collect(),
+            first_targets: first.tw.iter().map(|weights| support(weights)).collect(),
+            main_targets: main.tw.iter().map(|weights| support(weights)).collect(),
+            classes: shapes,
+        }
+    }
+}
+
+fn failed_shapes() -> &'static Mutex<rustc_hash::FxHashSet<RollShape>> {
+    static SHAPES: OnceLock<Mutex<rustc_hash::FxHashSet<RollShape>>> = OnceLock::new();
+    SHAPES.get_or_init(Default::default)
+}
+
 /// Packs a partial roll (state, classes drawn) into one hashable word.
 fn pack(s: &State, drawn: &[u8; 6]) -> u128 {
     let mut x: u128 = s.rarity as u128 | (s.meta as u128) << 2;
@@ -54,8 +99,8 @@ impl Problem {
     }
 
     /// The mod counts a fresh roll at `rarity` picks from, as (count, chance).
-    pub(super) fn counts_for(&self, rarity: u8) -> &'static [(usize, f64)] {
-        crate::mechanics::ItemRules::new(self.kind, self.notable_cap).counts(rarity)
+    pub(super) fn counts_for(&self, rarity: u8) -> Vec<(usize, f64)> {
+        crate::mechanics::ItemRules::new(self.kind, self.notable_cap, self.affix_limits).counts(rarity)
     }
 
     /// The forced mod placed on a fresh base: the state, mods placed, and the groups it keeps out
@@ -92,18 +137,19 @@ impl Problem {
         first_restriction: Option<usize>,
     ) -> (Vec<Outcome>, Option<Vec<Bound>>) {
         let c = self.c();
-        if c.overlap {
-            return self.roll_bounded(rarity, profile, first, forced, first_restriction);
-        }
         let Some((state, placed, also)) = self.forced_start(c, rarity, forced) else { return (Vec::new(), None) };
         let p0 = if forced.is_none() { first.unwrap_or(profile) } else { profile };
         let first_lump = first_restriction.map_or(&c.lumped[p0], |t| &c.lumped_no[t][p0]);
         let main = &c.lumped[profile];
         let mut classes: Vec<Class> = Vec::new();
+        let mut drawn_groups = rustc_hash::FxHashSet::default();
         for (k, key) in c.keys.iter().enumerate() {
             let (f, m) = (first_lump.kw[k], main.kw[k]);
             if key.groups.iter().any(|g| also.contains(g)) || f.iter().chain(&m).all(|w| *w <= 0.0) {
                 continue;
+            }
+            if key.groups.iter().any(|group| !drawn_groups.insert(group.as_str())) {
+                return self.roll_bounded(rarity, profile, first, forced, first_restriction);
             }
             match classes.iter_mut().find(|x| x.f == f && x.m == m) {
                 Some(x) => x.n += 1,
@@ -118,9 +164,17 @@ impl Problem {
                 }
             }
         }
-        match self.roll_dp(c, rarity, state, placed, first.is_some() && forced.is_none(), first_lump, main, &classes) {
+        let restricted = first.is_some() && forced.is_none();
+        let shape = RollShape::new(self, state, placed, restricted, first_lump, main, &classes);
+        if failed_shapes().lock().unwrap().contains(&shape) {
+            return self.roll_bounded(rarity, profile, first, forced, first_restriction);
+        }
+        match self.roll_dp(c, rarity, state, placed, restricted, first_lump, main, &classes) {
             Some(out) => (out, None),
-            None => self.roll_bounded(rarity, profile, first, forced, first_restriction),
+            None => {
+                failed_shapes().lock().unwrap().insert(shape);
+                self.roll_bounded(rarity, profile, first, forced, first_restriction)
+            }
         }
     }
 
@@ -145,7 +199,6 @@ impl Problem {
             return None;
         }
         let counts = self.counts_for(rarity);
-        let limit = if rarity == MAGIC { 1 } else { self.limit() };
         // A partial item: its state and the classes of the junk drawn so far, sorted.
         let mut dist: Vec<(State, [u8; 6], f64)> = vec![(state, [NONE; 6], 1.0)];
         let mut result = Dist::new();
@@ -183,6 +236,7 @@ impl Problem {
                 cands.clear();
                 let mut total = 0.0;
                 for side in [Side::Prefix, Side::Suffix] {
+                    let limit = self.side_limit(rarity, side);
                     if room[side.index()] >= limit {
                         continue;
                     }
@@ -250,15 +304,15 @@ impl Problem {
                         std::collections::hash_map::Entry::Vacant(e) => {
                             e.insert(next.len());
                             next.push((n, d, q));
+                            if next.len() > ROLL_STATES {
+                                return None;
+                            }
                         }
                     }
                 }
             }
             if last {
                 break;
-            }
-            if next.len() > ROLL_STATES {
-                return None;
             }
             std::mem::swap(&mut dist, &mut next);
         }
@@ -325,6 +379,8 @@ impl Problem {
         }
         let mut state = *s;
         state.meta = 0;
+        state.veiled = if self.veiled_side(s) == Some(keep) { s.veiled } else { 0 };
+        state.unveil = 0;
         for i in 0..c.t_side.len() {
             if c.t_side[i] != keep {
                 state.status[i] = c.base.status[i];
@@ -340,54 +396,9 @@ impl Problem {
         if let Some(hit) = self.caches.locks.lock().unwrap().get(&key) {
             return Some(hit.clone());
         }
-        let (out, bounds) = self.lock_reroll_dist(c, state, profile, first);
+        let (out, bounds) = self.fill_roll(state, profile, first, &[Side::Prefix, Side::Suffix], &self.rare_counts());
         let made = Arc::new(Distribution::new(out, bounds));
         Some(self.caches.locks.lock().unwrap().entry(key).or_insert(made).clone())
-    }
-
-    pub(super) fn lock_reroll_dist(
-        &self,
-        c: &Compiled,
-        state: State,
-        profile: usize,
-        first: Option<usize>,
-    ) -> (Vec<Outcome>, Option<Vec<Bound>>) {
-        let counts = self.rare_counts();
-        let placed = self.counts(c, &state).iter().sum::<usize>();
-        let mut dist = Dist::one(state);
-        let mut result = Dist::new();
-        let mut alive = 1.0;
-        let (mut scratch, mut bounds) = (Vec::new(), Vec::new());
-        let top = counts.iter().map(|c| c.0).max().unwrap_or(0);
-        for k in placed..=top {
-            let more: f64 = counts.iter().filter(|c| c.0 > k).map(|c| c.1).sum();
-            for &(st, p, lo, hi) in &dist.items {
-                let stop = alive - more;
-                result.add(st, p * stop, lo * stop, hi * stop);
-            }
-            alive = more;
-            if alive <= 1e-15 {
-                break;
-            }
-            let prof = if k == placed { first.unwrap_or(profile) } else { profile };
-            let mut next = Dist::new();
-            for &(st, p, lo, hi) in &dist.items {
-                self.add_mod_into(c, &st, prof, &[Side::Prefix, Side::Suffix], 0, &mut scratch, &mut bounds);
-                if scratch.is_empty() {
-                    next.add(st, p, lo, hi);
-                } else {
-                    for (&(q, n), &(ql, qh)) in scratch.iter().zip(&bounds) {
-                        next.add(n, p * q, lo * ql, hi * qh);
-                    }
-                }
-            }
-            dist = next;
-        }
-        for &(st, p, lo, hi) in &dist.items {
-            // counts above the last k (if any) end here
-            result.add(st, p * alive, lo * alive, hi * alive);
-        }
-        result.finish()
     }
 
     /// What a reroll's outcome depends on; None for actions that aren't rerolls.
@@ -445,21 +456,24 @@ impl Problem {
             return false;
         }
         let made = self.make_roll(a, &key, true);
-        self.caches.rolls.lock().unwrap().insert(key, CachedRoll { distribution: made, attempted_exact: true });
+        let previous = self.caches.rolls.lock().unwrap().insert(key, CachedRoll { distribution: made.clone(), attempted_exact: true });
+        let mut changed = previous.is_none_or(|old| old.distribution != made);
         if let Some(first) = a.first_profile.as_deref().filter(|f| !f.is_empty()).map(|f| self.profile_index(f)) {
             let profile = self.profile_index(&a.profile);
             for tag in 0..META_TAGS.len() {
                 if self.caches.restricted_rolls.lock().unwrap().contains_key(&(profile, first, tag)) {
                     let roll = self.roll_listed(RARE, profile, Some(first), None, Some(tag), true);
-                    self.caches
+                    let previous = self
+                        .caches
                         .restricted_rolls
                         .lock()
                         .unwrap()
-                        .insert((profile, first, tag), CachedRoll { distribution: roll, attempted_exact: true });
+                        .insert((profile, first, tag), CachedRoll { distribution: roll.clone(), attempted_exact: true });
+                    changed |= previous.is_none_or(|old| old.distribution != roll);
                 }
             }
         }
-        true
+        changed
     }
 
     pub(super) fn restricted_reforge(&self, profile: usize, first: usize, tag: usize) -> Arc<Distribution> {
@@ -476,5 +490,63 @@ impl Problem {
             .or_insert(CachedRoll { distribution: roll, attempted_exact: false })
             .distribution
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equivalent_failed_roll_shapes_reuse_the_same_bounded_distribution_without_disabling_smaller_exact_rolls() {
+        let pool: Vec<_> = (1..=20)
+            .flat_map(|weight| {
+                [Side::Prefix, Side::Suffix].map(move |side| {
+                    let id = format!("{}-{weight}", side.name());
+                    Mod::new(&id, side, weight as f64, &[&id], false, &id, &[])
+                })
+            })
+            .collect();
+        let mut spec = ProblemSpec::new(pool, Vec::new(), 0, Vec::new(), Kind::Gear);
+        spec.profiles = BTreeMap::from([
+            ("scaled".into(), spec.pool.iter().map(|m| (m.id.clone(), 7.0 * m.weight)).collect::<BTreeMap<_, _>>().into()),
+            (
+                "narrow".into(),
+                spec.pool.iter().map(|m| (m.id.clone(), if m.weight == 1.0 { 1.0 } else { 0.0 })).collect::<BTreeMap<_, _>>().into(),
+            ),
+        ])
+        .into();
+        let problem = spec.compile();
+        let c = problem.c();
+        let classes: Vec<_> = problem
+            .pool
+            .iter()
+            .map(|m| {
+                let mut weights = [0.0; JUNK_SLOTS];
+                weights[if m.side == Side::Prefix { 1 } else { 3 }] = m.weight;
+                Class { n: 1, f: weights, m: weights, side: Some(m.side) }
+            })
+            .collect();
+        let state = State { rarity: RARE, ..problem.start() };
+        let shape = RollShape::new(&problem, state, 0, false, &c.lumped[0], &c.lumped[0], &classes);
+        assert!(problem.roll_dp(c, RARE, state, 0, false, &c.lumped[0], &c.lumped[0], &classes).is_none());
+        let (base, bounds) = problem.roll_classes(RARE, 0, None, None, None);
+        assert!(bounds.is_some());
+        assert!(failed_shapes().lock().unwrap().contains(&shape));
+        let scaled = problem.profile_index("scaled");
+        let (scaled, scaled_bounds) = problem.roll_classes(RARE, scaled, None, None, None);
+        assert!(scaled_bounds.is_some());
+        assert_eq!(base.len(), scaled.len());
+        for (&(left, state), &(right, other)) in base.iter().zip(&scaled) {
+            assert_eq!(state, other);
+            assert!((left - right).abs() < 1e-12);
+        }
+        let narrow = problem.profile_index("narrow");
+        let (_, bounds) = problem.roll_classes(RARE, narrow, None, None, None);
+        assert!(bounds.is_none());
+        let mut spec = problem.to_spec();
+        spec.affix_limits = Some([1, 1]);
+        let (_, bounds) = spec.compile().roll_classes(RARE, 0, None, None, None);
+        assert!(bounds.is_none());
     }
 }

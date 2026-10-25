@@ -48,7 +48,7 @@ fn extra_domain(domain: &str) -> Option<&'static str> {
 fn source_rank(source: &str) -> i32 {
     match source {
         "natural" | "crafted" => 0,
-        "essence" | "veiled" | "delve" | "legacy-crafted" => 1,
+        "essence" | "veiled" | "delve" => 1,
         "special" => 2,
         other => panic!("unknown mod source {other:?}"),
     }
@@ -65,7 +65,7 @@ pub struct ModMatch {
     pub kind: String,
     /// repoe mod `type`, shared by every tier of a mod
     pub family: String,
-    /// natural | essence | veiled | delve | special | crafted | legacy-crafted
+    /// natural | essence | veiled | delve | special | crafted
     pub source: &'static str,
     /// 1 = best natural tier on this base
     pub tier: Option<i64>,
@@ -188,8 +188,8 @@ impl IdMods {
 struct Ctx<'a> {
     item: &'a Item,
     base_domain: &'a str,
-    item_class: &'a str,
     tags: &'a BTreeSet<String>,
+    crafts: Option<&'a HashSet<String>>,
     pob_ids: HashSet<&'a str>,
 }
 
@@ -482,8 +482,8 @@ impl ModDB {
         let ctx = Ctx {
             item,
             base_domain: &base.domain,
-            item_class: &base.item_class,
             tags: &tags,
+            crafts: self.bench.get(&base.item_class),
             pob_ids: item.pob_affixes.iter().map(|(_, i)| i.as_str()).collect(),
         };
         let norms: Vec<String> = item.explicits.iter().map(|l| normalize(&l.text)).collect();
@@ -578,7 +578,7 @@ impl ModDB {
                     Some(k) => ModLine::with_marker(text, k),
                     None => ModLine::new(text),
                 };
-                let source = self.source_at(i, &b.item_class, &tags);
+                let source = self.source(m, &tags);
                 let tier = if source == "natural" {
                     self.tier_at(i, &tags)
                 } else {
@@ -720,7 +720,8 @@ impl ModDB {
         };
         let mut out: Vec<((bool, bool, i32, i64), usize)> = Vec::new();
         for &i in &self.index.keys[k].1 {
-            let m = self.mods.get_index(i).unwrap().1;
+            let (id, m) = self.mods.get_index(i).unwrap();
+            if crafted && !ctx.crafts.is_some_and(|crafts| crafts.contains(id)) { continue; }
             if (m.domain == "crafted") != crafted {
                 continue;
             }
@@ -735,22 +736,13 @@ impl ModDB {
         out.into_iter().map(|(_, i)| i).collect()
     }
 
-    fn source_at(&self, i: usize, item_class: &str, tags: &BTreeSet<String>) -> &'static str {
-        let (id, m) = self.mods.get_index(i).unwrap();
-        let src = self.source(m, tags);
-        if src == "crafted" && !self.bench.get(item_class).is_some_and(|b| b.contains(id)) {
-            return "legacy-crafted"; // an old master craft, not on today's bench
-        }
-        src
-    }
-
     fn rank(&self, i: usize, ctx: &Ctx) -> (bool, bool, i32, i64) {
         let (id, m) = self.mods.get_index(i).unwrap();
         let too_high = ctx.item.item_level.is_some_and(|l| m.required_level > l);
         (
             !ctx.pob_ids.contains(id.as_str()),
             too_high,
-            source_rank(self.source_at(i, ctx.item_class, ctx.tags)),
+            source_rank(self.source(m, ctx.tags)),
             -m.required_level,
         )
     }
@@ -793,7 +785,7 @@ impl ModDB {
         merged: bool,
     ) -> ModMatch {
         let (id, m) = self.mods.get_index(i).unwrap();
-        let source = self.source_at(i, ctx.item_class, ctx.tags);
+        let source = self.source(m, ctx.tags);
         ModMatch {
             mod_id: id.to_string(),
             kind: m.generation_type.clone(),

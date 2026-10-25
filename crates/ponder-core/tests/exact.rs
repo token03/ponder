@@ -87,7 +87,7 @@ impl Exact<'_> {
 /// Expected cost from each real item, by Gauss-Seidel value iteration: the cheapest action
 /// everywhere (`policy` None), or the one `policy` names for the item's lumped state. Panics if
 /// the policy has no usable action for an item it reaches.
-fn exact_values(problem: &Problem, prices: &Prices, settings: &Settings, policy: Option<&StateMap<String>>) -> f64 {
+fn exact_values(problem: &Problem, prices: &Prices, settings: &Settings, policy: Option<&StateMap<std::sync::Arc<str>>>) -> f64 {
     let ex = Exact { pool: &problem.pool };
     let state = |(r, m): Item| problem.state_of(r, (0..problem.pool.len()).filter(|&i| m & 1 << i != 0).map(|i| &problem.pool[i]));
     let costs: Vec<f64> = problem.actions.iter().map(|a| step_cost(a, prices, settings)).collect();
@@ -108,7 +108,7 @@ fn exact_values(problem: &Problem, prices: &Prices, settings: &Settings, policy:
                 Some(pol) => {
                     let name =
                         pol.get(&state(item)).unwrap_or_else(|| panic!("the plan has no action for {:?} (item {item:?})", state(item)));
-                    vec![problem.actions.iter().position(|a| &a.name == name).unwrap()]
+                    vec![problem.actions.iter().position(|a| a.name.as_str() == name.as_ref()).unwrap()]
                 }
             };
             for ai in allowed {
@@ -209,7 +209,7 @@ fn certified_bounds_hold_on_real_items() {
         let prices = prices(slams);
         let p = random_problem(seed);
         let plan = solve(&p, &prices, &settings).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
-        let b = plan.bounds.expect("solve gives bounds");
+        let b = plan.bounds;
         let best = exact_values(&p, &prices, &settings, None);
         let followed = exact_values(&p, &prices, &settings, Some(&plan.policy));
         let tol = 1e-7 * best;
@@ -272,7 +272,7 @@ fn an_avoidable_dead_end_is_avoided_not_fatal() {
     let a = solve(&safe, &prices, &settings).unwrap();
     let b = solve(&risky, &prices, &settings).unwrap();
     assert!((a.cost - b.cost).abs() < 1e-9 * a.cost, "{} vs {}", a.cost, b.cost);
-    assert!(b.policy.values().all(|n| n != "alch"));
+    assert!(b.policy.values().all(|n| n.as_ref() != "alch"));
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn overlapping_groups_do_not_receive_an_exact_certificate() {
     let settings = Settings { chaos_per_hour: 0.0 };
     let plan = solve(&p, &prices, &settings).unwrap();
     let exact = exact_values(&p, &prices, &settings, None);
-    let bounds = plan.bounds.unwrap();
+    let bounds = plan.bounds;
     assert!(bounds.lower <= exact + 1e-9 && exact <= bounds.upper);
     assert!((exact - 1.477272706).abs() < 1e-7);
 }

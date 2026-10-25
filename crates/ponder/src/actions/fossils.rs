@@ -1,8 +1,10 @@
 use super::{Cost, Profiles, act, loaded, slug};
 use ponder_core::{Action, ActionKind, FOSSIL_SECONDS, Mod, NORMAL, Prices, RARE, Settings, Side};
 use ponder_game::data;
-use rayon::prelude::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, OnceLock};
+
+use crate::memo::Memo;
 
 pub const RESONATOR: &str = "primitive-chaotic-resonator";
 /// Chaotic resonators by socket count (index 0 is unused): a reroll with 1-4 fossils.
@@ -23,7 +25,7 @@ pub fn fossils(pool: &[Mod]) -> (Vec<Action>, Profiles) {
         }
         let name = fossil.name.replace(" Fossil", "").to_lowercase();
         let profile = format!("fossil:{name}");
-        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect());
+        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect::<BTreeMap<_, _>>().into());
         acts.push(
             act(&format!("{name} fossil"), ActionKind::RerollRare, &[(&slug(&fossil.name), 1.0), (RESONATOR, 1.0)], &[NORMAL, RARE])
                 .with_profile(&profile),
@@ -83,6 +85,63 @@ impl Default for FossilOpts {
     }
 }
 
+struct Combo {
+    idx: [usize; 4],
+    k: usize,
+    weights: Vec<f64>,
+    totals: [f64; 2],
+    profile: OnceLock<ponder_core::WeightProfile>,
+}
+
+fn combination_weights(rows: &[FossilRow], pool: &[Mod], base: &[f64], is_suffix: &[bool], max_fossils: usize) -> Arc<Vec<Combo>> {
+    static CACHE: Memo<blake3::Hash, Arc<Vec<Combo>>> = Memo::new();
+    let mut key = blake3::Hasher::new();
+    for size in [base.len(), rows.len(), max_fossils] {
+        key.update(&(size as u64).to_le_bytes());
+    }
+    for &weight in base {
+        key.update(&weight.to_bits().to_le_bytes());
+    }
+    for m in pool {
+        key.update(&(m.id.len() as u64).to_le_bytes());
+        key.update(m.id.as_bytes());
+    }
+    for &suffix in is_suffix {
+        key.update(&[u8::from(suffix)]);
+    }
+    for row in rows {
+        for &weight in &row.mult {
+            key.update(&weight.to_bits().to_le_bytes());
+        }
+    }
+    CACHE.get_or_init(key.finalize(), || {
+        let mut combos = Vec::new();
+        for k in 1..=max_fossils.min(rows.len()).min(4) {
+            crate::combinations::for_each(rows.len(), k, |indices| {
+                let mut idx = [0; 4];
+                idx[..k].copy_from_slice(indices);
+                let weights: Vec<f64> = base
+                    .iter()
+                    .enumerate()
+                    .map(|(j, weight)| {
+                        let mut mult = rows[idx[0]].mult[j];
+                        for &r in &idx[1..k] {
+                            mult *= rows[r].mult[j];
+                        }
+                        weight * mult
+                    })
+                    .collect();
+                let mut totals = [0.0; 2];
+                for (weight, &suffix) in weights.iter().zip(is_suffix) {
+                    totals[suffix as usize] += weight;
+                }
+                combos.push(Combo { idx, k, weights, totals, profile: OnceLock::new() });
+            });
+        }
+        Arc::new(combos)
+    })
+}
+
 /// The fossil combinations (1-4 in a chaotic resonator) worth giving the solver.
 ///
 /// For each wanted mod (a set of acceptable ids), the chance a reroll hits it is about
@@ -132,88 +191,50 @@ pub fn fossil_combos_with(
         .collect();
     let want_side: Vec<usize> = want_at.iter().map(|v| pool[v.first().copied().unwrap_or(0)].side.index()).collect();
     let is_suffix: Vec<bool> = pool.iter().map(|m| m.side == Side::Suffix).collect();
-    let fossil_price: Vec<f64> = rows.iter().map(|r| prices[&r.pid]).collect();
-
-    struct Combo {
-        idx: [usize; 4],
-        k: usize,
-        cost: f64,
-    }
-    let mut combos: Vec<Combo> = Vec::new();
+    let combos = combination_weights(rows, pool, &base, &is_suffix, opts.max_fossils);
+    let costs: Vec<_> = combos
+        .iter()
+        .map(|combo| {
+            let Some(&resonator) = prices.get(RESONATORS[combo.k]) else { return f64::INFINITY };
+            let mut fossils = prices[&rows[combo.idx[0]].pid];
+            for &r in &combo.idx[1..combo.k] {
+                fossils += prices[&rows[r].pid];
+            }
+            fossils + resonator + (2.0 + FOSSIL_SECONDS * combo.k as f64) * settings.chaos_per_hour / 3600.0
+        })
+        .collect();
     let mut chances: Vec<f64> = Vec::new(); // combos x wants
-    for k in 1..=opts.max_fossils.min(rows.len()).min(4) {
-        if !prices.contains_key(RESONATORS[k]) {
-            continue;
-        }
-        let mut all: Vec<[usize; 4]> = Vec::new();
-        crate::combinations::for_each(rows.len(), k, |c| {
-            let mut idx = [0; 4];
-            idx[..k].copy_from_slice(c);
-            all.push(idx);
-        });
-        let clicks = (2.0 + FOSSIL_SECONDS * k as f64) * settings.chaos_per_hour / 3600.0;
-        let resonator = prices[RESONATORS[k]];
-        let scored: Vec<(f64, Vec<f64>)> = all
-            .par_iter()
-            .map_init(
-                || vec![0.0f64; pool.len()],
-                |weights, idx| {
-                    for (j, w) in weights.iter_mut().enumerate() {
-                        let mut mult = rows[idx[0]].mult[j];
-                        for &r in &idx[1..k] {
-                            mult *= rows[r].mult[j];
-                        }
-                        *w = base[j] * mult;
-                    }
-                    let mut totals = [0.0f64; 2];
-                    for (w, &suffix) in weights.iter().zip(&is_suffix) {
-                        totals[suffix as usize] += w;
-                    }
-                    let p: Vec<f64> = (0..nw)
-                        .map(|i| {
-                            let total = totals[want_side[i]];
-                            let hit: f64 = want_at[i].iter().map(|&j| weights[j]).sum();
-                            let share = if total > 0.0 { hit / total } else { 0.0 };
-                            1.0 - (1.0 - share.clamp(0.0, 1.0)).powf(opts.mods_per_side)
-                        })
-                        .collect();
-                    let mut fossils = fossil_price[idx[0]];
-                    for &r in &idx[1..k] {
-                        fossils += fossil_price[r];
-                    }
-                    (fossils + resonator + clicks, p)
-                },
-            )
-            .collect();
-        for (idx, (cost, p)) in all.into_iter().zip(scored) {
-            combos.push(Combo { idx, k, cost });
-            chances.extend(p);
-        }
+    for combo in combos.iter() {
+        chances.extend((0..nw).map(|i| {
+            let total = combo.totals[want_side[i]];
+            let hit: f64 = want_at[i].iter().map(|&j| combo.weights[j]).sum();
+            let share = if total > 0.0 { hit / total } else { 0.0 };
+            1.0 - (1.0 - share.clamp(0.0, 1.0)).powf(opts.mods_per_side)
+        }));
     }
 
-    let mut picked: Vec<Vec<usize>> = Vec::new();
+    let mut picked: Vec<usize> = Vec::new();
     'sizes: for size in (1..=nw).rev() {
         let mut subset: Vec<usize> = (0..size).collect();
         loop {
             let mut best: Option<usize> = None;
             let mut best_score = f64::INFINITY;
-            for (n, combo) in combos.iter().enumerate() {
+            for (n, &cost) in costs.iter().enumerate() {
                 let p = &chances[n * nw..(n + 1) * nw];
                 let mut prod = p[subset[0]];
                 for &s in &subset[1..] {
                     prod *= p[s];
                 }
-                let per_hit = combo.cost / prod.max(1e-12);
+                let per_hit = cost / prod.max(1e-12);
                 if per_hit < best_score {
                     best = Some(n);
                     best_score = per_hit;
                 }
             }
-            if let Some(n) = best.filter(|_| best_score < 1e11) {
-                let c = combos[n].idx[..combos[n].k].to_vec();
-                if !picked.contains(&c) {
-                    picked.push(c);
-                }
+            if let Some(n) = best.filter(|_| best_score < 1e11)
+                && !picked.contains(&n)
+            {
+                picked.push(n);
             }
             if picked.len() >= opts.keep {
                 break 'sizes;
@@ -225,17 +246,15 @@ pub fn fossil_combos_with(
     }
 
     let (mut acts, mut profiles) = (Vec::new(), Profiles::new());
-    for combo in picked {
+    for n in picked {
+        let selected = &combos[n];
+        let combo = &selected.idx[..selected.k];
         let name = combo.iter().map(|&i| rows[i].name.as_str()).collect::<Vec<_>>().join("+");
-        let weights = (0..pool.len()).map(|j| {
-            let mut mult = rows[combo[0]].mult[j];
-            for &r in &combo[1..] {
-                mult *= rows[r].mult[j];
-            }
-            base[j] * mult
-        });
         let profile = format!("fossil:{name}");
-        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect());
+        let weights = selected
+            .profile
+            .get_or_init(|| pool.iter().zip(&selected.weights).map(|(m, &w)| (m.id.clone(), w)).collect::<BTreeMap<_, _>>().into());
+        profiles.insert(profile.clone(), weights.clone());
         let mut cost: Cost = combo.iter().map(|&i| (rows[i].pid.clone(), 1.0)).collect();
         cost.push((RESONATORS[combo.len()].to_string(), 1.0));
         let mut a = act(&format!("{name} fossil{}", if combo.len() > 1 { "s" } else { "" }), ActionKind::RerollRare, &[], &[NORMAL, RARE])

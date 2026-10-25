@@ -37,7 +37,7 @@ impl Pane {
             Pane::Recipe => "Recipe",
             Pane::Fractures => "Fractures",
             Pane::Products => "Pivots",
-            Pane::Recomb => "Recomb",
+            Pane::Recomb => "Donors",
             Pane::Finish => "Finish",
             Pane::Log => "Log",
         }
@@ -208,8 +208,8 @@ fn crafts(ui: &mut Ui, s: &mut State) {
                             Col::Item => {
                                 let t = if e.kind == "cluster" { RichText::new(&e.title).italics() } else { RichText::new(&e.title) };
                                 let r = ui.label(t);
-                                if e.error.is_some() {
-                                    r.on_hover_text(e.error.as_deref().unwrap_or_default());
+                                if let Some(error) = e.failure() {
+                                    r.on_hover_text(error);
                                 } else {
                                     r.on_hover_text(format!("{} · {} bases", e.base, e.bases));
                                 }
@@ -225,6 +225,10 @@ fn crafts(ui: &mut Ui, s: &mut State) {
                             }
                             Col::Mods => {
                                 ui.label(e.targets.join(" · "));
+                            }
+                            Col::Craft if e.total().is_none() && e.direct_lower_bound().is_some() => {
+                                ui.label(RichText::new(format!("≥{}", view::money(e.direct_lower_bound(), divine))).monospace())
+                                    .on_hover_text("Certified lower bound. A complete recipe is cheaper, so this search stopped.");
                             }
                             Col::Craft | Col::Fractured | Col::Recomb | Col::Cheapest | Col::Market => {
                                 ui.label(money(col.value(e), divine));
@@ -281,7 +285,9 @@ fn overview(ui: &mut Ui, s: &mut State) {
         }
     });
     ui.add_space(6.0);
-    ui.label(RichText::new("Cheapest way to make each craft against how many ladder characters wear it. Click a point to select it.").weak());
+    ui.label(
+        RichText::new("Cheapest way to make each craft against how many ladder characters wear it. Click a point to select it.").weak(),
+    );
     let shown: std::collections::HashSet<usize> = s.rows.iter().copied().collect();
     let point = |e: &Estimate| Some([e.demand as f64, e.cheapest()?.max(1.0).log10()]);
     let mut series: Vec<Series> =
@@ -317,7 +323,9 @@ fn overview(ui: &mut Ui, s: &mut State) {
         })
         .show(ui, |plot| {
             for (name, color, pts) in &series {
-                plot.points(Points::new(*name, PlotPoints::from(pts.iter().map(|(_, p)| *p).collect::<Vec<_>>())).color(*color).radius(3.0));
+                plot.points(
+                    Points::new(*name, PlotPoints::from(pts.iter().map(|(_, p)| *p).collect::<Vec<_>>())).color(*color).radius(3.0),
+                );
             }
             if let Some(p) = selected {
                 plot.points(Points::new("selected", PlotPoints::from(vec![p])).color(Color32::WHITE).radius(6.0).filled(false));
@@ -352,6 +360,8 @@ fn item(ui: &mut Ui, s: &mut State) {
     let divine = s.divine();
     let e = &s.estimates()[i];
     let mut action = None;
+    let mut resale = s.resale_draft;
+    let mut quote_action = None;
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.heading(&e.title);
@@ -373,7 +383,7 @@ fn item(ui: &mut Ui, s: &mut State) {
                 }
             });
         }
-        if let Some(err) = &e.error {
+        if let Some(err) = e.failure() {
             ui.colored_label(widgets::bad(dark), err);
         }
         ui.add_space(4.0);
@@ -386,19 +396,88 @@ fn item(ui: &mut Ui, s: &mut State) {
         costs(ui, e, divine, dark);
         ui.separator();
         currency(ui, e, divine);
+        if e.protected.is_some() || e.awakener.is_some() {
+            ui.separator();
+            quote_action = resale_controls(ui, e, &mut resale, s.jobs.is_running(&format!("recovery quote #{i}")), divine);
+        }
     });
+    s.resale_draft = resale;
     match action {
         Some(ItemAction::Price) => s.price_selected(),
         Some(ItemAction::Partials) => s.starts_selected(),
-        Some(ItemAction::Recomb) => s.recomb_selected(),
         None => {}
     }
+    if let Some(enabled) = quote_action {
+        s.quote_resale(enabled);
+    }
+}
+
+fn resale_controls(ui: &mut Ui, e: &Estimate, quote: &mut ponder::pipeline::ResaleQuote, busy: bool, divine: f64) -> Option<bool> {
+    let mut apply = None;
+    egui::CollapsingHeader::new("Sell blocked rolls").show(ui, |ui| {
+        ui.set_max_width((ui.clip_rect().right() - ui.cursor().left()).max(0.0));
+        ui.add(
+            egui::Label::new(
+                "Quote full items that retain the valuable crafting core. Annul risk and replacement costs are compared automatically.",
+            )
+            .wrap(),
+        );
+        for (label, value, suffix) in [
+            ("Sale proceeds", &mut quote.proceeds, " c"),
+            ("Replacement bases", &mut quote.replacement_base, " c"),
+            ("Trade time", &mut quote.trade_seconds, " s"),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(value).range(0.0..=f64::MAX).suffix(suffix));
+            });
+        }
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!busy, egui::Button::new("Apply quote")).clicked() {
+                apply = Some(true);
+            }
+            if ui.add_enabled(!busy, egui::Button::new("Clear quote")).clicked() {
+                apply = Some(false);
+            }
+        });
+        let (thresholds, error) = if let Some(r) = e.protected.as_ref().filter(|_| e.cheapest_route() != Some(CraftRoute::Awakener)) {
+            (&r.sale_thresholds, &r.sale_error)
+        } else {
+            let r = e.awakener.as_ref().expect("recovery route");
+            (&r.sale_thresholds, &r.sale_error)
+        };
+        if let Some(core) = e.recovery_core()
+            && let Some(p) = &e.problem
+        {
+            let names = p
+                .targets
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| core.targets & (1 << i) != 0)
+                .map(|(_, t)| t.name.as_str())
+                .collect::<Vec<_>>();
+            ui.add(egui::Label::new(format!("Quote applies while retaining: {}", names.join(" + "))).wrap());
+        }
+        if let Some(error) = error {
+            ui.colored_label(widgets::bad(ui.visuals().dark_mode), error);
+        }
+        ui.add(
+            egui::Label::new("Break-even sale prices include replacement bases and trade time, compared with continuing without sales.")
+                .wrap(),
+        );
+        let replacement = quote.replacement_base + quote.trade_seconds * e.settings.chaos_per_hour / 3600.0;
+        for t in thresholds {
+            ui.add(
+                egui::Label::new(format!("Break-even {} · {}", view::money(Some(t.premium + replacement), divine), t.description)).wrap(),
+            );
+        }
+    });
+    apply
 }
 
 enum ItemAction {
     Price,
     Partials,
-    Recomb,
 }
 
 fn actions(ui: &mut Ui, s: &State, e: &Estimate) -> Option<ItemAction> {
@@ -421,13 +500,6 @@ fn actions(ui: &mut Ui, s: &State, e: &Estimate) -> Option<ItemAction> {
             .clicked()
         {
             action = Some(ItemAction::Partials);
-        }
-        if ui
-            .add_enabled(e.kind == "gear" && !busy(s, "recombinator"), egui::Button::new("Plan recomb"))
-            .on_hover_text("Compare recombination trees")
-            .clicked()
-        {
-            action = Some(ItemAction::Recomb);
         }
         if ui.button("Copy JSON").clicked() {
             ui.ctx().copy_text(serde_json::to_string_pretty(&e.to_dict()).unwrap_or_default());
@@ -457,9 +529,21 @@ fn costs(ui: &mut Ui, e: &Estimate, divine: f64, dark: bool) {
         let craft_cost = match route {
             Some(CraftRoute::Fracture(i)) => e.fractures[i].plan.as_ref().map(|p| p.cost),
             Some(CraftRoute::Recomb) => e.recomb.as_ref().and_then(|r| r.cost),
+            Some(CraftRoute::Awakener) => e.awakener.as_ref().map(|r| r.cost),
+            Some(CraftRoute::Protected) => e.protected.as_ref().map(|r| r.cost),
             _ => e.craft_cost(),
         };
-        line(ui, if route == Some(CraftRoute::Recomb) { "recomb" } else { "craft" }, money(craft_cost, divine), String::new());
+        line(
+            ui,
+            match route {
+                Some(CraftRoute::Recomb) => "recomb",
+                Some(CraftRoute::Awakener) => "Awakener",
+                Some(CraftRoute::Protected) => "protected craft",
+                _ => "craft",
+            },
+            money(craft_cost, divine),
+            String::new(),
+        );
         if !e.bench.is_empty() {
             line(ui, "bench", money(Some(e.bench_cost()), divine), e.bench.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join(", "));
         }
@@ -473,12 +557,24 @@ fn costs(ui: &mut Ui, e: &Estimate, divine: f64, dark: bool) {
         line(ui, "total", money(e.cheapest(), divine).strong(), String::new());
         if route != Some(CraftRoute::Craft) && e.total().is_some() {
             line(ui, "scratch", money(e.total(), divine), String::new());
+        } else if let Some(lower) = e.direct_lower_bound() {
+            line(
+                ui,
+                "scratch",
+                RichText::new(format!("≥{}", view::money(Some(lower), divine))).monospace(),
+                "A complete recipe is cheaper".into(),
+            );
         }
-        if fracture.is_none() && let Some(f) = e.best_fracture() {
+        if fracture.is_none()
+            && let Some(f) = e.best_fracture()
+        {
             line(ui, "fractured", money(f.total(), divine), f.target.clone());
         }
         if e.recomb.is_some() && route != Some(CraftRoute::Recomb) {
             line(ui, "recomb", money(e.recomb_total(), divine), String::new());
+        }
+        if e.awakener.is_some() && route != Some(CraftRoute::Awakener) {
+            line(ui, "Awakener", money(e.awakener_total(), divine), String::new());
         }
         let listed = e.market.map(|m| format!("{} listed", m.1)).or_else(|| e.market_error.clone()).unwrap_or_default();
         line(ui, "market", money(e.market.map(|m| m.0), divine), listed);
@@ -506,16 +602,16 @@ fn mods(ui: &mut Ui, e: &Estimate, dark: bool) {
 }
 
 fn currency(ui: &mut Ui, e: &Estimate, divine: f64) {
-    let Some((_, plan)) = e.cheapest_plan() else { return };
-    let mut usage: Vec<(&str, f64)> = plan.usage.iter().filter(|(_, n)| **n >= 0.05).map(|(a, n)| (a.as_str(), *n)).collect();
-    usage.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    let currency = plan.currency(&e.settings);
-    let title = if matches!(e.cheapest_route(), Some(CraftRoute::Fracture(_))) { "Finishing currency" } else { "Currency" };
-    ui.label(RichText::new(title).strong());
+    let Some(currency) = e.currency_cost() else {
+        return;
+    };
+    let hours = e.clicking_hours().unwrap_or(0.0);
+    let usage = e.usage();
+    ui.label(RichText::new("Currency").strong());
     let most = usage.iter().map(|u| u.1).fold(0.0, f64::max).max(1e-9);
     egui::Grid::new("usage").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
         for (action, n) in usage.iter().filter(|u| u.1 >= 0.05) {
-            ui.label(*action);
+            ui.label(action);
             ui.label(RichText::new(if *n >= 10.0 { format!("{n:.0}") } else { format!("{n:.1}") }).monospace());
             ui.add(egui::ProgressBar::new((*n / most) as f32).desired_width(160.0).desired_height(8.0));
             ui.end_row();
@@ -523,15 +619,26 @@ fn currency(ui: &mut Ui, e: &Estimate, divine: f64) {
     });
     ui.label(
         RichText::new(format!(
-            "{} currency · {} · {} time",
+            "{} net spend · {} · {} time",
             view::money(Some(currency), divine),
-            view::hours(plan.hours),
-            view::money(Some(plan.cost - currency), divine),
+            view::hours(hours),
+            view::money(Some(hours * e.settings.chaos_per_hour), divine),
         ))
         .weak(),
-    ).on_hover_text(format!("Time charged at {:.0}c/h · {} solver states", e.settings.chaos_per_hour, plan.states));
-    if let Some(b) = plan.bounds.filter(|b| b.spread(plan.cost) >= 0.005) {
-        ui.label(RichText::new(format!("certified {} – {}", view::money(Some(b.lower), divine), view::money(Some(b.upper), divine))).weak()).on_hover_text(
+    )
+    .on_hover_text(format!("Time charged at {:.0}c/h", e.settings.chaos_per_hour));
+    if let Some((_, plan)) = e.cheapest_plan()
+        && plan.bounds.spread(plan.cost) >= 0.005
+    {
+        ui.label(
+            RichText::new(format!(
+                "certified {} – {}",
+                view::money(Some(plan.bounds.lower), divine),
+                view::money(Some(plan.bounds.upper), divine)
+            ))
+            .weak(),
+        )
+        .on_hover_text(
             "The solver counts other mods without knowing which they are, so its chances are estimates.\n\
              No way of crafting, even reading every mod, expects to spend less than the first figure;\n\
              this plan expects to spend at most the second. Both hold for the solver's game model.",
@@ -553,8 +660,27 @@ fn recipe(ui: &mut Ui, s: &mut State) {
     let Some(i) = no_selection(ui, s) else { return };
     let dark = ui.visuals().dark_mode;
     let e = &s.estimates()[i];
+    if e.cheapest_route() == Some(CraftRoute::Protected)
+        && let Some(r) = &e.protected
+    {
+        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            ui.strong(format!("Prepare {}es · {:.2} expected runs", r.side.name(), 1.0 + r.finishing.restarts));
+            compact_recipe(ui, &ponder_core::steps(&r.preparation, &r.plan, 0.02));
+            ui.strong(&r.cleanup.name);
+            ui.strong("Finish the protected item");
+            compact_recipe(ui, &e.steps());
+            recovery_summary(ui, &r.finishing, s.divine());
+        });
+        return;
+    }
     if e.cheapest_route() == Some(CraftRoute::Recomb) {
         recomb(ui, s);
+        return;
+    }
+    if let Some(r) = &e.awakener
+        && e.cheapest_route() == Some(CraftRoute::Awakener)
+    {
+        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| awakener_recipe(ui, r, s.divine()));
         return;
     }
     let Some((problem, plan)) = e.cheapest_plan() else {
@@ -576,7 +702,11 @@ fn recipe(ui: &mut Ui, s: &mut State) {
     let (mut go, mut pick) = (None, None);
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         for st in &steps {
-            let frame = egui::Frame::group(ui.style()).fill(if s.highlighted_step == Some(st.number) { ui.visuals().selection.bg_fill.gamma_multiply(0.3) } else { Color32::TRANSPARENT });
+            let frame = egui::Frame::group(ui.style()).fill(if s.highlighted_step == Some(st.number) {
+                ui.visuals().selection.bg_fill.gamma_multiply(0.3)
+            } else {
+                Color32::TRANSPARENT
+            });
             let r = frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
@@ -651,7 +781,14 @@ fn fractures(ui: &mut Ui, s: &mut State) {
     let divine = s.divine();
     donor_range(ui, &mut s.saved.donors.fracture);
     let range = s.saved.donors.fracture;
-    ui.label(RichText::new(format!("Regal magic donors, then fill to 4 modifiers before fracturing; up to {} added modifiers.", 4usize.saturating_sub(range[0]))).weak().small());
+    ui.label(
+        RichText::new(format!(
+            "Regal magic donors, then fill to 4 modifiers before fracturing; up to {} added modifiers.",
+            4usize.saturating_sub(range[0])
+        ))
+        .weak()
+        .small(),
+    );
     let league = s.data.as_ref().map_or("Standard", |d| d.report.league.as_str());
     let e = &s.estimates()[i];
     if e.fractures.is_empty() {
@@ -661,7 +798,10 @@ fn fractures(ui: &mut Ui, s: &mut State) {
     for f in &e.fractures {
         if let Some(query) = &f.donor_query {
             let query = ponder::pipeline::donor_mod_range(query, range[0], range[1]);
-            ui.hyperlink_to(format!("Buy donor: {}", ponder::pipeline::short_name(&f.target, 42)), ponder_net::trade::search_url(league, &query));
+            ui.hyperlink_to(
+                format!("Buy donor: {}", ponder::pipeline::short_name(&f.target, 42)),
+                ponder_net::trade::search_url(league, &query),
+            );
         }
     }
     let scratch = e.total();
@@ -689,7 +829,12 @@ fn fractures(ui: &mut Ui, s: &mut State) {
                         }
                     });
                     row.col(|ui| {
-                        ui.label(money(f.craft_cost(), divine));
+                        if let Some(lower) = f.craft_lower_bound.filter(|_| f.plan.is_none()) {
+                            ui.label(RichText::new(format!("≥{}", view::money(Some(lower + f.bench_cost), divine))).monospace())
+                                .on_hover_text("Certified lower bound. A complete recipe is cheaper, so this search stopped.");
+                        } else {
+                            ui.label(money(f.craft_cost(), divine));
+                        }
                     });
                     row.col(|ui| {
                         let r = ui.label(money(f.base_price.map(|b| b.0), divine));
@@ -855,8 +1000,12 @@ fn recomb(ui: &mut Ui, s: &mut State) {
     let range = s.saved.donors.recomb;
     let league = s.data.as_ref().map_or("Standard", |d| d.report.league.as_str());
     let e = &s.estimates()[i];
+    if let Some(recipe) = &e.awakener {
+        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| awakener_recipe(ui, recipe, divine));
+        return;
+    }
     let Some(r) = &e.recomb else {
-        empty(ui, "Use Plan recomb to compare trees");
+        empty(ui, "No donor route applies to this craft");
         return;
     };
     ui.horizontal(|ui| {
@@ -866,13 +1015,24 @@ fn recomb(ui: &mut Ui, s: &mut State) {
     });
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         if let Some(donors) = r.json["donors"].as_array().filter(|d| !d.is_empty()) {
-            ui.strong("Buy donor starts");
-            ui.label(RichText::new("Listing prices and cleanup or padding are additional to the crafted-donor estimate.").weak().small());
-            for donor in donors {
-                let required = donor["required_mods"].as_u64().unwrap_or(1) as usize;
-                let query = ponder::pipeline::donor_mod_range(&donor["query"], range[0].max(required), range[1].max(required));
+            ui.strong("Prepare donors");
+            for (i, donor) in donors.iter().enumerate() {
                 let targets = donor["targets"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(" + ");
-                ui.hyperlink_to(format!("{}: {targets}", donor["base"].as_str().unwrap_or("donor")), ponder_net::trade::search_url(league, &query));
+                ui.label(format!(
+                    "{}: {targets} · {:.2} expected copies",
+                    donor["base"].as_str().unwrap_or("donor"),
+                    donor["copies"].as_f64().unwrap_or(1.0)
+                ));
+                if donor["query"].is_object() {
+                    let required = donor["required_mods"].as_u64().unwrap_or(1) as usize;
+                    let query = ponder::pipeline::donor_mod_range(&donor["query"], range[0].max(required), range[1].max(required));
+                    ui.hyperlink_to("Find donor start", ponder_net::trade::search_url(league, &query));
+                }
+                if let Some((donor, _)) = r.donors.get(i)
+                    && let Some((p, plan)) = donor.problem.as_ref().zip(donor.plan.as_ref())
+                {
+                    compact_recipe(ui, &ponder_core::steps(p, plan, 0.02));
+                }
             }
             ui.separator();
         }
@@ -881,7 +1041,72 @@ fn recomb(ui: &mut Ui, s: &mut State) {
             object.remove("donors");
         }
         json_tree(ui, "recomb", &tree, divine);
+        if let Some((p, plan)) = e.problem.as_ref().zip(r.finishing.as_ref()) {
+            ui.strong("Finish recombined item");
+            compact_recipe(ui, &ponder_core::steps(p, plan, 0.02));
+            if let Some(recovery) = &r.recovery
+                && plan.restarts > 0.0
+            {
+                ui.strong("Rebuild the crafting core after failed finishing");
+                compact_recipe(ui, &ponder_core::steps(&recovery.preparation, &recovery.plan, 0.02));
+                ui.label(&recovery.cleanup.name);
+                recovery_summary(ui, plan, divine);
+            }
+        }
     });
+}
+
+fn awakener_recipe(ui: &mut Ui, r: &ponder::awakener::Recipe, divine: f64) {
+    ui.label(RichText::new("Awakener’s Orb").strong());
+    ui.label(format!("{:.2} expected donor pairs and transfers, including retries", 1.0 + r.restarts));
+    for donor in &r.donors {
+        ui.label(format!("Prepare {} {} with {}", donor.influence, donor.base, donor.target));
+        ui.label(view::money(Some(donor.cost), divine));
+        if let Some(url) = &donor.trade_url {
+            ui.hyperlink_to("Find donor", url);
+        }
+        compact_recipe(ui, &donor.steps);
+    }
+    ui.label(format!("Transfer both modifiers, then reforge the remaining affixes · {}", view::money(Some(r.orb_cost), divine)));
+    ui.label(format!("Expected cost to finish after reforging: {}", view::money(Some(r.finish), divine)));
+    compact_recipe(ui, &r.finish_steps);
+    if let Some(plan) = &r.finishing {
+        recovery_summary(ui, plan, divine);
+    }
+    if !r.restart_conditions.is_empty() {
+        egui::CollapsingHeader::new("Repeat donor preparation and transfer for these outcomes").show(ui, |ui| {
+            for condition in &r.restart_conditions {
+                ui.label(condition);
+            }
+        });
+    }
+}
+
+fn recovery_summary(ui: &mut Ui, plan: &ponder_core::Plan, divine: f64) {
+    if plan.restarts > 0.0 {
+        ui.label(format!(
+            "Expected recovery: {:.2} rebuilds, {:.2} sales · proceeds {}",
+            plan.restarts - plan.sales,
+            plan.sales,
+            view::money(Some(plan.sale_proceeds), divine)
+        ));
+        ui.label("If an annul loses the crafting core, repeat preparation. Recovery costs are included.");
+    }
+}
+
+fn compact_recipe(ui: &mut Ui, steps: &[ponder_core::Step]) {
+    for step in steps {
+        for (action, when, per_visit) in &step.actions {
+            ui.label(format!(
+                "{action} ×{:.2}{}",
+                per_visit * step.reached,
+                if when.is_empty() { String::new() } else { format!(" · {when}") }
+            ));
+        }
+        for exit in step.exits.iter().filter(|exit| exit.to.is_none() && exit.kind == "back") {
+            ui.label(RichText::new(format!("{}: {}", view::percent(exit.chance), exit.what)).weak());
+        }
+    }
 }
 
 fn donor_range(ui: &mut Ui, range: &mut [usize; 2]) {
@@ -901,7 +1126,10 @@ fn json_tree(ui: &mut Ui, id: &str, v: &Value, divine: f64) {
             for (k, x) in m {
                 match x {
                     Value::Object(_) | Value::Array(_) if !is_flat(x) => {
-                        egui::CollapsingHeader::new(k).id_salt((id, k)).default_open(true).show(ui, |ui| json_tree(ui, &format!("{id}.{k}"), x, divine));
+                        egui::CollapsingHeader::new(k)
+                            .id_salt((id, k))
+                            .default_open(true)
+                            .show(ui, |ui| json_tree(ui, &format!("{id}.{k}"), x, divine));
                     }
                     _ => {
                         ui.horizontal_wrapped(|ui| {
@@ -914,7 +1142,10 @@ fn json_tree(ui: &mut Ui, id: &str, v: &Value, divine: f64) {
         }
         Value::Array(a) => {
             for (n, x) in a.iter().enumerate() {
-                egui::CollapsingHeader::new(format!("{}", n + 1)).id_salt((id, n)).default_open(true).show(ui, |ui| json_tree(ui, &format!("{id}.{n}"), x, divine));
+                egui::CollapsingHeader::new(format!("{}", n + 1))
+                    .id_salt((id, n))
+                    .default_open(true)
+                    .show(ui, |ui| json_tree(ui, &format!("{id}.{n}"), x, divine));
             }
         }
         x => {
@@ -935,7 +1166,9 @@ fn scalar(key: &str, v: &Value, divine: f64) -> RichText {
     match v {
         Value::Number(n) if ["cost", "total", "back", "price"].iter().any(|k| key.contains(k)) => money(n.as_f64(), divine),
         Value::Number(n) if key.contains("chance") => RichText::new(view::percent(n.as_f64().unwrap_or(0.0))),
-        Value::Array(a) => RichText::new(a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => {
+            RichText::new(a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(", "))
+        }
         Value::String(s) => RichText::new(s),
         Value::Null => RichText::new("–").weak(),
         x => RichText::new(x.to_string()).monospace(),
@@ -978,7 +1211,15 @@ fn finish(ui: &mut Ui, s: &mut State) {
             ui.colored_label(widgets::bad(dark), e);
         }
         Some(Ok(f)) => {
-            ui.label(RichText::new(format!("{} ({}) · {}", if f.item.item.name.is_empty() { &f.item.item.base } else { &f.item.item.name }, f.item.item.base, f.group)).strong());
+            ui.label(
+                RichText::new(format!(
+                    "{} ({}) · {}",
+                    if f.item.item.name.is_empty() { &f.item.item.base } else { &f.item.item.name },
+                    f.item.item.base,
+                    f.group
+                ))
+                .strong(),
+            );
             ui.horizontal_wrapped(|ui| {
                 for m in &f.item.mods {
                     chip(ui, &format!("{}{}", m.family, m.tier.map(|t| format!(" T{t}")).unwrap_or_default()));
