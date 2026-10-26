@@ -53,5 +53,8 @@ max = 1
 else = 2
 
 [[steps]]
-do = ["bench:accuracy-strength-and-dexterity", "exalted", "bench:physical-damage-over-time-multiplier"]
+do = ["bench:accuracy-strength-and-dexterity", "exalted", "bench:remove-crafted", "bench:physical-damage-over-time-multiplier"]
 until = "goal"
+max = 1
+else = 4
+note = "The accuracy craft blocks a prefix for the exalt; full suffixes go back to the reforge."
