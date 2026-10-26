@@ -103,8 +103,8 @@ every operation.
 3. **The state is derived, not designed.** The goal plus the active operations decide which
    item facts the solver distinguishes. Operations declare what they read (groups, tags, sides,
    flags); everything else is summarized. No per-mechanic hand-written state fields.
-   Untracked mods count per side; their effect on later draw weights uses the side's average
-   weight. The simulator check (immutable 5) catches the cases where that estimate is too rough,
+   Untracked mods count per class; a class holding k mods keeps the weight expected after k
+   weight-proportional draws without replacement over its groups. The simulator check (immutable 5) catches the cases where that estimate is too rough,
    and the fix is to track more facts, not to tune the estimate.
 4. **Exact where cheap, sampled where not.** An operation may provide an exact outcome
    distribution. Otherwise its outcomes are estimated by sampling, and the plan is marked
@@ -147,7 +147,10 @@ the goals and operations (SPEC §5.3).
 
 Lens classes split mods only where it changes an outcome: by goal need, tracked group, a tag
 that a draw, removal or ban filters on, influence and unveil preference. Fossil and veiled mods
-join the natural mods they share these with, since they differ only in their weights.
+join the natural mods they share these with, since they differ only in their weights. Tracked
+mods key on all their tracked groups (a hybrid's conflicts are not its parts'); untracked mods
+also split by the draw pools that can roll them, so a mod a pool cannot roll (a fracture, an
+earlier fossil's) never counts as one of that pool's draws.
 
 Still to come in the same shape: observation steps (Awakener preview: draw offers, then choose), operations on two items (recombinator, Awakener), and **subgoal generators**:
 the intermediates a mechanic makes useful (a recombinator suggests "only these mods on this
@@ -163,7 +166,8 @@ by repeating operations"), it finds the cheapest policy over the derived states:
 shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
 goal, and solves strongly connected components from the goal backwards with exact policy
 evaluation inside each; evaluation splits again by the components of the chosen policy's graph,
-so each linear solve is only as large as one loop. A fixed policy (a guide recipe) may give up:
+so each linear solve is only as large as one loop: dense elimination up to 1500 states,
+Gauss-Seidel with self-loops eliminated beyond. A fixed policy (a guide recipe) may give up:
 states it can never finish restart instead, as a crafter abandons a bricked item. Starting over is a restart state worth the start's own value, found by
 Newton steps on the start's affine value, so buying fresh does not merge every state into one
 component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
