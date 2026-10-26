@@ -47,6 +47,18 @@ pub struct Base {
     pub tags: Vec<String>,
 }
 
+/// A cluster jewel size and the small passives its enchant can grant.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterJewel {
+    pub name: String,
+    pub passive_skills: Vec<ClusterPassive>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterPassive {
+    pub tag: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Essence {
     pub name: String,
@@ -92,6 +104,7 @@ pub struct Repoe {
     pub essences: BTreeMap<String, Essence>,
     pub fossils: BTreeMap<String, Fossil>,
     pub bench: Vec<BenchOption>,
+    pub clusters: BTreeMap<String, ClusterJewel>,
 }
 
 impl Repoe {
@@ -102,6 +115,7 @@ impl Repoe {
             essences: read(dir, "essences")?,
             fossils: read(dir, "fossils")?,
             bench: read(dir, "crafting_bench_options")?,
+            clusters: read(dir, "cluster_jewels")?,
         })
     }
 

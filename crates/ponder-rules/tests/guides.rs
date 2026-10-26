@@ -158,7 +158,7 @@ fn guides_name_real_things() {
                 Ok(t) => {
                     for (need, req) in t.needs.iter().zip(&goal.mods) {
                         let known = KNOWN.iter().any(|k| k.0 == name && (k.1 == target || k.1 == "*"));
-                        if !known && !need.ok.iter().any(|m| obtainable(&game, &guide.base, *m)) {
+                        if !known && !need.ok.iter().any(|m| obtainable(&game, &guide.base_name(), *m)) {
                             if raw_obtainable(&repoe, guide, &goal, req) {
                                 deferred.insert(name);
                             } else {

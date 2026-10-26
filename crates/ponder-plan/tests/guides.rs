@@ -60,12 +60,9 @@ impl From<&str> for CheckError {
 }
 
 fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result<Option<Outcome>, CheckError> {
-    if !guide.base_tags.is_empty() {
-        return Err("additional base tags are not modelled".into());
-    }
     let assumptions = Assumptions::default();
     let ctx = Ctx { game, assumptions: &assumptions };
-    let base = game.base(&guide.base).ok_or("unknown base")?;
+    let base = game.base(&guide.base_name()).ok_or("unknown base")?;
     let kind = Kind { base, ilvl: guide.ilvl.unwrap_or(100), influences: Influences::of(&guide.influences) };
     let class = game.bases[base.0 as usize].class.clone();
 
@@ -74,7 +71,7 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
     let mut index = HashMap::new();
     for name in &names {
         let goal = guide.target(name).unwrap();
-        if goal.base.as_deref() != Some(&guide.base) {
+        if goal.base != Some(guide.base_name()) {
             return Err(format!("stage {name} is another base").into());
         }
         index.insert(name.clone(), targets.len());
@@ -252,7 +249,10 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         );
         times.push(clock.elapsed().as_secs_f64());
         if std::env::var("STATS").is_ok() {
-            println!("  {item}: {} states, {:?}", best.states.len(), best.stats);
+            let mut found: Vec<(String, usize)> = best.stats.found.iter().map(|(&a, &n)| (craft.action_name(a), n)).collect();
+            found.sort_by_key(|f| std::cmp::Reverse(f.1));
+            println!("  {item}: {} explored, {} kept; found by {found:?}", best.explored, best.states.len());
+            println!("  {item}: {:?}", ponder_solve::Stats { found: Default::default(), ..best.stats.clone() });
             stats(&craft, &best, &lens);
         }
         let followed = craft.follow(&best, 500, 1_000_000);
@@ -311,29 +311,6 @@ fn stats(craft: &Craft, best: &ponder_solve::Solution<Node>, lens: &Lens) {
         }
     }
     println!("  states the best policy visits: {}", seen.len());
-    // Which action first reaches each state, breadth first over every action.
-    let mut first: std::collections::HashMap<Node, String> = Default::default();
-    let mut queue = std::collections::VecDeque::from([Node::Market]);
-    first.insert(Node::Market, "start".into());
-    while let Some(n) = queue.pop_front() {
-        let Some(&i) = best.index.get(&n) else { continue };
-        let _ = i;
-        for (a, _) in ponder_solve::Model::actions(craft, &n) {
-            for (_, t) in ponder_solve::Model::outcomes(craft, &n, a) {
-                if !first.contains_key(&t) {
-                    first.insert(t.clone(), craft.action_name(a));
-                    queue.push_back(t);
-                }
-            }
-        }
-    }
-    let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
-    for a in first.values() {
-        *by.entry(a.as_str()).or_default() += 1;
-    }
-    let mut by: Vec<_> = by.into_iter().collect();
-    by.sort_by_key(|e| std::cmp::Reverse(e.1));
-    println!("  first reached by: {by:?}");
     // Distinct states once each decoration is forgotten.
     let n = lens.classes();
     let items: Vec<&ponder_rules::lens::State> = best.states.iter().filter_map(|s| if let Node::Item(s) = s { Some(s) } else { None }).collect();
@@ -351,8 +328,29 @@ fn stats(craft: &Craft, best: &ponder_solve::Solution<Node>, lens: &Lens) {
         t
     };
     println!("  items {}; without eldritch {}; unfractured {}; uncrafted {}; all three {}", items.len(), distinct(&plain), distinct(&unfractured), distinct(&uncrafted), distinct(&|s| uncrafted(&unfractured(&plain(s)))));
+    // States by their decorations: fractured, crafted, unveiled and veiled mods.
+    let has = |s: &ponder_rules::lens::State, word: &str| -> usize {
+        (0..n).filter(|&c| lens.describe(c).contains(word)).map(|c| s.counts[c] as usize).sum()
+    };
+    let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+    for s in &items {
+        let fractured: usize = s.counts[n..].iter().map(|&c| c as usize).sum();
+        let key = format!(
+            "{:?}{} fr{} cr{} unveiled{} veil{}",
+            s.rarity,
+            s.counts.iter().map(|&c| c as usize).sum::<usize>(),
+            fractured,
+            has(s, "crafted: true"),
+            has(s, "rank: 1") + has(s, "rank: 2") + has(s, "rank: 3"),
+            has(s, "veil: true"),
+        );
+        *by.entry(key).or_default() += 1;
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|e| std::cmp::Reverse(e.1));
+    println!("  by decoration: {:?}", &by[..by.len().min(25)]);
     for c in 0..n {
-        println!("    class {c}: {}", lens.describe(c));
+        println!("    class {c}: {}", lens.describe(c).chars().take(300).collect::<String>());
     }
 }
 

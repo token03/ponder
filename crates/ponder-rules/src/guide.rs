@@ -62,10 +62,16 @@ fn main() -> String {
 }
 
 impl Guide {
+    /// The base as `Game` names it, enchant tags included.
+    pub fn base_name(&self) -> String {
+        let tags: Vec<&str> = self.base_tags.iter().map(String::as_str).collect();
+        crate::game::enchanted(&self.base, &tags)
+    }
+
     /// A stage or the goal by name, with the guide's item defaults filled in.
     pub fn target(&self, name: &str) -> Option<Goal> {
         let mut g = if name == "goal" { self.goal.clone() } else { self.stages.get(name)?.clone() };
-        g.base.get_or_insert_with(|| self.base.clone());
+        g.base.get_or_insert_with(|| self.base_name());
         if g.ilvl.is_none() {
             g.ilvl = self.ilvl;
         }

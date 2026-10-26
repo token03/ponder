@@ -40,7 +40,7 @@ until = "goal"
 "#,
     )
     .unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 86, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 86, influences: Influences::default() };
     let targets = vec![Target::compile(&game, &guide.target("goal").unwrap()).unwrap()];
     let assumptions = Assumptions::default();
     let ctx = Ctx { game: &game, assumptions: &assumptions };
@@ -64,7 +64,7 @@ fn products_are_projected_for_the_consuming_goal() {
     let game = game();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root.join("fixtures/guides/cheap-high-es-regalia.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 86, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 86, influences: Influences::default() };
     let mut flat = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
     let mut percent = Target::compile(&game, &guide.target("percent").unwrap()).unwrap();
     let hybrid = Target::compile(&game, &guide.target("hybrid").unwrap()).unwrap();
@@ -119,7 +119,7 @@ fn recombination_cannot_finish_before_its_bonus_roll() {
     let game = game();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root.join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 83, influences: Influences::default() };
     let mut goal = guide.target("flat").unwrap();
     goal.max_mods = Some(1);
     let target = Target::compile(&game, &goal).unwrap();
@@ -145,7 +145,7 @@ fn a_transmutation_needs_scouring_before_it_can_retry() {
     let game = game();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root.join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 83, influences: Influences::default() };
     let target = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
     let assumptions = Assumptions::default();
     let ctx = Ctx { game: &game, assumptions: &assumptions };

@@ -65,6 +65,8 @@ pub struct Stats {
     pub values: f64,
     /// Newton steps on the worth of starting over.
     pub newton: usize,
+    /// Per action id, how many states it was first to reach: where the state space comes from.
+    pub found: std::collections::BTreeMap<usize, usize>,
 }
 
 
@@ -168,8 +170,12 @@ fn solve_within<M: Model>(
         for (value, out) in expanded {
             let mut successors = Vec::new();
             for (action, cost, to) in out {
+                let known = states.len();
                 let to =
                     to.into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| intern(t, &mut states).map(|i| (p, i))).collect::<Result<_, _>>()?;
+                if states.len() > known {
+                    *stats.found.entry(action).or_default() += states.len() - known;
+                }
                 successors.push(Edge { action, cost, to });
             }
             end.push(value.is_some());

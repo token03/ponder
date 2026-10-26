@@ -277,7 +277,7 @@ fn recombination_matches_sampled_items() {
 fn recombination_cache_tracks_keep_count_weights() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 83, influences: Influences::default() };
     let target = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
     let item = target.witness(&game, kind).unwrap();
     let partner = Arc::new(Handful { items: vec![Item::new(kind)] });
@@ -307,7 +307,7 @@ fn both_locks_preserve_the_ama_tagged_reforge_setup() {
         ("ama-328-minion-life-recovery-shield", "main_2", "natural", "minion"),
     ] {
         let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join(format!("fixtures/guides/{name}.toml"))).unwrap()).unwrap();
-        let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: guide.ilvl.unwrap(), influences: Influences::of(&guide.influences) };
+        let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: guide.ilvl.unwrap(), influences: Influences::of(&guide.influences) };
         let class = &game.bases[kind.base.0 as usize].class;
         let mut item = Target::compile(&game, &guide.target(start).unwrap()).unwrap().witness(&game, kind).unwrap();
         let mut keep = guide.target("protected").unwrap();
@@ -350,7 +350,7 @@ fn permanent_conflicts_are_pruned_only_when_they_cannot_be_removed() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide =
         toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-high-es-regalia.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 86, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 86, influences: Influences::default() };
     let flat = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
     let mut fractured = flat.clone();
     fractured.needs[0].fractured = true;
@@ -403,7 +403,7 @@ fn unused_roll_counts_do_not_duplicate_item_outcomes() {
 fn essence_origin_is_tracked_only_when_the_goal_distinguishes_it() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 83, influences: Influences::default() };
     let mut goal = guide.target("flat").unwrap();
     goal.rarity = None;
     let target = Target::compile(&game, &goal).unwrap();
@@ -434,7 +434,7 @@ fn essence_origin_is_tracked_only_when_the_goal_distinguishes_it() {
 fn overlapping_requirements_still_need_distinct_affixes() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
-    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 83, influences: Influences::default() };
     let mut flat = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
     let mut percent = Target::compile(&game, &guide.target("percent").unwrap()).unwrap();
     flat.rarity = None;

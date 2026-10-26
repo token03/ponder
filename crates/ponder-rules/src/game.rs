@@ -39,12 +39,17 @@ pub struct ModDef {
     spawn: Vec<(TagId, u32)>,
     /// Percent multipliers by tag.
     generation: Vec<(TagId, u32)>,
+    domain: String,
 }
 
+#[derive(Clone)]
 pub struct BaseDef {
     pub name: String,
     pub class: String,
     tags: Vec<TagId>,
+    /// Which mods roll here: RePoE's mod domain (`item`, `misc` for jewels, `abyss_jewel`,
+    /// `affliction_jewel` for clusters).
+    domain: String,
 }
 
 /// Everything that decides which mods can roll: base, item level and influences.
@@ -150,6 +155,7 @@ impl Game {
                     .find(|i| m.spawn_weights.iter().any(|w| w.weight > 0 && w.tag.ends_with(&format!("_{}", i.tag())))),
                 spawn: m.spawn_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
                 generation: m.generation_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
+                domain: m.domain.clone(),
             };
             let id = ModId(game.mods.len() as u32);
             game.mod_ids.insert(key.clone(), id);
@@ -165,7 +171,19 @@ impl Game {
             }
             let tags = b.tags.iter().map(|t| game.tag(t)).collect();
             game.base_ids.insert(b.name.clone(), BaseId(game.bases.len() as u32));
-            game.bases.push(BaseDef { name: b.name.clone(), class: b.item_class.clone(), tags });
+            game.bases.push(BaseDef { name: b.name.clone(), class: b.item_class.clone(), tags, domain: b.domain.clone() });
+        }
+        // A cluster jewel's enchant (its small passives) is fixed and decides which notables
+        // roll, so each enchant is a base of its own: "Large Cluster Jewel [affliction_cold_damage]".
+        for cluster in repoe.clusters.values() {
+            let Some(&BaseId(b)) = game.base_ids.get(&cluster.name) else { continue };
+            for passive in &cluster.passive_skills {
+                let mut base = game.bases[b as usize].clone();
+                base.name = enchanted(&cluster.name, &[passive.tag.as_str()]);
+                base.tags.push(game.tag(&passive.tag));
+                game.base_ids.insert(base.name.clone(), BaseId(game.bases.len() as u32));
+                game.bases.push(base);
+            }
         }
         game
     }
@@ -233,6 +251,10 @@ impl Game {
             if !matches!(m.source, Source::Natural | Source::Influence | Source::Fossil | Source::Veiled) {
                 continue;
             }
+            // Natural mods belong to one kind of item: equipment, jewels, abyss or cluster jewels.
+            if matches!(m.source, Source::Natural | Source::Influence) && m.domain != self.bases[kind.base.0 as usize].domain {
+                continue;
+            }
             let w = weight(&m.spawn, 0) as f64 * weight(&m.generation, 100) as f64 / 100.0;
             if w > 0.0 {
                 mods.push((ModId(i as u32), w));
@@ -272,22 +294,34 @@ pub const METAMODS: [&str; 5] = [
     "StrIntMasterItemGenerationCanHaveMultipleCraftedMods",
 ];
 
+/// The name of a base with enchant tags, as `Game` registers it.
+pub fn enchanted(base: &str, tags: &[&str]) -> String {
+    if tags.is_empty() { base.to_string() } else { format!("{base} [{}]", tags.join(", ")) }
+}
+
+/// The mod domains of items the rules craft: equipment, jewels, abyss and cluster jewels.
+macro_rules! item_domains {
+    () => {
+        "item" | "misc" | "abyss_jewel" | "affliction_jewel"
+    };
+}
+
 /// How a RePoE mod enters items, or `None` for mods the rules never place.
 fn source_of(key: &str, m: &data::Mod) -> Option<Source> {
     Some(match m.domain.as_str() {
         "crafted" => Source::Crafted,
         "unveiled" => Source::Veiled,
         "delve" => Source::Fossil,
-        "item" if m.is_essence_only => Source::Essence,
-        "item" if m.spawn_weights.iter().all(|w| w.weight <= 0) => {
+        item_domains!() if m.is_essence_only => Source::Essence,
+        item_domains!() if m.spawn_weights.iter().all(|w| w.weight <= 0) => {
             if key.contains("Maven") {
                 Source::Elevated
             } else {
                 Source::Legacy
             }
         }
-        "item" if influenced(&m.spawn_weights) => Source::Influence,
-        "item" => Source::Natural,
+        item_domains!() if influenced(&m.spawn_weights) => Source::Influence,
+        item_domains!() => Source::Natural,
         _ => return None,
     })
 }
