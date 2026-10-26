@@ -134,7 +134,8 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
             clock.elapsed().as_secs_f64()
         );
     }
-    let simulated = recipe.simulate(&craft, &targets, 500, 1);
+    let given_up = guided.given_up.iter().cloned().collect();
+    let simulated = recipe.simulate(&craft, &targets, &given_up, 500, 1);
     if std::env::var("RECIPE_ONLY").is_ok() {
         return Err(format!("recipe {:.1}c, simulated {:.1} ± {:.1}", guided.cost, simulated.0, simulated.1));
     }

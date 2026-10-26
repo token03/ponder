@@ -11,7 +11,7 @@
 //! abandons the attempt instead: to the `else` step, or to the first step (buying afresh)
 //! without one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use rayon::prelude::*;
@@ -146,10 +146,10 @@ impl Recipe {
         (Applied::Done, price)
     }
 
-    /// Mean cost of following the recipe on real items, and its standard error. The item the
-    /// recipe starts from is bought, not given.
-    /// Mean cost and standard error over `runs` runs, run `r` seeded with `seed + r`.
-    pub fn simulate(&self, craft: &Craft, targets: &[Target], runs: usize, seed: u64) -> (f64, f64) {
+    /// Mean cost of following the recipe on real items, and its standard error, over `runs` runs,
+    /// run `r` seeded with `seed + r`. The item the recipe starts from is bought, not given. An
+    /// item at a position the exact solve gave up on (`given_up`) is abandoned for a fresh one.
+    pub fn simulate(&self, craft: &Craft, targets: &[Target], given_up: &HashSet<Position>, runs: usize, seed: u64) -> (f64, f64) {
         let game: &Game = craft.ctx.game;
         let holds = |t: usize, item: &Item| targets[t].holds(game, item);
         let costs: Vec<f64> = (0..runs as u64)
@@ -162,6 +162,13 @@ impl Recipe {
                 let mut k = 0;
                 let mut guard = 0;
                 while !holds(self.goal, &item) && i < self.steps.len() && guard < 1_000_000 {
+                    guard += 1;
+                    if !given_up.is_empty() && given_up.contains(&Position::At(i as u8, 0, k, craft.lens.project(&item))) {
+                        item = craft.starts[self.start].item.clone();
+                        cost += craft.starts[self.start].price;
+                        (i, k) = (self.forward(0, |t| holds(t, &item)), 0);
+                        continue;
+                    }
                     let mut abandoned = false;
                     for &a in &self.steps[i].ops {
                         let (applied, c) = self.apply(craft, a, &mut item, rng);
@@ -172,7 +179,6 @@ impl Recipe {
                         }
                     }
                     (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
-                    guard += 1;
                 }
                 cost
             })
