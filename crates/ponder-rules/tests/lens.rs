@@ -71,6 +71,21 @@ const CASES: &[Case] = &[
         &["essence:deafening-sorrow", "eldritch-implicit:lesser-ember", "bench:armour", "eldritch-annulment"],
         Some("resist"),
     ),
+    (
+        "minion-plus-two-wand",
+        "Convoking Wand",
+        "Wand",
+        &[
+            "fossil:jagged+metallic+shuddering+corroded",
+            "bench:prefixes-cannot-be-changed",
+            "bench:remove-crafted",
+            "veiled-chaos",
+            "bench:chaos-damage-over-time-multiplier",
+            "unveil:minion-cast-speed",
+            "bench:trigger-on-skill-use",
+        ],
+        None,
+    ),
 ];
 
 const CURRENCY: [&str; 10] =

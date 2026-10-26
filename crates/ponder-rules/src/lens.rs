@@ -4,8 +4,9 @@
 //! - tracked: mods sharing a group with anything a target asks for, an operation forces or an
 //!   unveil prefers, split by which needs they serve and which tags operations read;
 //! - fixed: forced mods that never roll (essence-only, crafted) and veiled placeholders;
-//! - untracked: everything else, counted per side, origin and read tags. Their effect on later
-//!   draws uses the class's average group weight, the one estimate the lens makes.
+//! - untracked: everything else, counted per side, origin and read tags. A class holding `k`
+//!   mods keeps the weight expected after `k` weighted draws without replacement over its groups,
+//!   the one estimate the lens makes.
 //!
 //! Classes also split by origin (natural, an influence's, fossil-only, unveiled), so every draw
 //! pool gives each class one weight. [`Lens::run`] interprets an operation's steps on states
@@ -42,8 +43,7 @@ enum Origin {
 struct Class {
     side: Side,
     origin: Origin,
-    /// Distinct mod groups (for the average-weight estimate) and veiled mods (for unveil offers).
-    groups: usize,
+    /// Veiled mods (for unveil offers).
     veiled: usize,
     tracked: bool,
     crafted: bool,
@@ -65,9 +65,10 @@ pub struct Lens<'g> {
     classes: Vec<Class>,
     class_of: HashMap<ModId, usize>,
     read_tags: Vec<TagId>,
-    /// Class weights per draw (pool and tag filter), and for unveil offers.
-    pools: Vec<((Pool, TagFilter), Vec<f64>)>,
-    unveil: Vec<f64>,
+    /// Class weights per draw (pool and tag filter), and for unveil offers: indexed by how many
+    /// of the class's mods the item holds (see [`Weights`]).
+    pools: Vec<((Pool, TagFilter), Vec<Weights>)>,
+    unveil: Vec<Weights>,
     targets: Vec<(Target, usize)>,
     /// Class of the prefix lock and suffix lock metamods; of any metamod; of the attack and
     /// caster bans with the tag bit each removes.
@@ -76,7 +77,8 @@ pub struct Lens<'g> {
     bans: Vec<(usize, u32)>,
 }
 
-type Key = (Side, Option<GroupId>, u128, u32, Origin, Option<ModId>, u8);
+/// (side, tracked group, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
+type Key = (Side, Option<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
 /// Expands one (state, rolled count) into weighted successors.
 type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
@@ -179,22 +181,31 @@ impl<'g> Lens<'g> {
             wanted.chain(forced.iter().copied()).chain(pref_mods).flat_map(|m| game.def(m).groups.iter().copied()).collect();
 
         let mut keys: BTreeMap<Key, Vec<ModId>> = BTreeMap::new();
-        for &(m, _) in &rolls {
+        let rolled_by = |m: ModId, w: f64| {
+            pools.iter().enumerate().fold(0u32, |bits, (i, (p, tag))| {
+                let passes = tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want);
+                if passes && pool_weight(game.def(m), m, w, p) > 0.0 { bits | 1 << i } else { bits }
+            })
+        };
+        for &(m, w) in &rolls {
             let def = game.def(m);
             let group = def.groups.iter().copied().find(|g| tracked_groups.contains(g));
             // Fossil and veiled mods differ from natural ones only in their weights.
             let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
             let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank)).or_default().push(m);
+            // Untracked mods split by the pools that can roll them: a mod a pool cannot roll (a
+            // fracture, an earlier fossil's) must not count as one of that pool's draws.
+            let rolled_by = if group.is_some() { 0 } else { rolled_by(m, w) };
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by)).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
-            keys.insert((game.def(m).side, None, serves(m), tag_bits(m), Origin::Fixed, Some(m), 0), vec![m]);
+            keys.insert((game.def(m).side, None, serves(m), tag_bits(m), Origin::Fixed, Some(m), 0, 0), vec![m]);
         }
 
         let mut classes = Vec::new();
         let mut class_of = HashMap::new();
         let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::new();
-        for ((side, group, serves, tags, origin, fixed, rank), mods) in keys {
+        for ((side, group, serves, tags, origin, fixed, rank, _), mods) in keys {
             let idx = classes.len();
             let groups: BTreeSet<GroupId> = mods.iter().flat_map(|m| game.def(*m).groups.iter().copied()).collect();
             for g in groups.iter().filter(|g| tracked_groups.contains(g)) {
@@ -206,7 +217,6 @@ impl<'g> Lens<'g> {
             classes.push(Class {
                 side,
                 origin,
-                groups: groups.len().max(1),
                 veiled: mods.iter().filter(|m| game.def(**m).source == Source::Veiled).count(),
                 tracked: group.is_some() || fixed.is_some(),
                 crafted: fixed.is_some_and(|m| game.def(m).source == Source::Crafted),
@@ -235,8 +245,17 @@ impl<'g> Lens<'g> {
             }
         }
         let weight_of: HashMap<ModId, f64> = rolls.iter().copied().collect();
-        let class_weights = |f: &dyn Fn(ModId, f64) -> f64| -> Vec<f64> {
-            members.iter().map(|ms| ms.iter().map(|m| weight_of.get(m).map_or(0.0, |w| f(*m, *w))).sum()).collect()
+        let class_weights = |f: &dyn Fn(ModId, f64) -> f64| -> Vec<Weights> {
+            members
+                .iter()
+                .map(|ms| {
+                    let mut groups: BTreeMap<Option<GroupId>, f64> = BTreeMap::new();
+                    for m in ms {
+                        *groups.entry(game.def(*m).groups.first().copied()).or_default() += weight_of.get(m).map_or(0.0, |w| f(*m, *w));
+                    }
+                    remaining(&groups.into_values().filter(|w| *w > 0.0).collect::<Vec<_>>())
+                })
+                .collect()
         };
         let pools = pools.into_iter().map(|(p, tag)| {
             let passes = |m: ModId| tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want);
@@ -505,15 +524,15 @@ impl<'g> Lens<'g> {
     }
 
     /// Weight a class still has in a pool given what the item holds: zero when its group is
-    /// taken, reduced by the average group share for untracked classes.
-    fn available(&self, s: &State, c: usize, w: f64) -> f64 {
+    /// taken; for untracked classes, what is expected to remain after the mods it holds.
+    fn available(&self, s: &State, c: usize, w: &Weights) -> f64 {
         let class = &self.classes[c];
         let n = self.classes.len();
         let present = |o: usize| s.counts[o] + s.counts[o + n];
         if class.tracked {
-            if class.conflicts.iter().any(|&o| present(o) > 0) { 0.0 } else { w }
+            if class.conflicts.iter().any(|&o| present(o) > 0) { 0.0 } else { w[0] }
         } else {
-            w * (1.0 - present(c) as f64 / class.groups as f64).max(0.0)
+            w[(present(c) as usize).min(w.len() - 1)]
         }
     }
 
@@ -527,7 +546,7 @@ impl<'g> Lens<'g> {
         (0..self.classes.len())
             .filter_map(|c| {
                 let class = &self.classes[c];
-                if weights[c] <= 0.0 || !open[class.side as usize] || class.tags & banned != 0 {
+                if weights[c][0] <= 0.0 || !open[class.side as usize] || class.tags & banned != 0 {
                     return None;
                 }
                 if let Origin::Natural(Some(i)) = class.origin
@@ -535,7 +554,7 @@ impl<'g> Lens<'g> {
                 {
                     return None;
                 }
-                let w = self.available(s, c, weights[c]);
+                let w = self.available(s, c, &weights[c]);
                 (w > 0.0).then_some((c, w))
             })
             .collect()
@@ -548,8 +567,8 @@ impl<'g> Lens<'g> {
         let side = self.classes[veil].side;
         s.counts[veil] -= 1;
         let offers: Vec<(usize, f64, f64)> = (0..n)
-            .filter(|&c| self.classes[c].side == side && self.unveil[c] > 0.0)
-            .map(|c| (c, self.available(&s, c, self.unveil[c]), self.unveil[c] / self.classes[c].veiled as f64))
+            .filter(|&c| self.classes[c].side == side && self.unveil[c][0] > 0.0)
+            .map(|c| (c, self.available(&s, c, &self.unveil[c]), self.unveil[c][0] / self.classes[c].veiled as f64))
             .filter(|o| o.1 > 0.0)
             .collect();
         if offers.is_empty() {
@@ -671,4 +690,29 @@ impl View for StateView<'_> {
     fn veiled(&self) -> bool {
         (0..self.lens.classes.len()).any(|c| self.lens.classes[c].veil && self.present(c))
     }
+}
+
+/// A class's weight in one pool while the item holds 0, 1, 2 or 3 of its mods.
+type Weights = [f64; 4];
+
+/// Expected weight left after `k` draws without replacement, each picking a group in proportion
+/// to its weight, for `k` = 0..=3: skewed classes (a fossil's favourites) lose most of their
+/// weight with their first mod.
+fn remaining(groups: &[f64]) -> Weights {
+    fn go(groups: &[f64], taken: &mut Vec<usize>, k: usize) -> f64 {
+        let left: f64 = groups.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, w)| w).sum();
+        if k == 0 || left <= 0.0 {
+            return left;
+        }
+        let mut sum = 0.0;
+        for i in 0..groups.len() {
+            if !taken.contains(&i) {
+                taken.push(i);
+                sum += groups[i] / left * go(groups, taken, k - 1);
+                taken.pop();
+            }
+        }
+        sum
+    }
+    std::array::from_fn(|k| go(groups, &mut Vec::new(), k))
 }
