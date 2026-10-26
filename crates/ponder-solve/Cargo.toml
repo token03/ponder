@@ -7,4 +7,5 @@ rust-version.workspace = true
 description = "Stochastic shortest paths over enumerated states. Knows nothing about Path of Exile."
 
 [dependencies]
+rustc-hash.workspace = true
 rayon.workspace = true

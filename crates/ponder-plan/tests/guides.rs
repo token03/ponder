@@ -167,6 +167,10 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
         }
         let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| format!("best for {item}: {e:?}"))?;
         times.push(clock.elapsed().as_secs_f64());
+        if std::env::var("STATS").is_ok() {
+            println!("  {item}: {} states, {:?}", best.states.len(), best.stats);
+            stats(&craft, &best, &lens);
+        }
         let followed = craft.follow(&best, 500, 1_000_000);
         times.push(clock.elapsed().as_secs_f64());
         if !last {
@@ -208,6 +212,81 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
         }
     }
     Ok(outcome.unwrap())
+}
+
+/// Where the states of a solved craft come from: per rarity and affix count, and how many the
+/// best policy can reach.
+fn stats(craft: &Craft, best: &ponder_solve::Solution<Node>, lens: &Lens) {
+    let tracked = (0..lens.classes()).filter(|&c| lens.is_tracked(c)).count();
+    println!("  {} classes ({tracked} tracked), {} ops ({} not dominated)", lens.classes(), craft.ops.len(), craft.dominated.iter().filter(|d| !**d).count());
+    let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+    for n in &best.states {
+        let key = match n {
+            Node::Item(s) => format!("{:?} {} affixes", s.rarity, s.counts.iter().map(|&c| c as usize).sum::<usize>()),
+            Node::Hub(..) => "hub".into(),
+            _ => "other".into(),
+        };
+        *by.entry(key).or_default() += 1;
+    }
+    println!("  states by kind: {by:?}");
+    // Reachable under the policy.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![Node::Market];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        let Some(&i) = best.index.get(&n) else { continue };
+        if let Some(a) = best.policy[i] {
+            for (_, t) in ponder_solve::Model::outcomes(craft, &n, a) {
+                stack.push(t);
+            }
+        }
+    }
+    println!("  states the best policy visits: {}", seen.len());
+    // Which action first reaches each state, breadth first over every action.
+    let mut first: std::collections::HashMap<Node, String> = Default::default();
+    let mut queue = std::collections::VecDeque::from([Node::Market]);
+    first.insert(Node::Market, "start".into());
+    while let Some(n) = queue.pop_front() {
+        let Some(&i) = best.index.get(&n) else { continue };
+        let _ = i;
+        for (a, _) in ponder_solve::Model::actions(craft, &n) {
+            for (_, t) in ponder_solve::Model::outcomes(craft, &n, a) {
+                if !first.contains_key(&t) {
+                    first.insert(t.clone(), craft.action_name(a));
+                    queue.push_back(t);
+                }
+            }
+        }
+    }
+    let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+    for a in first.values() {
+        *by.entry(a.as_str()).or_default() += 1;
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|e| std::cmp::Reverse(e.1));
+    println!("  first reached by: {by:?}");
+    // Distinct states once each decoration is forgotten.
+    let n = lens.classes();
+    let items: Vec<&ponder_rules::lens::State> = best.states.iter().filter_map(|s| if let Node::Item(s) = s { Some(s) } else { None }).collect();
+    let distinct = |f: &dyn Fn(&ponder_rules::lens::State) -> ponder_rules::lens::State| items.iter().map(|s| f(s)).collect::<std::collections::HashSet<_>>().len();
+    let plain = |s: &ponder_rules::lens::State| ponder_rules::lens::State { eldritch: None, ..s.clone() };
+    let unfractured = |s: &ponder_rules::lens::State| {
+        let mut t = s.clone();
+        for c in 0..n { t.counts[c] += t.counts[c + n]; t.counts[c + n] = 0; }
+        t
+    };
+    let crafted: Vec<usize> = (0..n).filter(|&c| lens.describe(c).contains("crafted: true")).collect();
+    let uncrafted = |s: &ponder_rules::lens::State| {
+        let mut t = s.clone();
+        for &c in &crafted { t.counts[c] = 0; }
+        t
+    };
+    println!("  items {}; without eldritch {}; unfractured {}; uncrafted {}; all three {}", items.len(), distinct(&plain), distinct(&unfractured), distinct(&uncrafted), distinct(&|s| uncrafted(&unfractured(&plain(s)))));
+    for c in 0..n {
+        println!("    class {c}: {}", lens.describe(c));
+    }
 }
 
 /// The ends of runs that never reach the goal.

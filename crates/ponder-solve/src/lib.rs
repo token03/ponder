@@ -11,7 +11,7 @@
 //! start's cost is affine in `w`, `a + b w` with `b` the chance of restarting, so Newton steps
 //! `w = a / (1 - b)` find the fixed point in a few solves of the same acyclic structure.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hash;
 
 use rayon::prelude::*;
@@ -26,6 +26,11 @@ pub trait Model: Sync {
     /// Does a state that can no longer reach the goal start over (rather than make the goal
     /// unreachable)? Needs restart states to mean anything.
     fn gives_up(&self) -> bool {
+        false
+    }
+    /// Can every state start over at no cost? Then no state is worth more than the start, and
+    /// an action that costs that much is never best: the solver leaves those unexplored.
+    fn restarts_anywhere(&self) -> bool {
         false
     }
     /// Usable actions with their costs; ids are the model's own.
@@ -44,6 +49,20 @@ pub struct Solution<S> {
     pub index: HashMap<S, usize>,
     /// States that gave up (see [`Model::gives_up`]).
     pub given_up: Vec<S>,
+    pub stats: Stats,
+}
+
+/// Where a solve spent its effort, summed over its attempts.
+#[derive(Debug, Clone, Default)]
+pub struct Stats {
+    pub attempts: usize,
+    pub outcomes: usize,
+    /// Seconds exploring states (the model's work), pruning, and solving values.
+    pub explore: f64,
+    pub prune: f64,
+    pub values: f64,
+    /// Newton steps on the worth of starting over.
+    pub newton: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,8 +94,37 @@ impl Affine {
 }
 
 pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
+    let mut stats = Stats::default();
+    if !model.restarts_anywhere() {
+        return solve_within(model, start, limit, f64::INFINITY, &mut stats).map(|s| Solution { stats, ..s.0 });
+    }
+    // Explore only actions cheaper than a ceiling. A start worth less than the ceiling proves
+    // every action left out dearer than starting over, so the solution is exact; otherwise the
+    // ceiling rises to that worth, and the actions the solution used keep it from rising again.
+    let first = start.iter().flat_map(|(_, s)| model.actions(s)).map(|a| a.1).fold(f64::INFINITY, f64::min);
+    let mut ceiling = 2.0 * first.clamp(0.5, 1e9);
+    loop {
+        match solve_within(model, start, limit, ceiling, &mut stats) {
+            Ok((solution, w)) if w < ceiling => return Ok(Solution { stats, ..solution }),
+            Ok((_, w)) => ceiling = w * (1.0 + 1e-9),
+            Err(Error::Unreachable) if ceiling.is_finite() => ceiling = if ceiling > 1e9 { f64::INFINITY } else { ceiling * 4.0 },
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// The solution and the worth of starting over, using only actions cheaper than `ceiling`.
+fn solve_within<M: Model>(
+    model: &M,
+    start: &[(f64, M::State)],
+    limit: usize,
+    ceiling: f64,
+    stats: &mut Stats,
+) -> Result<(Solution<M::State>, f64), Error> {
+    stats.attempts += 1;
+    let clock = std::time::Instant::now();
     let mut states: Vec<M::State> = Vec::new();
-    let mut index: HashMap<M::State, usize> = HashMap::new();
+    let mut index: HashMap<M::State, usize> = HashMap::default();
     let mut intern = |s: M::State, states: &mut Vec<M::State>| -> usize {
         *index.entry(s.clone()).or_insert_with(|| {
             states.push(s);
@@ -104,7 +152,8 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
                 } else {
                     None
                 };
-                let actions = if value.is_some() { Vec::new() } else { model.actions(s) };
+                let mut actions = if value.is_some() { Vec::new() } else { model.actions(s) };
+                actions.retain(|a| a.1 < ceiling);
                 let out: Vec<_> = actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect();
                 (value, out)
             })
@@ -124,6 +173,9 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         next = batch.end;
     }
     let n = states.len();
+    stats.outcomes += edges.iter().flatten().map(|e| e.to.len()).sum::<usize>();
+    stats.explore += clock.elapsed().as_secs_f64();
+    let clock = std::time::Instant::now();
     // Keep only actions whose every outcome can still reach the goal (or a restart) and that
     // leave the state; a state is alive while some kept action path gets there.
     let mut alive = vec![true; n];
@@ -174,12 +226,15 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
         .filter(|c: &Vec<usize>| !c.is_empty())
         .collect();
+    stats.prune += clock.elapsed().as_secs_f64();
+    let clock = std::time::Instant::now();
     let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
     let mut choice = vec![usize::MAX; n];
     let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
     // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed point.
     let mut w = if restarts { 1e12 } else { 0.0 };
     for _ in 0..200 {
+        stats.newton += 1;
         let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
         let mut stable = true;
         for component in &order {
@@ -200,7 +255,9 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
             let values: Vec<f64> = affine.iter().map(|f| f.at(next)).collect();
             let policy = (0..n).map(|s| (choice[s] != usize::MAX && !end[s] && alive[s]).then(|| edges[s][choice[s]].action)).collect();
             let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
-            return Ok(Solution { cost: at_start.at(next), states, values, policy, index, given_up });
+            stats.values += clock.elapsed().as_secs_f64();
+            let stats = stats.clone();
+            return Ok((Solution { cost: at_start.at(next), states, values, policy, index, given_up, stats }, next));
         }
         w = next;
     }
@@ -358,7 +415,7 @@ fn evaluate(
 }
 
 /// Largest policy component solved by dense elimination; larger ones iterate.
-const DENSE: usize = 1500;
+const DENSE: usize = 64;
 
 /// Solves x = r + P x by Gauss-Seidel sweeps from `x`, each state's self-loop eliminated (rerolls
 /// mostly return to themselves), until no value moves by more than a relative 1e-12. `None` when
@@ -527,7 +584,7 @@ fn components(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
 pub fn ends<M: Model>(model: &M, solution: &Solution<M::State>, start: &[(f64, M::State)]) -> Vec<(f64, M::State)> {
     // The states the policy visits, in visiting order, and the flow into each.
     let mut order: Vec<usize> = Vec::new();
-    let mut place: HashMap<usize, usize> = HashMap::new();
+    let mut place: HashMap<usize, usize> = HashMap::default();
     let mut seed: Vec<f64> = Vec::new();
     let mut visit = |s: usize, order: &mut Vec<usize>, seed: &mut Vec<f64>| {
         *place.entry(s).or_insert_with(|| {

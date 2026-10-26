@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "PoE crafting rules on real items: game data, goals, operations, simulator. No I/O beyond reading data files."
 
 [dependencies]
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 flate2 = "1"
