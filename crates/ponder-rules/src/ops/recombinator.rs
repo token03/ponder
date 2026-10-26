@@ -21,7 +21,7 @@ impl Recombinator {
         Recombinator {
             name: format!("recombinator:{label}"),
             price: format!("{kind}-recombinator"),
-            steps: vec![Step::Recombine(SupplyRef(partner))],
+            steps: vec![Step::Recombine(SupplyRef(partner)), Step::RecombineBonus],
         }
     }
 

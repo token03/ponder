@@ -243,12 +243,12 @@ pub struct Following<'a> {
     pub craft: &'a Craft<'a>,
     pub recipe: &'a Recipe,
     /// Item outcomes, computed once: a recipe reaches one item state at many positions. The
-    /// flag marks the rest of an operation after its reset.
+    /// flag marks the shared continuation of an operation.
     cache: Mutex<HashMap<(State, usize, bool), Outcomes>>,
 }
 
 /// Before the first purchase, at (step, operation within the step, failed attempts, item),
-/// partway through that operation after its reset (as [`crate::craft::Node::Hub`]), or buying
+/// partway through that operation (as [`crate::craft::Node::Hub`]), or buying
 /// again: worth what the fresh start is worth.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Position {
@@ -268,7 +268,7 @@ impl<'a> Following<'a> {
         if let Some(out) = self.cache.lock().unwrap().get(&key) {
             return out.clone();
         }
-        let out = if hub { self.craft.after_reset(s, a) } else { self.craft.outcomes_of(s, a) };
+        let out = if hub { self.craft.finish_operation(s, a) } else { self.craft.outcomes_of(s, a) };
         self.cache.lock().unwrap().insert(key, out.clone());
         out
     }
@@ -338,7 +338,9 @@ impl Model for Following<'_> {
             1 => vec![(1.0, self.advance(i, j + 1, k, s.clone()))],
             2 => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, s.clone()))],
             _ if self.craft.start_of(a).is_some() => vec![(1.0, Position::Restart)],
-            _ if !hub && let Some(t) = self.craft.reset(s, a) => vec![(1.0, Position::Hub(i as u8, j as u8, k, t))],
+            _ if !hub && let Some(out) = self.craft.start_operation(s, a) => {
+                out.into_iter().map(|(p, t)| (p, Position::Hub(i as u8, j as u8, k, t))).collect()
+            }
             _ => self.outcomes_of(s, a, hub).into_iter().map(|(p, t)| (p, self.advance(i, j + 1, k, t))).collect(),
         }
     }

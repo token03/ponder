@@ -358,6 +358,43 @@ fn essence_origin_is_tracked_only_when_the_goal_distinguishes_it() {
     assert!(lens.holds(1, &lens.project(&forced)));
 }
 
+#[test]
+fn overlapping_requirements_still_need_distinct_affixes() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
+    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let mut flat = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
+    let mut percent = Target::compile(&game, &guide.target("percent").unwrap()).unwrap();
+    flat.rarity = None;
+    percent.rarity = None;
+    let one = flat.witness(&game, kind).unwrap();
+    let mut two = one.clone();
+    two.affixes.extend(percent.witness(&game, kind).unwrap().affixes);
+    let mut pair = flat.clone();
+    pair.needs[0].ok.extend(&percent.needs[0].ok);
+    pair.needs[0].count = 2;
+    let mut overlap = pair.clone();
+    overlap.needs.push(flat.needs[0].clone());
+    let mut fractured = pair.clone();
+    fractured.needs[0].fractured = true;
+    let targets = vec![flat, pair, overlap, fractured];
+    let lens = Lens::new(&game, kind, targets.clone(), &[], &[]);
+    assert!(lens.holds(0, &lens.project(&one)));
+    assert!(!lens.holds(1, &lens.project(&one)));
+    assert!(lens.holds(1, &lens.project(&two)));
+    assert!(!lens.holds(2, &lens.project(&two)));
+    assert!(!lens.holds(3, &lens.project(&two)));
+    for a in &mut two.affixes {
+        a.fractured = true;
+    }
+    assert!(lens.holds(3, &lens.project(&two)));
+    for item in [one, two] {
+        for (i, target) in targets.iter().enumerate() {
+            assert_eq!(lens.holds(i, &lens.project(&item)), target.holds(&game, &item));
+        }
+    }
+}
+
 /// A witness item of a stage: where a walk starts when sampling items the empty base rarely reaches.
 fn lens_start(game: &Game, kind: Kind, guide: &Guide, names: &[&str], stage: &str) -> Item {
     let i = names.iter().position(|n| *n == stage).unwrap();

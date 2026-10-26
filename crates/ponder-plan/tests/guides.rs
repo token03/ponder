@@ -221,8 +221,10 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
         }
         let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
         println!(
-            "  {item} best: {} states, {} outcomes, {:.3}s",
+            "  {item} best: {} states ({} items, {} continuations), {} outcomes, {:.3}s",
             best.states.len(),
+            best.states.iter().filter(|s| matches!(s, Node::Item(_))).count(),
+            best.states.iter().filter(|s| matches!(s, Node::Hub(..))).count(),
             best.outcomes,
             clock.elapsed().as_secs_f64() - times[0]
         );

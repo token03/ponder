@@ -148,6 +148,7 @@ pub enum Step {
     /// Combine with a second item (SPEC §4.9): base, influences and Eldritch implicits come
     /// from either, and each side keeps some of both items' affixes there.
     Recombine(SupplyRef),
+    RecombineBonus,
 }
 
 pub trait Supply: Send + Sync {
@@ -353,6 +354,15 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
             }
             Step::Unveil(prefs) => unveil(ctx, item, rng, prefs),
             Step::Recombine(partner) => recombine(ctx, item, partner.0.item(rng), rng),
+            Step::RecombineBonus => {
+                let limit = Item { rarity: Rarity::Rare, ..item.clone() }.limit(game);
+                if item.affixes.len() < 2 * limit && rng.unit() < ctx.assumptions.recombine_bonus {
+                    let sides = bonus_sides(item.rarity, item.count(game, Side::Prefix), item.count(game, Side::Suffix), limit);
+                    item.rarity = Rarity::Rare;
+                    draw(ctx, item, rng, &Pick { sides, ..Pick::ANY });
+                    run(ctx, &[Step::Settle], item, rng);
+                }
+            }
         }
     }
 }
@@ -425,12 +435,6 @@ fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
         }
     }
     run(ctx, &[Step::Settle], item, rng);
-    if item.affixes.len() < 2 * limit && rng.unit() < ctx.assumptions.recombine_bonus {
-        let sides = bonus_sides(item.rarity, item.count(game, Side::Prefix), item.count(game, Side::Suffix), limit);
-        item.rarity = Rarity::Rare;
-        draw(ctx, item, rng, &Pick { sides, ..Pick::ANY });
-        run(ctx, &[Step::Settle], item, rng);
-    }
 }
 
 /// The kept-count table for a pool of `n` affixes on one side.

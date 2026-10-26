@@ -59,6 +59,13 @@ struct Class {
     conflicts: Vec<usize>,
 }
 
+struct TargetLens {
+    target: Target,
+    offset: usize,
+    classes: Vec<Vec<usize>>,
+    distinct: bool,
+}
+
 pub struct Lens<'g> {
     game: &'g Game,
     pub kind: Kind,
@@ -72,7 +79,7 @@ pub struct Lens<'g> {
     unveil: Vec<Weights>,
     /// Per untracked class, the chance two of its rolled mods share a group (recombination).
     collide: Vec<f64>,
-    targets: Vec<(Target, usize)>,
+    targets: Vec<TargetLens>,
     /// Class of the prefix lock and suffix lock metamods; of any metamod; of the attack and
     /// caster bans with the tag bit each removes.
     lock: [Option<usize>; 2],
@@ -145,7 +152,7 @@ impl<'g> Lens<'g> {
                 Step::Influence(i) => influences |= 1 << *i as u8,
                 Step::Veil(_) => forced.extend(game.veils),
                 // The bonus mod, like an exalt.
-                Step::Recombine(_) => picks.push(&ANY),
+                Step::RecombineBonus => picks.push(&ANY),
                 _ => {}
             }
         }
@@ -308,7 +315,25 @@ impl<'g> Lens<'g> {
         let lock = [class_for(game.metamods.first()), class_for(game.metamods.get(1))];
         let metamods = game.metamods.iter().filter_map(|m| class_of.get(m).copied()).collect();
         let bans = bans.iter().filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?))).collect();
-        let targets = targets.into_iter().zip(offsets).collect();
+        let targets = targets
+            .into_iter()
+            .zip(offsets)
+            .map(|(target, offset)| {
+                let mut used = BTreeSet::new();
+                let mut distinct = true;
+                let relevant = (0..target.needs.len())
+                    .map(|i| {
+                        (0..classes.len())
+                            .filter(|&c| classes[c].serves & (1 << (offset + i)) != 0)
+                            .inspect(|&c| {
+                                distinct &= used.insert(c);
+                            })
+                            .collect()
+                    })
+                    .collect();
+                TargetLens { target, offset, classes: relevant, distinct }
+            })
+            .collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
         let mut lens = Lens {
             game,
@@ -380,12 +405,20 @@ impl<'g> Lens<'g> {
     }
 
     pub fn view<'a>(&'a self, state: &'a State) -> StateView<'a> {
-        StateView { lens: self, state }
+        let n = self.classes.len();
+        let (mut counts, mut crafted, mut fractured) = ([0; 2], 0, 0);
+        for (c, class) in self.classes.iter().enumerate() {
+            counts[class.side as usize] += (state.counts[c] + state.counts[c + n]) as usize;
+            crafted += if class.crafted { state.counts[c] as usize } else { 0 };
+            fractured += state.counts[c + n] as usize;
+        }
+        StateView { lens: self, state, counts, crafted, fractured }
     }
 
     /// Does target `t` (in construction order) hold?
     pub fn holds(&self, t: usize, state: &State) -> bool {
-        let (target, offset) = &self.targets[t];
+        let predicate = &self.targets[t];
+        let TargetLens { target, offset, .. } = predicate;
         let v = self.view(state);
         if self.kind.ilvl < target.ilvl
             || state.influences & target.influences.0 != target.influences.0
@@ -394,6 +427,15 @@ impl<'g> Lens<'g> {
             return false;
         }
         let n = self.classes.len();
+        if target.needs.iter().zip(&predicate.classes).any(|(need, classes)| {
+            classes.iter().map(|&c| state.counts[c + n] as usize + if need.fractured { 0 } else { state.counts[c] as usize }).sum::<usize>()
+                < need.count as usize
+        }) {
+            return false;
+        }
+        if predicate.distinct {
+            return true;
+        }
         let affixes: Vec<(usize, bool)> = (0..2 * n).flat_map(|i| std::iter::repeat_n((i % n, i >= n), state.counts[i] as usize)).collect();
         matches(&target.needs, affixes.len(), &|need, i| {
             let (class, fractured) = affixes[i];
@@ -410,7 +452,7 @@ impl<'g> Lens<'g> {
         if fixed.is_empty() {
             return true;
         }
-        let (target, offset) = &self.targets[t];
+        let TargetLens { target, offset, .. } = &self.targets[t];
         target.needs.iter().enumerate().all(|(i, need)| {
             let serves = |c: usize| self.classes[c].serves & (1 << (offset + i)) != 0;
             let have: usize = fixed.iter().filter(|&&c| serves(c)).map(|&c| state.counts[c + n] as usize).sum();
@@ -576,6 +618,19 @@ impl<'g> Lens<'g> {
                 let partner = &self.partners.iter().find(|(supply, _)| supply == p).expect("partner read by an operation").1;
                 self.recombine(ctx, &s, total, partner, emit);
             }
+            Step::RecombineBonus => {
+                let rare = State { rarity: Rarity::Rare, ..s.clone() };
+                let limit = self.view(&rare).limit();
+                let v = self.view(&s);
+                let (prefixes, suffixes) = (v.count(Side::Prefix), v.count(Side::Suffix));
+                if prefixes + suffixes >= 2 * limit {
+                    return emit(1.0, s, total);
+                }
+                let bonus = ctx.assumptions.recombine_bonus;
+                emit(1.0 - bonus, s.clone(), total);
+                let sides = crate::ops::bonus_sides(s.rarity, prefixes, suffixes, limit);
+                self.draw(rare, total, &Pick { sides, ..Pick::ANY }, &mut |p, t, total| emit(bonus * p, self.settled(t), total));
+            }
         }
     }
 
@@ -628,12 +683,11 @@ impl<'g> Lens<'g> {
 
     /// A recombination with each partner state: per heir (whose influences and Eldritch
     /// implicits the result takes), each side keeps a uniform sample of the pooled affixes,
-    /// dropping any that conflicts with one kept, then perhaps a bonus mod.
+    /// dropping any that conflicts with one kept.
     fn recombine(&self, ctx: &Ctx, s: &State, total: u8, partner: &[(f64, State)], emit: &mut dyn FnMut(f64, State, u8)) {
         let n = self.classes.len();
         let rare = State { rarity: Rarity::Rare, ..s.clone() };
         let limit = self.view(&rare).limit();
-        let bonus = ctx.assumptions.recombine_bonus;
         for (q, o) in partner {
             let heirs = if (s.influences, s.eldritch) == (o.influences, o.eldritch) { vec![s] } else { vec![s, o] };
             for heir in &heirs {
@@ -674,18 +728,7 @@ impl<'g> Lens<'g> {
                 }
                 for (p, counts) in results {
                     let t = self.settled(State { counts: counts.into(), ..(*heir).clone() });
-                    let v = self.view(&t);
-                    let (prefixes, suffixes) = (v.count(Side::Prefix), v.count(Side::Suffix));
-                    if prefixes + suffixes >= 2 * limit {
-                        emit(q * p, t, total);
-                        continue;
-                    }
-                    emit(q * p * (1.0 - bonus), t.clone(), total);
-                    let sides = crate::ops::bonus_sides(t.rarity, prefixes, suffixes, limit);
-                    let pick = Pick { sides, ..Pick::ANY };
-                    self.draw(State { rarity: Rarity::Rare, ..t }, total, &pick, &mut |r, u, total| {
-                        emit(q * p * bonus * r, self.settled(u), total)
-                    });
+                    emit(q * p, t, total);
                 }
             }
         }
@@ -854,11 +897,14 @@ impl<'g> Lens<'g> {
 pub struct StateView<'a> {
     lens: &'a Lens<'a>,
     state: &'a State,
+    counts: [usize; 2],
+    crafted: usize,
+    fractured: usize,
 }
 
 impl StateView<'_> {
     fn total(&self) -> usize {
-        self.state.counts.iter().map(|&c| c as usize).sum()
+        self.counts.iter().sum()
     }
 
     fn present(&self, c: usize) -> bool {
@@ -872,8 +918,7 @@ impl View for StateView<'_> {
         self.state.rarity
     }
     fn count(&self, side: Side) -> usize {
-        let n = self.lens.classes.len();
-        (0..2 * n).filter(|&i| self.lens.classes[i % n].side == side).map(|i| self.state.counts[i] as usize).sum()
+        self.counts[side as usize]
     }
     fn limit(&self) -> usize {
         let jewel = self.lens.class_name.contains("Jewel");
@@ -885,11 +930,10 @@ impl View for StateView<'_> {
         }
     }
     fn crafted(&self) -> usize {
-        (0..self.lens.classes.len()).filter(|&c| self.lens.classes[c].crafted).map(|c| self.state.counts[c] as usize).sum()
+        self.crafted
     }
     fn fractured(&self) -> usize {
-        let n = self.lens.classes.len();
-        self.state.counts[n..].iter().map(|&c| c as usize).sum()
+        self.fractured
     }
     fn has(&self, m: ModId) -> bool {
         self.lens.class_of.get(&m).is_some_and(|&c| self.present(c))
