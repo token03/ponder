@@ -32,6 +32,18 @@ impl Essence {
         })
     }
 
+    /// Every essence with a mod on an item class.
+    pub fn all(game: &Game, class: &str) -> Vec<Essence> {
+        let short = |name: &str| {
+            let name = name.to_lowercase();
+            match name.split_once(" essence of ") {
+                Some((tier, kind)) => format!("{tier}-{kind}"),
+                None => name.trim_start_matches("essence of ").to_string(),
+            }
+        };
+        game.essences.iter().filter_map(|e| Essence::new(game, &short(&e.name), class)).collect()
+    }
+
     pub fn forced(&self) -> ModId {
         match self.steps[3] {
             Step::Force(m) => m,

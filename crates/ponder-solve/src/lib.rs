@@ -124,7 +124,6 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         next = batch.end;
     }
     let n = states.len();
-
     // Keep only actions whose every outcome can still reach the goal (or a restart) and that
     // leave the state; a state is alive while some kept action path gets there.
     let mut alive = vec![true; n];
@@ -180,25 +179,24 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
     let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
     // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed point.
     let mut w = if restarts { 1e12 } else { 0.0 };
-    for _ in 0..60 {
+    for _ in 0..200 {
         let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
+        let mut stable = true;
         for component in &order {
-            solve_component(component, &edges, &mut values, &mut choice, &mut affine, w);
+            stable &= solve_component(component, &edges, &mut values, &mut choice, &mut affine, w);
         }
         let at_start =
             starts.iter().fold(Affine { a: 0.0, b: 0.0 }, |acc, &(p, s)| Affine { a: acc.a + p * affine[s].a, b: acc.b + p * affine[s].b });
-        if !at_start.a.is_finite() {
+        // A policy still improving may not reach the goal yet: keep improving at this `w`.
+        let hopeless = !at_start.a.is_finite() || (restarts && at_start.b >= 1.0 - 1e-12);
+        if hopeless && !stable {
+            continue;
+        }
+        if hopeless {
             return Err(Error::Unreachable);
         }
-        let next = if restarts {
-            if at_start.b >= 1.0 - 1e-12 {
-                return Err(Error::Unreachable);
-            }
-            at_start.a / (1.0 - at_start.b)
-        } else {
-            w
-        };
-        if (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
+        let next = if restarts { (at_start.a / (1.0 - at_start.b)).min(w) } else { w };
+        if stable && (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
             let values: Vec<f64> = affine.iter().map(|f| f.at(next)).collect();
             let policy = (0..n).map(|s| (choice[s] != usize::MAX && !end[s] && alive[s]).then(|| edges[s][choice[s]].action)).collect();
             let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
@@ -231,7 +229,11 @@ fn best(edges: &[Edge], values: &[f64]) -> (f64, usize) {
 /// previous solve's choice is one (exits do not depend on `w`); the first time, each state's
 /// first action is one that can step closer to the exit, so every state can reach the exit with
 /// positive probability. With positive costs, improvement keeps policies proper.
-fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], choice: &mut [usize], affine: &mut [Affine], w: f64) {
+///
+/// At most `ROUNDS` improvements per call, true if the policy came out stable: any proper policy's
+/// cost bounds the optimum from above, so Newton on `w` stays valid while policy iteration
+/// finishes over later calls, and at a huge first `w` the rounds are mostly spent on noise.
+fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], choice: &mut [usize], affine: &mut [Affine], w: f64) -> bool {
     let local: HashMap<usize, usize> = states.iter().enumerate().map(|(i, &s)| (s, i)).collect();
     let mut chosen: Vec<usize> = states.iter().map(|&s| choice[s]).collect();
     if chosen.contains(&usize::MAX) {
@@ -256,8 +258,13 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
     // The last policy evaluated, so values and choices agree even if an improvement fails to
     // evaluate (at a huge first `w`, rounding can pick an improper one).
     let mut kept = chosen.clone();
-    for _ in 0..100 {
-        let Some(v) = evaluate(states, &local, edges, &chosen, affine) else { break };
+    let mut stable = true;
+    for _ in 0..ROUNDS {
+        stable = false;
+        let Some(v) = evaluate(states, &local, edges, &chosen, affine) else {
+            stable = true;
+            break;
+        };
         kept = chosen.clone();
         for (i, &s) in states.iter().enumerate() {
             affine[s] = v[i];
@@ -273,6 +280,7 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
             })
             .collect();
         if improved == chosen {
+            stable = true;
             break;
         }
         chosen = improved;
@@ -280,7 +288,11 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
     for (i, &s) in states.iter().enumerate() {
         choice[s] = kept[i];
     }
+    stable
 }
+
+/// Policy improvements per component and Newton step.
+const ROUNDS: usize = 10;
 
 /// Exact values of a fixed policy inside a component, as `a + b w`. The policy's own graph
 /// usually splits into much smaller components; each solves (I - P) x = r for the cost part
@@ -335,7 +347,8 @@ fn evaluate(
             let start = |f: fn(&Affine) -> f64| {
                 part.iter().map(|&i| Some(f(&affine[states[i]])).filter(|v| v.is_finite()).unwrap_or(0.0)).collect()
             };
-            vec![gauss_seidel(&rows, &ra, start(|f| f.a))?, gauss_seidel(&rows, &rb, start(|f| f.b))?]
+            let solve = |r: &[f64], x: Vec<f64>| gauss_seidel(&rows, r, bicgstab(&rows, r, x));
+            vec![solve(&ra, start(|f| f.a))?, solve(&rb, start(|f| f.b))?]
         };
         for (k, &i) in part.iter().enumerate() {
             out[i] = Affine { a: x[0][k], b: x[1][k] };
@@ -368,6 +381,54 @@ fn gauss_seidel(rows: &[Vec<(usize, f64)>], r: &[f64], mut x: Vec<f64>) -> Optio
         }
     }
     None
+}
+
+/// Solves x = r + P x approximately by BiCGSTAB, preconditioned by each state's self-loop, for
+/// Gauss-Seidel to finish: slowly mixing chains (an item that leaves a loop once in 1e5 steps)
+/// take that many sweeps, but only about its square root in Krylov steps. Returns its best
+/// iterate, or `x` itself if it breaks down.
+fn bicgstab(rows: &[Vec<(usize, f64)>], b: &[f64], x: Vec<f64>) -> Vec<f64> {
+    let n = rows.len();
+    let d: Vec<f64> = rows.iter().enumerate().map(|(k, row)| 1.0 - row.iter().filter(|e| e.0 == k).map(|e| e.1).sum::<f64>()).collect();
+    let apply = |x: &[f64]| -> Vec<f64> {
+        rows.iter().enumerate().map(|(k, row)| x[k] - row.iter().map(|&(j, p)| p * x[j]).sum::<f64>()).collect()
+    };
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let norm = |a: &[f64]| a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let ax = apply(&x);
+    let mut r: Vec<f64> = (0..n).map(|k| b[k] - ax[k]).collect();
+    let rhat = r.clone();
+    let (mut rho, mut alpha, mut omega) = (1.0, 1.0, 1.0);
+    let (mut v, mut p) = (vec![0.0; n], vec![0.0; n]);
+    let (mut x, mut best) = (x.clone(), x);
+    let mut least = norm(&r);
+    for _ in 0..10_000 {
+        let scale = norm(&x).max(norm(b)).max(1.0);
+        if least <= 1e-13 * scale {
+            break;
+        }
+        let rho_next = dot(&rhat, &r);
+        let beta = rho_next / rho * (alpha / omega);
+        rho = rho_next;
+        p = (0..n).map(|k| r[k] + beta * (p[k] - omega * v[k])).collect();
+        let y: Vec<f64> = (0..n).map(|k| p[k] / d[k]).collect();
+        v = apply(&y);
+        alpha = rho / dot(&rhat, &v);
+        let s: Vec<f64> = (0..n).map(|k| r[k] - alpha * v[k]).collect();
+        let z: Vec<f64> = (0..n).map(|k| s[k] / d[k]).collect();
+        let t = apply(&z);
+        omega = dot(&t, &s) / dot(&t, &t);
+        x = (0..n).map(|k| x[k] + alpha * y[k] + omega * z[k]).collect();
+        r = (0..n).map(|k| s[k] - omega * t[k]).collect();
+        let size = norm(&r);
+        if !size.is_finite() || !omega.is_finite() || omega == 0.0 || rho == 0.0 {
+            break;
+        }
+        if size < least {
+            (least, best) = (size, x.clone());
+        }
+    }
+    best
 }
 
 /// Gaussian elimination with partial pivoting, for several right-hand sides; `None` when
@@ -459,4 +520,58 @@ fn components(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
         }
     }
     out
+}
+
+/// Where following `solution` from `start` ends: each goal state's chance, with restarts (and
+/// states that gave up) beginning again from `start`, so the chances sum to one.
+pub fn ends<M: Model>(model: &M, solution: &Solution<M::State>, start: &[(f64, M::State)]) -> Vec<(f64, M::State)> {
+    // The states the policy visits, in visiting order, and the flow into each.
+    let mut order: Vec<usize> = Vec::new();
+    let mut place: HashMap<usize, usize> = HashMap::new();
+    let mut seed: Vec<f64> = Vec::new();
+    let mut visit = |s: usize, order: &mut Vec<usize>, seed: &mut Vec<f64>| {
+        *place.entry(s).or_insert_with(|| {
+            order.push(s);
+            seed.push(0.0);
+            order.len() - 1
+        })
+    };
+    for (p, s) in start {
+        let k = visit(solution.index[s], &mut order, &mut seed);
+        seed[k] += p;
+    }
+    let mut into: Vec<Vec<(usize, f64)>> = Vec::new();
+    let mut stay: Vec<f64> = Vec::new();
+    let mut k = 0;
+    while k < order.len() {
+        into.resize(order.len(), Vec::new());
+        stay.resize(order.len(), 0.0);
+        let s = order[k];
+        if let Some(a) = solution.policy[s] {
+            for (p, t) in model.outcomes(&solution.states[s], a) {
+                let Some(&t) = solution.index.get(&t) else { continue };
+                let j = visit(t, &mut order, &mut seed);
+                into.resize(order.len(), Vec::new());
+                stay.resize(order.len(), 0.0);
+                if j == k { stay[k] += p } else { into[j].push((k, p)) }
+            }
+        }
+        k += 1;
+    }
+    // Expected visits: x = seed + flow in.
+    let rows: Vec<Vec<(usize, f64)>> = into
+        .into_iter()
+        .zip(&stay)
+        .enumerate()
+        .map(|(t, (mut row, &p))| {
+            row.push((t, p));
+            row
+        })
+        .collect();
+    let guess = bicgstab(&rows, &seed, vec![0.0; rows.len()]);
+    let x = gauss_seidel(&rows, &seed, guess.clone()).unwrap_or(guess);
+    let goals: Vec<(f64, usize)> =
+        (0..order.len()).filter(|&k| model.is_goal(&solution.states[order[k]])).map(|k| (x[k], order[k])).collect();
+    let total: f64 = goals.iter().map(|g| g.0).sum();
+    goals.into_iter().map(|(p, s)| (p / total, solution.states[s].clone())).collect()
 }

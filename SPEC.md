@@ -243,6 +243,11 @@ caches.
 | Chaos per hour | 1,500 | User preference. |
 | Plain base price | 5c at any item level | Bases are not in the price file. Low. |
 | Bought stage prices | `price` on the guide stage | Rough market estimates, marked in each guide. Low. |
+| Recombinator price | 10 chaos each kind, when the price file has none | Guess. Low. |
+| Recombinator kept affixes | Per side, by pooled count n: n=1 keeps 0/1 at 1:2; 2 keeps 1/2 at 2:1; 3 keeps 1/2/3 at 3:5:2; 4 keeps 1/2/3 at 2:11:7; 5 keeps 2/3 at 1:1; 6+ keeps 2/3 at 3:7. Uniform picks; a pick sharing a group with a kept one is discarded | Craft of Exile's simulator. Medium. |
+| Recombinator bonus mod | 25% when the result has room: an exalt on the side with room (a magic result's empty side) | Craft of Exile's simulator; its rarer recombinator-only mods are not modelled. Medium. |
+| Recombinator heir | Base, influences, quality and Eldritch implicits from either item at even odds; item level the floor of the mean; influenced mods need the heir's influence | Craft of Exile's simulator. Medium. |
+| Fracturing | One uniform pick among all affixes but veiled ones, crafted included; a fractured craft is permanent | User (3.29). High. |
 | "Cannot Be Changed" refill | New mods may land on either side when it has room | Game behaviour as commonly reported. Medium. |
 | Veiled side | Prefix or suffix, even odds | Unverified. Low. |
 | Unveil | 3 offers drawn by weight without repeats (mods of one class share its mean weight); the wanted offer is kept, else the first | Approximation. Medium. |

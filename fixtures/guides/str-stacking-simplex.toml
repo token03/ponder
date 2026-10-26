@@ -33,7 +33,11 @@ min_mods = 4
 
 [[steps]]
 item = "warlord"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "warlord"
+do = ["transmutation", "alteration"]
 until = "per_strength"
 
 [[steps]]
@@ -46,7 +50,7 @@ item = "simplex"
 do = ["awakener:warlord+simplex", "annulment"]
 until = "awakened"
 max = 1
-else = 2
+else = 3
 
 [[steps]]
 item = "astrolabe"
@@ -58,4 +62,4 @@ note = "Increased strength plus two other influenced suffixes that are neither S
 do = ["recombinator:simplex+astrolabe"]
 until = "goal"
 max = 1
-else = 4
+else = 5

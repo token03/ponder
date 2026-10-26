@@ -33,12 +33,20 @@ mods = [
 
 [[steps]]
 item = "a"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "a"
+do = ["transmutation", "alteration"]
 until = "flat"
 
 [[steps]]
 item = "b"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "b"
+do = ["transmutation", "alteration"]
 until = "percent"
 
 [[steps]]

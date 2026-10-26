@@ -35,7 +35,11 @@ min_mods = 5
 
 [[steps]]
 item = "hunter"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "hunter"
+do = ["transmutation", "alteration"]
 until = "hunter_ms"
 
 [[steps]]
@@ -47,7 +51,7 @@ until = "elder_aoe"
 do = ["awakener:hunter+elder", "annulment"]
 until = "focused"
 max = 1
-else = 2
+else = 3
 note = "The Awakener adds one random mod; annul it."
 
 [[steps]]
@@ -60,4 +64,4 @@ note = "All other mods influenced but neither Hunter nor Elder."
 do = ["recombinator:astrolabe+main"]
 until = "goal"
 max = 1
-else = 4
+else = 5

@@ -8,13 +8,16 @@ mods = [
   { text = "+# to Level of Socketed Strength Gems", source = "fossil" },
   { text = "Can have up to # Crafted Modifiers", source = "crafted" },
   { text = "+# to Level of Socketed Support Gems", source = "crafted" },
-  { text = ["Minions deal #% increased Damage", "Minions have #% increased maximum Life"], source = "crafted" },
+  { text = "Minions deal #% increased Damage / Minions have #% increased maximum Life", source = "crafted" },
 ]
 
 [stages.attributes]
 mods = [{ text = "+# to Level of Socketed Intelligence Gems", source = "fossil" }, { text = "+# to Level of Socketed Strength Gems", source = "fossil" }]
-max_prefix = 0
 open_suffix = 1
+
+[stages.attributes_clean]
+mods = [{ text = "+# to Level of Socketed Intelligence Gems", source = "fossil" }, { text = "+# to Level of Socketed Strength Gems", source = "fossil" }]
+max_prefix = 0
 
 [[steps]]
 do = ["buy:base"]
@@ -24,6 +27,11 @@ do = ["fossil:aetheric+corroded+faceted+opulent"]
 until = "attributes"
 
 [[steps]]
-do = ["bench:multimod", "bench:socketed-support-gems", "bench:minion-damage-or-life"]
+do = ["bench:suffixes-cannot-be-changed", "scouring"]
+until = "attributes_clean"
+note = "Not in the guide: fossil rares have at least four mods, so the prefixes need clearing."
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:multimod", "bench:socketed-support-gems", "bench:minion-damage-or-life"]
 until = "goal"
 note = "The guide's best-roll variant uses cannot-roll-attack plus exalted and a veiled exalt."

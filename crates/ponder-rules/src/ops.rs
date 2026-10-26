@@ -14,6 +14,7 @@ pub mod fossil;
 pub mod harvest;
 pub mod influence;
 pub mod misc;
+pub mod recombinator;
 pub mod veiled;
 
 use std::hash::{Hash, Hasher};
@@ -100,7 +101,7 @@ impl Hash for Bias {
 
 /// One primitive. Fractured mods survive every step (SPEC §4.5); a "Cannot Be Changed"
 /// metamod protects its side when a step respects locks (SPEC §4.7).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     /// Remove the mods on these sides, except fractured ones and, when `respect_lock`, the
     /// locked side.
@@ -137,13 +138,43 @@ pub enum Step {
     Influence(Influence),
     /// Set the side the dominant Eldritch implicit selects.
     Eldritch(Option<Side>),
-    /// Fracture one random mod (not crafted, not veiled).
+    /// Fracture one random mod, crafted ones included (not veiled).
     Fracture,
     /// Add a veiled mod on a random side with room.
     Veil(Sides),
     /// Replace the veiled mod: three offers from its side's unveil pool, keeping the most
     /// preferred one (earlier lists first), else the first offered.
     Unveil(Arc<Vec<Vec<ModId>>>),
+    /// Combine with a second item (SPEC §4.9): base, influences and Eldritch implicits come
+    /// from either, and each side keeps some of both items' affixes there.
+    Recombine(SupplyRef),
+}
+
+/// Where an item comes from: bought, or made by another craft (a recombination's second
+/// item). Its price, how its solver states are distributed (for the lens) and real ones (for
+/// the simulator). A made one is filled in once solved, so it can exist before its lens.
+pub trait Supply: Send + Sync {
+    fn name(&self) -> String;
+    /// Chaos for one.
+    fn price(&self) -> f64;
+    fn states(&self) -> &[(f64, crate::lens::State)];
+    fn item(&self, rng: &mut Rng) -> Item;
+}
+
+/// A shared supply, equal only to itself.
+#[derive(Clone)]
+pub struct SupplyRef(pub Arc<dyn Supply>);
+
+impl PartialEq for SupplyRef {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.0), Arc::as_ptr(&other.0))
+    }
+}
+
+impl std::fmt::Debug for SupplyRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Supply({})", self.0.name())
+    }
 }
 
 /// How many offers an unveil shows.
@@ -303,11 +334,13 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                 let options: Vec<usize> = (0..item.affixes.len())
                     .filter(|&i| {
                         let a = item.affixes[i];
-                        !a.crafted && !a.fractured && !game.veils.contains(&a.id)
+                        !a.fractured && !game.veils.contains(&a.id)
                     })
                     .collect();
                 if !options.is_empty() {
-                    item.affixes[options[rng.below(options.len())]].fractured = true;
+                    // A fractured bench craft is no longer removable.
+                    let a = &mut item.affixes[options[rng.below(options.len())]];
+                    (a.fractured, a.crafted) = (true, false);
                 }
             }
             Step::Veil(sides) => {
@@ -322,6 +355,7 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                 }
             }
             Step::Unveil(prefs) => unveil(ctx, item, rng, prefs),
+            Step::Recombine(partner) => recombine(ctx, item, partner.0.item(rng), rng),
         }
     }
 }
@@ -364,6 +398,59 @@ fn unveil(ctx: &Ctx, item: &mut Item, rng: &mut Rng, prefs: &[Vec<ModId>]) {
     if let Some(&best) = offers.iter().min_by_key(|m| rank(**m)) {
         let chosen = if rank(best) == usize::MAX { offers[0] } else { best };
         item.affixes.push(Affix { id: chosen, crafted: false, fractured: false });
+    }
+}
+
+fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
+    let game = ctx.game;
+    let ilvl = ((item.kind.ilvl as u16 + other.kind.ilvl as u16) / 2) as u8;
+    let mut pool: Vec<Affix> = item.affixes.drain(..).chain(other.affixes.iter().copied()).collect();
+    if rng.below(2) == 1 {
+        (item.kind, item.quality, item.eldritch) = (other.kind, other.quality, other.eldritch);
+    }
+    item.kind.ilvl = ilvl;
+    // Influenced mods need the influence the result kept.
+    pool.retain(|a| game.def(a.id).influence.is_none_or(|i| item.kind.influences.0 & 1 << i as u8 != 0));
+    item.rarity = Rarity::Rare;
+    let limit = item.limit(game);
+    for side in Side::BOTH {
+        let mut here: Vec<Affix> = pool.iter().copied().filter(|a| game.def(a.id).side == side).collect();
+        let table = recombine_kept(ctx, here.len());
+        let keep = rng.pick(table.iter().map(|e| e.1)).map_or(0, |i| table[i].0 as usize).min(limit);
+        let mut kept = 0;
+        while kept < keep && !here.is_empty() {
+            // A mod sharing a group with one already kept is discarded.
+            let a = here.remove(rng.below(here.len()));
+            if !item.blocks(game, a.id) {
+                item.affixes.push(a);
+                kept += 1;
+            }
+        }
+    }
+    run(ctx, &[Step::Settle], item, rng);
+    if item.affixes.len() < 2 * limit && rng.unit() < ctx.assumptions.recombine_bonus {
+        let sides = bonus_sides(item.rarity, item.count(game, Side::Prefix), item.count(game, Side::Suffix), limit);
+        item.rarity = Rarity::Rare;
+        draw(ctx, item, rng, &Pick { sides, ..Pick::ANY });
+        run(ctx, &[Step::Settle], item, rng);
+    }
+}
+
+/// The kept-count table for a pool of `n` affixes on one side.
+pub fn recombine_kept<'a>(ctx: &'a Ctx, n: usize) -> &'a [(u8, f64)] {
+    let rows = &ctx.assumptions.recombine_kept;
+    &rows[n.min(rows.len() - 1)]
+}
+
+/// Where a recombination's bonus mod may go: a magic result fills an empty side, a rare one
+/// the side that has room.
+pub fn bonus_sides(rarity: Rarity, prefixes: usize, suffixes: usize, limit: usize) -> Sides {
+    match rarity {
+        Rarity::Magic if prefixes == 0 => Sides::Only(Side::Prefix),
+        Rarity::Magic if suffixes == 0 => Sides::Only(Side::Suffix),
+        _ if prefixes >= limit => Sides::Only(Side::Suffix),
+        _ if suffixes >= limit => Sides::Only(Side::Prefix),
+        _ => Sides::Both,
     }
 }
 
@@ -479,6 +566,17 @@ impl View for (&Game, &Item) {
     fn veiled(&self) -> bool {
         self.1.affixes.iter().any(|a| self.0.veils.contains(&a.id))
     }
+}
+
+/// What a craft may use besides the basic currency without anyone naming it: every essence
+/// that forces a mod in `wanted` on this item class, and every Harvest reforge whose tag a mod
+/// in `wanted` that rolls naturally carries.
+pub fn catalogue(game: &Game, class: &str, wanted: &std::collections::HashSet<ModId>) -> Vec<Box<dyn Operation>> {
+    let essences = essence::Essence::all(game, class).into_iter().filter(|e| wanted.contains(&e.forced()));
+    let rolls = |m: ModId| game.def(m).source == Source::Natural;
+    let reforges =
+        harvest::reforges(game).into_iter().filter(|(_, tag)| wanted.iter().any(|&m| rolls(m) && game.def(m).tags.contains(tag)));
+    essences.map(|e| Box::new(e) as Box<dyn Operation>).chain(reforges.map(|r| r.0)).collect()
 }
 
 /// The operation a guide names (`annulment`, `essence:deafening-woe`, `bench:remove-crafted`,

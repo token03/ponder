@@ -10,6 +10,10 @@
 //! back to a step that buys starts over. A lock ("Cannot Be Changed") that cannot be crafted
 //! abandons the attempt instead: to the `else` step, or to the first step (buying afresh)
 //! without one.
+//!
+//! A guide that works on several items has one recipe per item (`item` on its steps). An
+//! item made from others starts from one of them, bought at what making it costs, and falling
+//! back to a step of another item starts it over.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -46,29 +50,39 @@ pub struct Recipe {
 }
 
 impl Recipe {
-    /// `targets` maps stage names (and "goal") to lens target indices; `actions` names the
-    /// craft's actions (`buy:<start>` for purchases). Fails on anything not implemented yet or on
-    /// more than one item.
-    pub fn new(guide: &Guide, targets: &HashMap<String, usize>, actions: &[String], ops: usize) -> Result<Recipe, String> {
-        let mut steps = Vec::new();
-        let mut start: Option<(usize, (usize, usize))> = None;
-        for (n, step) in guide.steps.iter().enumerate() {
-            if step.item != "main" {
-                return Err(format!("works on several items ({})", step.item));
-            }
+    /// The recipe for the guide's item `item`, ending at its last step's stage. `targets` maps
+    /// stage names (and "goal") to lens target indices; `actions` names the craft's actions
+    /// (`buy:<start>` for purchases, the first `ops` being operations). `start` is the purchase
+    /// an item made from others begins with. Fails on anything not implemented yet.
+    pub fn new(
+        guide: &Guide,
+        item: &str,
+        targets: &HashMap<String, usize>,
+        actions: &[String],
+        ops: usize,
+        start: Option<Action>,
+    ) -> Result<Recipe, String> {
+        let own: Vec<usize> = (0..guide.steps.len()).filter(|&g| guide.steps[g].item == item).collect();
+        let first = usize::from(start.is_some());
+        let local = |g: usize| own.iter().position(|&o| o == g).map_or(0, |l| l + first);
+        let mut steps: Vec<Step> = start.map(|a| Step { ops: vec![a], until: None, max: None, fallback: None }).into_iter().collect();
+        let mut bought: Option<(usize, (usize, usize))> = start.map(|a| (a - ops, (0, 0)));
+        for &g in &own {
+            let step = &guide.steps[g];
             let mut indices = Vec::new();
             for op in &step.ops {
                 let i = actions.iter().position(|o| o == op).ok_or_else(|| format!("needs {op}"))?;
-                if i >= ops && start.get_or_insert((i - ops, (n, indices.len()))).0 != i - ops {
+                if i >= ops && bought.get_or_insert((i - ops, (steps.len(), indices.len()))).0 != i - ops {
                     return Err(format!("buys more than one kind of item ({op})"));
                 }
                 indices.push(i);
             }
             let until = step.until.as_ref().map(|u| targets[u]);
-            steps.push(Step { ops: indices, until, max: step.max, fallback: step.fallback.map(|f| f - 1) });
+            steps.push(Step { ops: indices, until, max: step.max, fallback: step.fallback.map(|f| local(f - 1)) });
         }
-        let (start, begin) = start.ok_or("buys nothing")?;
-        Ok(Recipe { steps, goal: targets["goal"], start, begin })
+        let goal = guide.steps[*own.last().ok_or("no steps")?].until.as_ref().ok_or("the last step has no stage")?;
+        let (start, begin) = bought.ok_or("buys nothing")?;
+        Ok(Recipe { steps, goal: targets[goal], start, begin })
     }
 
     /// Where an item that just finished an attempt at step `i` goes next.
@@ -102,7 +116,7 @@ impl Recipe {
     pub fn trace(&self, craft: &Craft, targets: &[Target], limit: usize, rng: &mut Rng) -> Vec<String> {
         let game: &Game = craft.ctx.game;
         let holds = |t: usize, item: &Item| targets[t].holds(game, item);
-        let mut item = craft.starts[self.start].item.clone();
+        let mut item = craft.starts[self.start].item(rng);
         let mut out = Vec::new();
         let (mut i, mut k) = (self.forward(0, |t| holds(t, &item)), 0);
         while !holds(self.goal, &item) && i < self.steps.len() && out.len() < limit {
@@ -135,8 +149,8 @@ impl Recipe {
     /// Apply action `a` to a real item if it can: what happened, and the cost.
     fn apply(&self, craft: &Craft, a: Action, item: &mut Item, rng: &mut Rng) -> (Applied, f64) {
         if let Some(b) = craft.start_of(a) {
-            *item = b.item.clone();
-            return (Applied::Done, b.price);
+            *item = b.item(rng);
+            return (Applied::Done, b.price());
         }
         let (op, price) = craft.ops[a];
         if !op.applies(craft.ctx, &(craft.ctx.game, &*item)) {
@@ -146,26 +160,28 @@ impl Recipe {
         (Applied::Done, price)
     }
 
-    /// Mean cost of following the recipe on real items, and its standard error, over `runs` runs,
-    /// run `r` seeded with `seed + r`. The item the recipe starts from is bought, not given. An
-    /// item at a position the exact solve gave up on (`given_up`) is abandoned for a fresh one.
-    pub fn simulate(&self, craft: &Craft, targets: &[Target], given_up: &HashSet<Position>, runs: usize, seed: u64) -> (f64, f64) {
+    /// Following the recipe on real items over `runs` runs, run `r` seeded with `seed + r`:
+    /// mean cost, its standard error, and the finished items. The item the recipe starts from
+    /// is bought, not given. An item at a position the exact solve gave up on (`given_up`) is
+    /// abandoned for a fresh one.
+    pub fn simulate(&self, craft: &Craft, targets: &[Target], given_up: &HashSet<Position>, runs: usize, seed: u64) -> Simulated {
         let game: &Game = craft.ctx.game;
         let holds = |t: usize, item: &Item| targets[t].holds(game, item);
-        let costs: Vec<f64> = (0..runs as u64)
+        let start = &craft.starts[self.start];
+        let done: Vec<(f64, Item)> = (0..runs as u64)
             .into_par_iter()
             .map(|r| {
                 let rng = &mut Rng::new(seed + r);
-                let mut item = craft.starts[self.start].item.clone();
-                let mut cost = craft.starts[self.start].price;
+                let mut item = start.item(rng);
+                let mut cost = start.price();
                 let mut i = self.forward(0, |t| holds(t, &item));
                 let mut k = 0;
                 let mut guard = 0;
                 while !holds(self.goal, &item) && i < self.steps.len() && guard < 1_000_000 {
                     guard += 1;
                     if !given_up.is_empty() && given_up.contains(&Position::At(i as u8, 0, k, craft.lens.project(&item))) {
-                        item = craft.starts[self.start].item.clone();
-                        cost += craft.starts[self.start].price;
+                        item = start.item(rng);
+                        cost += start.price();
                         (i, k) = (self.forward(0, |t| holds(t, &item)), 0);
                         continue;
                     }
@@ -180,13 +196,21 @@ impl Recipe {
                     }
                     (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
                 }
-                cost
+                (cost, item)
             })
             .collect();
-        let mean = costs.iter().sum::<f64>() / runs as f64;
-        let var = costs.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
-        (mean, (var / runs as f64).sqrt())
+        let mean = done.iter().map(|d| d.0).sum::<f64>() / runs as f64;
+        let var = done.iter().map(|d| (d.0 - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
+        let items = done.into_iter().map(|d| d.1).filter(|i| holds(self.goal, i)).collect();
+        Simulated { mean, error: (var / runs as f64).sqrt(), items }
     }
+}
+
+/// A recipe followed on real items.
+pub struct Simulated {
+    pub mean: f64,
+    pub error: f64,
+    pub items: Vec<Item>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -267,7 +291,7 @@ impl Model for Following<'_> {
     /// operation that does not apply, 2 abandons the attempt for want of a lock.
     fn actions(&self, p: &Position) -> Vec<(usize, f64)> {
         let (i, j, s) = match p {
-            Position::Fresh => return vec![(0, self.craft.starts[self.recipe.start].price)],
+            Position::Fresh => return vec![(0, self.craft.starts[self.recipe.start].price())],
             Position::At(i, j, _, s) => (*i as usize, *j as usize, s),
             Position::Hub(..) => return vec![(0, 0.0)],
             Position::Restart => return Vec::new(),
@@ -286,7 +310,8 @@ impl Model for Following<'_> {
         let (i, j, k, s) = match p {
             Position::Fresh => {
                 let (i, j) = self.recipe.begin;
-                return vec![(1.0, self.advance(i, j + 1, 0, self.craft.starts[self.recipe.start].state.clone()))];
+                let states = self.craft.starts[self.recipe.start].states();
+                return states.iter().map(|(p, s)| (*p, self.advance(i, j + 1, 0, s.clone()))).collect();
             }
             Position::At(i, j, k, s) | Position::Hub(i, j, k, s) => (*i as usize, *j as usize, *k, s),
             Position::Restart => return Vec::new(),

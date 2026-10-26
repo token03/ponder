@@ -36,12 +36,20 @@ mods = [
 
 [[steps]]
 item = "a"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "a"
+do = ["transmutation", "alteration"]
 until = "cold"
 
 [[steps]]
 item = "b"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "b"
+do = ["transmutation", "alteration"]
 until = "fire"
 
 [[steps]]
@@ -53,12 +61,20 @@ else = 1
 
 [[steps]]
 item = "c"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "c"
+do = ["transmutation", "alteration"]
 until = "cold"
 
 [[steps]]
 item = "d"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "d"
+do = ["transmutation", "alteration"]
 until = "lightning"
 
 [[steps]]
@@ -66,7 +82,7 @@ item = "cd"
 do = ["bench:any-suffix", "recombinator:c+d"]
 until = "cold_lightning"
 max = 1
-else = 4
+else = 6
 
 [[steps]]
 do = ["recombinator:ab+cd"]

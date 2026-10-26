@@ -37,12 +37,20 @@ mods = [
 
 [[steps]]
 item = "a"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "a"
+do = ["transmutation", "alteration"]
 until = "flat"
 
 [[steps]]
 item = "b"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "b"
+do = ["transmutation", "alteration"]
 until = "percent"
 
 [[steps]]
@@ -54,12 +62,20 @@ else = 1
 
 [[steps]]
 item = "c"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "c"
+do = ["transmutation", "alteration"]
 until = "flat"
 
 [[steps]]
 item = "d"
-do = ["buy:base", "alteration"]
+do = ["buy:base"]
+
+[[steps]]
+item = "d"
+do = ["transmutation", "alteration"]
 until = "hybrid"
 
 [[steps]]
@@ -67,7 +83,7 @@ item = "cd"
 do = ["bench:any-suffix", "recombinator:c+d"]
 until = "flat_hybrid"
 max = 1
-else = 4
+else = 6
 
 [[steps]]
 do = ["recombinator:ab+cd"]

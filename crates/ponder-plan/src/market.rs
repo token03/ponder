@@ -24,7 +24,11 @@ impl Market {
             flate2::read::GzDecoder::new(&bytes[..]).read_to_end(&mut out)?;
             bytes = out;
         }
-        let prices = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+        let mut prices: HashMap<String, f64> = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+        // Recombinators are not in the price file (SPEC §10).
+        for kind in ["armour", "weapon", "jewellery"] {
+            prices.entry(format!("{kind}-recombinator")).or_insert(10.0);
+        }
         Ok(Market { prices, chaos_per_hour: 1500.0, base: 5.0 })
     }
 

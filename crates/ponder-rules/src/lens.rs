@@ -69,6 +69,8 @@ pub struct Lens<'g> {
     /// of the class's mods the item holds (see [`Weights`]).
     pools: Vec<((Pool, TagFilter), Vec<Weights>)>,
     unveil: Vec<Weights>,
+    /// Per untracked class, the chance two of its rolled mods share a group (recombination).
+    collide: Vec<f64>,
     targets: Vec<(Target, usize)>,
     /// Class of the prefix lock and suffix lock metamods; of any metamod; of the attack and
     /// caster bans with the tag bit each removes.
@@ -76,6 +78,8 @@ pub struct Lens<'g> {
     metamods: Vec<usize>,
     bans: Vec<(usize, u32)>,
 }
+
+static ANY: Pick = Pick::ANY;
 
 /// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
 type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
@@ -125,6 +129,8 @@ impl<'g> Lens<'g> {
                 Step::Unveil(p) => prefs.push(p),
                 Step::Influence(i) => influences |= 1 << *i as u8,
                 Step::Veil(_) => forced.extend(game.veils),
+                // The bonus mod, like an exalt.
+                Step::Recombine(_) => picks.push(&ANY),
                 _ => {}
             }
         }
@@ -265,13 +271,26 @@ impl<'g> Lens<'g> {
         });
         let pools = pools.collect();
         let unveil = class_weights(&|m, w| unveil_weight(game, game.def(m), m, w));
+        // Two rolled mods of an untracked class share a group with chance sum(w_g^2) / (sum w)^2.
+        let collide = members
+            .iter()
+            .zip(&classes)
+            .map(|(ms, c)| {
+                let mut groups: BTreeMap<Option<GroupId>, f64> = BTreeMap::new();
+                for m in ms {
+                    *groups.entry(game.def(*m).groups.first().copied()).or_default() += weight_of.get(m).copied().unwrap_or(0.0);
+                }
+                let all: f64 = groups.values().sum();
+                if c.tracked || all <= 0.0 { 0.0 } else { groups.values().map(|w| w * w).sum::<f64>() / (all * all) }
+            })
+            .collect();
         let class_for = |key: Option<&ModId>| key.and_then(|m| class_of.get(m).copied());
         let lock = [class_for(game.metamods.first()), class_for(game.metamods.get(1))];
         let metamods = game.metamods.iter().filter_map(|m| class_of.get(m).copied()).collect();
         let bans = bans.iter().filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?))).collect();
         let targets = targets.into_iter().zip(offsets).collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
-        Lens { game, kind, class_name, classes, class_of, read_tags, pools, unveil, targets, lock, metamods, bans }
+        Lens { game, kind, class_name, classes, class_of, read_tags, pools, unveil, collide, targets, lock, metamods, bans }
     }
 
     pub fn classes(&self) -> usize {
@@ -293,6 +312,19 @@ impl<'g> Lens<'g> {
             counts[c + if a.fractured { n } else { 0 }] += 1;
         }
         State { rarity: item.rarity, influences: item.kind.influences.0, eldritch: item.eldritch, counts: counts.into() }
+    }
+
+    /// Whether two step lists do the same to every state: equal but for forcing different
+    /// mods of one class (essences of different tiers that serve the same needs).
+    pub fn same_effect(&self, a: &[Step], b: &[Step]) -> bool {
+        // Identical steps can still differ in where they apply (augmentation and exalted both
+        // add a mod), so only different forced mods of one class count.
+        a != b
+            && a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| match (x, y) {
+                (Step::Force(m), Step::Force(n)) => self.class_of.get(m) == self.class_of.get(n),
+                _ => x == y,
+            })
     }
 
     pub fn view<'a>(&'a self, state: &'a State) -> StateView<'a> {
@@ -363,16 +395,7 @@ impl<'g> Lens<'g> {
                 s.rarity = *r;
                 emit(1.0, s, total);
             }
-            Step::Settle => {
-                let v = self.view(&s);
-                let most = Side::BOTH.iter().map(|x| v.count(*x)).max().unwrap_or(0);
-                s.rarity = match most {
-                    0 => Rarity::Normal,
-                    1 => Rarity::Magic,
-                    _ => Rarity::Rare,
-                };
-                emit(1.0, s, total);
-            }
+            Step::Settle => emit(1.0, self.settled(s), total),
             Step::RollCount => {
                 let table = count_table(ctx, &self.class_name, s.rarity);
                 let sum: f64 = table.iter().map(|e| e.1).sum();
@@ -442,8 +465,7 @@ impl<'g> Lens<'g> {
                 emit(1.0, s, total);
             }
             Step::Fracture => {
-                let options: Vec<usize> =
-                    (0..n).filter(|&c| s.counts[c] > 0 && !self.classes[c].crafted && !self.classes[c].veil).collect();
+                let options: Vec<usize> = (0..n).filter(|&c| s.counts[c] > 0 && !self.classes[c].veil).collect();
                 let all: f64 = options.iter().map(|&c| s.counts[c] as f64).sum();
                 if all == 0.0 {
                     return emit(1.0, s, total);
@@ -473,6 +495,7 @@ impl<'g> Lens<'g> {
                 }
             }
             Step::Unveil(_) => self.unveil(s, total, emit),
+            Step::Recombine(p) => self.recombine(ctx, &s, total, p.0.states(), emit),
         }
     }
 
@@ -511,6 +534,130 @@ impl<'g> Lens<'g> {
     }
 
     /// One weighted draw; the state is unchanged when nothing fits.
+    /// Rarity from what is left: no mods normal, at most one per side magic, else rare.
+    fn settled(&self, mut s: State) -> State {
+        let v = self.view(&s);
+        let most = Side::BOTH.iter().map(|x| v.count(*x)).max().unwrap_or(0);
+        s.rarity = match most {
+            0 => Rarity::Normal,
+            1 => Rarity::Magic,
+            _ => Rarity::Rare,
+        };
+        s
+    }
+
+    /// A recombination with each partner state: per heir (whose influences and Eldritch
+    /// implicits the result takes), each side keeps a uniform sample of the pooled affixes,
+    /// dropping any that conflicts with one kept, then perhaps a bonus mod.
+    fn recombine(&self, ctx: &Ctx, s: &State, total: u8, partner: &[(f64, State)], emit: &mut dyn FnMut(f64, State, u8)) {
+        let n = self.classes.len();
+        let rare = State { rarity: Rarity::Rare, ..s.clone() };
+        let limit = self.view(&rare).limit();
+        let bonus = ctx.assumptions.recombine_bonus;
+        for (q, o) in partner {
+            let heirs = if (s.influences, s.eldritch) == (o.influences, o.eldritch) { vec![s] } else { vec![s, o] };
+            for heir in &heirs {
+                let q = q / heirs.len() as f64;
+                let allowed = |c: usize| match self.classes[c % n].origin {
+                    Origin::Natural(Some(i)) => heir.influences & 1 << i as u8 != 0,
+                    _ => true,
+                };
+                let mut results: Vec<(f64, Vec<u8>)> = vec![(1.0, vec![0; 2 * n])];
+                for side in Side::BOTH {
+                    let pool: Vec<(usize, u8)> = (0..2 * n)
+                        .filter(|&c| self.classes[c % n].side == side && allowed(c))
+                        .map(|c| (c, s.counts[c] + o.counts[c]))
+                        .filter(|e| e.1 > 0)
+                        .collect();
+                    let size: usize = pool.iter().map(|e| e.1 as usize).sum();
+                    let table = crate::ops::recombine_kept(ctx, size);
+                    let all: f64 = table.iter().map(|e| e.1).sum();
+                    let mut kept: HashMap<Vec<u8>, f64> = HashMap::new();
+                    for &(k, w) in table {
+                        for (p, chosen) in self.sample(&pool, (k as usize).min(limit)) {
+                            *kept.entry(chosen).or_default() += w / all * p;
+                        }
+                    }
+                    let pool = &pool;
+                    results = results
+                        .iter()
+                        .flat_map(|(p, counts)| {
+                            kept.iter().map(move |(chosen, r)| {
+                                let mut counts = counts.clone();
+                                for (e, &(c, _)) in pool.iter().enumerate() {
+                                    counts[c] += chosen[e];
+                                }
+                                (p * r, counts)
+                            })
+                        })
+                        .collect();
+                }
+                for (p, counts) in results {
+                    let t = self.settled(State { counts: counts.into(), ..(*heir).clone() });
+                    let v = self.view(&t);
+                    let (prefixes, suffixes) = (v.count(Side::Prefix), v.count(Side::Suffix));
+                    if prefixes + suffixes >= 2 * limit {
+                        emit(q * p, t, total);
+                        continue;
+                    }
+                    emit(q * p * (1.0 - bonus), t.clone(), total);
+                    let sides = crate::ops::bonus_sides(t.rarity, prefixes, suffixes, limit);
+                    let pick = Pick { sides, ..Pick::ANY };
+                    self.draw(State { rarity: Rarity::Rare, ..t }, total, &pick, &mut |r, u, total| {
+                        emit(q * p * bonus * r, self.settled(u), total)
+                    });
+                }
+            }
+        }
+    }
+
+    /// Distinct affixes drawn uniformly from `pool` ((class, count) entries) until `keep` are
+    /// kept or none are left; one conflicting with a kept affix is discarded (for untracked
+    /// classes, sharing a group with each kept one of its class by chance). Per outcome, how
+    /// many of each entry were kept.
+    fn sample(&self, pool: &[(usize, u8)], keep: usize) -> Vec<(f64, Vec<u8>)> {
+        let n = self.classes.len();
+        let conflicts = |a: usize, b: usize| {
+            let (a, b) = (a % n, b % n);
+            self.classes[a].conflicts.contains(&b) || (a == b && self.classes[a].origin == Origin::Fixed)
+        };
+        let mut open: Vec<(f64, Vec<u8>, Vec<u8>)> = vec![(1.0, pool.iter().map(|e| e.1).collect(), vec![0; pool.len()])];
+        let mut done: HashMap<Vec<u8>, f64> = HashMap::new();
+        while !open.is_empty() {
+            let mut next: HashMap<(Vec<u8>, Vec<u8>), f64> = HashMap::new();
+            for (p, left, kept) in open {
+                let remaining: u32 = left.iter().map(|&x| x as u32).sum();
+                if remaining == 0 || kept.iter().map(|&x| x as usize).sum::<usize>() >= keep {
+                    *done.entry(kept).or_default() += p;
+                    continue;
+                }
+                for e in 0..pool.len() {
+                    if left[e] == 0 {
+                        continue;
+                    }
+                    let mut left = left.clone();
+                    let r = p * left[e] as f64 / remaining as f64;
+                    left[e] -= 1;
+                    if (0..pool.len()).any(|f| kept[f] > 0 && conflicts(pool[e].0, pool[f].0)) {
+                        *next.entry((left, kept.clone())).or_default() += r;
+                        continue;
+                    }
+                    let c = pool[e].0 % n;
+                    let same: i32 = (0..pool.len()).filter(|&f| pool[f].0 % n == c).map(|f| kept[f] as i32).sum();
+                    let clash = 1.0 - (1.0 - self.collide[c]).powi(same);
+                    let mut grown = kept.clone();
+                    grown[e] += 1;
+                    *next.entry((left.clone(), grown)).or_default() += r * (1.0 - clash);
+                    if clash > 0.0 {
+                        *next.entry((left, kept.clone())).or_default() += r * clash;
+                    }
+                }
+            }
+            open = next.into_iter().map(|((l, k), p)| (p, l, k)).collect();
+        }
+        done.into_iter().map(|(k, p)| (p, k)).collect()
+    }
+
     fn draw(&self, s: State, total: u8, pick: &Pick, emit: &mut dyn FnMut(f64, State, u8)) {
         let options = self.options(&s, pick);
         let all: f64 = options.iter().map(|o| o.1).sum();

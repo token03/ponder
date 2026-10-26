@@ -18,6 +18,12 @@ mods = [
   { text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true },
   { text = "+# to Level of all Spell Skill Gems" },
 ]
+
+[stages.spell_gems_open]
+mods = [
+  { text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true },
+  { text = "+# to Level of all Spell Skill Gems" },
+]
 open_prefix = 2
 open_suffix = 1
 
@@ -34,6 +40,11 @@ do = ["buy:fractured_base"]
 [[steps]]
 do = ["fossil:jagged+metallic+shuddering+corroded"]
 until = "spell_gems"
+
+[[steps]]
+do = ["annulment"]
+until = "spell_gems_open"
+note = "Not in the guide: fossil rares have at least four mods, so annul down to the open slots."
 
 [[steps]]
 do = ["bench:cannot-roll-attack", "harvest:add-remove-physical"]

@@ -69,6 +69,11 @@ pub fn parse(game: &Game, arg: &str) -> Option<Box<dyn Operation>> {
     Some(Box::new(Harvest { name: label, kind, steps, cost: Cost::of(lifeforce, amount, 4.0) }))
 }
 
+/// Every reforge craft, with its tag.
+pub fn reforges(game: &Game) -> Vec<(Box<dyn Operation>, crate::game::TagId)> {
+    CRAFTS.iter().filter_map(|c| Some((parse(game, &format!("reforge-{}", c.0))?, game.tag_id(c.1)?))).collect()
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Reforge,
