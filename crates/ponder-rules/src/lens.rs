@@ -367,6 +367,10 @@ impl<'g> Lens<'g> {
         self.classes.len()
     }
 
+    pub fn clear_cache(&mut self) {
+        *self.samples.get_mut().unwrap() = HashMap::new();
+    }
+
     /// One class for diagnostics: its fields and a few of its mods.
     pub fn describe(&self, c: usize) -> String {
         let mods: Vec<&str> = self.class_of.iter().filter(|(_, k)| **k == c).map(|(m, _)| self.game.def(*m).key.as_str()).take(3).collect();

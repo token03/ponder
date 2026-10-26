@@ -4,4 +4,5 @@
 pub mod craft;
 pub mod market;
 pub mod recipe;
+pub mod session;
 pub mod supply;

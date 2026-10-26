@@ -1,6 +1,6 @@
 //! Small problems with known answers.
 
-use ponder_solve::{Error, Model, solve};
+use ponder_solve::{Error, Model, ends, solve};
 
 /// States 0..=n; state n is the goal. Each action is (cost, [(p, next)]) available in every
 /// non-goal state, with `next` relative: Some(k) moves to k, None stays.
@@ -114,4 +114,17 @@ fn restarting_competes_with_repair() {
         let s = solve(&m, &[(1.0, 0)], 100).unwrap();
         assert!((s.cost - want).abs() < 1e-9, "price {price}: {}", s.cost);
     }
+}
+
+#[test]
+fn only_the_finished_policy_is_retained() {
+    let m = Chain { goal: 1, actions: vec![vec![(1.0, vec![(1.0, 1)]), (2.0, vec![(1.0, 2)])], vec![], vec![(100.0, vec![(1.0, 1)])]] };
+    let s = solve(&m, &[(1.0, 0)], 3).unwrap();
+    assert_eq!(s.cost, 1.0);
+    assert_eq!(s.explored, 3);
+    assert_eq!(s.actions, 3);
+    assert_eq!(s.states.len(), 2);
+    assert!(!s.index.contains_key(&2));
+    assert_eq!(ends(&m, &s, &[(1.0, 0)]), vec![(1.0, 1)]);
+    assert_eq!(solve(&m, &[(1.0, 0)], 2).unwrap_err(), Error::TooManyStates(2));
 }

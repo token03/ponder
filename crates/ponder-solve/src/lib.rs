@@ -45,6 +45,8 @@ pub struct Solution<S> {
     /// States that gave up (see [`Model::gives_up`]).
     pub given_up: Vec<S>,
     pub outcomes: usize,
+    pub explored: usize,
+    pub actions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +130,7 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
     }
     let n = states.len();
     let outcomes = edges.iter().flatten().map(|e| e.to.len()).sum();
+    let actions = edges.iter().map(Vec::len).sum();
     // Keep only actions whose every outcome can still reach the goal (or a restart) and that
     // leave the state; a state is alive while some kept action path gets there.
     let mut alive = vec![true; n];
@@ -201,10 +204,39 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         }
         let next = if restarts { (at_start.a / (1.0 - at_start.b)).min(w) } else { w };
         if stable && (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
-            let values: Vec<f64> = affine.iter().map(|f| f.at(next)).collect();
-            let policy = (0..n).map(|s| (choice[s] != usize::MAX && !end[s] && alive[s]).then(|| edges[s][choice[s]].action)).collect();
             let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
-            return Ok(Solution { cost: at_start.at(next), states, values, policy, index, given_up, outcomes });
+            let mut reachable = vec![false; n];
+            let mut stack = Vec::new();
+            for &(_, s) in &starts {
+                if !reachable[s] {
+                    reachable[s] = true;
+                    stack.push(s);
+                }
+            }
+            while let Some(s) = stack.pop() {
+                if choice[s] != usize::MAX && !end[s] && alive[s] {
+                    for &(_, t) in &edges[s][choice[s]].to {
+                        if !reachable[t] {
+                            reachable[t] = true;
+                            stack.push(t);
+                        }
+                    }
+                }
+            }
+            let explored = n;
+            drop(index);
+            let retained = reachable.iter().filter(|r| **r).count();
+            let mut kept = Vec::with_capacity(retained);
+            let mut values = Vec::with_capacity(retained);
+            let mut policy = Vec::with_capacity(retained);
+            let mut index = HashMap::with_capacity(retained);
+            for (i, state) in states.into_iter().enumerate().filter(|(i, _)| reachable[*i]) {
+                index.insert(state.clone(), kept.len());
+                kept.push(state);
+                values.push(affine[i].at(next));
+                policy.push((choice[i] != usize::MAX && !end[i] && alive[i]).then(|| edges[i][choice[i]].action));
+            }
+            return Ok(Solution { cost: at_start.at(next), states: kept, values, policy, index, given_up, outcomes, explored, actions });
         }
         w = next;
     }

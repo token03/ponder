@@ -1,20 +1,31 @@
 //! Goals compiled against game data: the predicate the solver and simulator test items with.
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use crate::game::{BaseId, Game, Influences, Kind, ModId, Side};
 use crate::goal::{Goal, Rarity, Source};
 use crate::item::Item;
 
 /// One compiled `ModReq`: `count` distinct affixes from `ok`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Need {
     pub ok: HashSet<ModId>,
     pub count: u8,
     pub fractured: bool,
 }
 
-#[derive(Clone, Debug)]
+impl Hash for Need {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut mods: Vec<_> = self.ok.iter().copied().collect();
+        mods.sort_unstable();
+        mods.hash(state);
+        self.count.hash(state);
+        self.fractured.hash(state);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Target {
     pub base: Option<BaseId>,
     pub ilvl: u8,

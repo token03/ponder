@@ -181,9 +181,9 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
         let following = Following::new(&guide_craft, &recipe);
         let guided = solve(&following, &[(1.0, Position::Fresh)], limit).map_err(|e| CheckError::Solve(format!("recipe for {item}"), e))?;
         println!(
-            "  {item} recipe: {} classes, {} states, {} outcomes, {:.3}s, {:.1}c",
+            "  {item} recipe: {} classes, {} explored states, {} outcomes, {:.3}s, {:.1}c",
             guide_lens.classes(),
-            guided.states.len(),
+            guided.explored,
             guided.outcomes,
             clock.elapsed().as_secs_f64(),
             guided.cost
@@ -221,10 +221,12 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
         }
         let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
         println!(
-            "  {item} best: {} states ({} items, {} continuations), {} outcomes, {:.3}s",
+            "  {item} best: {} policy states ({} items, {} continuations), {} explored, {} actions, {} outcomes, {:.3}s",
             best.states.len(),
             best.states.iter().filter(|s| matches!(s, Node::Item(_))).count(),
             best.states.iter().filter(|s| matches!(s, Node::Hub(..))).count(),
+            best.explored,
+            best.actions,
             best.outcomes,
             clock.elapsed().as_secs_f64() - times[0]
         );
@@ -241,7 +243,7 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
             guide: guided.cost,
             best: best.cost,
             simulated: (simulated.mean, simulated.error),
-            states: best.states.len(),
+            states: best.explored,
             followed,
             start,
             times,
