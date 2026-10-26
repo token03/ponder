@@ -23,6 +23,11 @@ pub trait Model: Sync {
     fn is_restart(&self, _: &Self::State) -> bool {
         false
     }
+    /// Does a state that can no longer reach the goal start over (rather than make the goal
+    /// unreachable)? Needs restart states to mean anything.
+    fn gives_up(&self) -> bool {
+        false
+    }
     /// Usable actions with their costs; ids are the model's own.
     fn actions(&self, s: &Self::State) -> Vec<(usize, f64)>;
     fn outcomes(&self, s: &Self::State, action: usize) -> Vec<(f64, Self::State)>;
@@ -37,6 +42,8 @@ pub struct Solution<S> {
     /// Chosen action per state; `None` for goals, restarts and dead ends.
     pub policy: Vec<Option<usize>>,
     pub index: HashMap<S, usize>,
+    /// States that gave up (see [`Model::gives_up`]).
+    pub given_up: Vec<S>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +128,7 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
     // Keep only actions whose every outcome can still reach the goal (or a restart) and that
     // leave the state; a state is alive while some kept action path gets there.
     let mut alive = vec![true; n];
+    let mut given_up = Vec::new();
     loop {
         for s in 0..n {
             if !end[s] {
@@ -145,13 +153,24 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
                 }
             }
         }
+        if model.gives_up() {
+            for s in 0..n {
+                if reach[s] {
+                    continue;
+                }
+                (end[s], fixed[s], reach[s]) = (true, Some(Affine { a: 0.0, b: 1.0 }), true);
+                edges[s].clear();
+                given_up.push(s);
+            }
+        }
         if reach == alive {
             break;
         }
         alive = reach;
     }
 
-    let order: Vec<Vec<usize>> = components(&edges)
+    let succ: Vec<Vec<usize>> = edges.iter().map(|es| es.iter().flat_map(|e| e.to.iter().map(|o| o.1)).collect()).collect();
+    let order: Vec<Vec<usize>> = components(&succ)
         .into_iter()
         .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
         .filter(|c: &Vec<usize>| !c.is_empty())
@@ -182,7 +201,8 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         if (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
             let values: Vec<f64> = affine.iter().map(|f| f.at(next)).collect();
             let policy = (0..n).map(|s| (choice[s] != usize::MAX && !end[s] && alive[s]).then(|| edges[s][choice[s]].action)).collect();
-            return Ok(Solution { cost: at_start.at(next), states, values, policy, index });
+            let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
+            return Ok(Solution { cost: at_start.at(next), states, values, policy, index, given_up });
         }
         w = next;
     }
@@ -258,8 +278,9 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
     }
 }
 
-/// Exact values of a fixed policy inside a component, as `a + b w`: solve (I - P) x = r for the
-/// cost part (r = c + P_out a_out) and the restart part (r = P_out b_out) together.
+/// Exact values of a fixed policy inside a component, as `a + b w`. The policy's own graph
+/// usually splits into much smaller components; each solves (I - P) x = r for the cost part
+/// (r = c + P_out a_out) and the restart part (r = P_out b_out) together, successors first.
 fn evaluate(
     states: &[usize],
     local: &HashMap<usize, usize>,
@@ -267,26 +288,41 @@ fn evaluate(
     choice: &[usize],
     affine: &[Affine],
 ) -> Option<Vec<Affine>> {
-    let n = states.len();
-    let mut m = vec![0.0; n * n];
-    let mut ra = vec![0.0; n];
-    let mut rb = vec![0.0; n];
-    for (i, &s) in states.iter().enumerate() {
-        let e = &edges[s][choice[i]];
-        m[i * n + i] += 1.0;
-        ra[i] = e.cost;
-        for &(p, t) in &e.to {
-            match local.get(&t) {
-                Some(&j) => m[i * n + j] -= p,
-                None => {
-                    ra[i] += p * affine[t].a;
-                    rb[i] += p * affine[t].b;
-                }
+    let chosen = |i: usize| &edges[states[i]][choice[i]];
+    let succ: Vec<Vec<usize>> =
+        (0..states.len()).map(|i| chosen(i).to.iter().filter_map(|(_, t)| local.get(t).copied()).collect()).collect();
+    let mut out = vec![Affine::INFINITE; states.len()];
+    let mut place = vec![usize::MAX; states.len()];
+    for part in components(&succ) {
+        let n = part.len();
+        for (k, &i) in part.iter().enumerate() {
+            place[i] = k;
+        }
+        let mut m = vec![0.0; n * n];
+        let mut ra = vec![0.0; n];
+        let mut rb = vec![0.0; n];
+        for (k, &i) in part.iter().enumerate() {
+            let e = chosen(i);
+            m[k * n + k] += 1.0;
+            ra[k] = e.cost;
+            for &(p, t) in &e.to {
+                let known = match local.get(&t) {
+                    Some(&j) if place[j] != usize::MAX && part.get(place[j]) == Some(&j) => {
+                        m[k * n + place[j]] -= p;
+                        continue;
+                    }
+                    Some(&j) => out[j],
+                    None => affine[t],
+                };
+                ra[k] += p * known.a;
+                rb[k] += p * known.b;
             }
         }
+        let x = lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?;
+        for (k, &i) in part.iter().enumerate() {
+            out[i] = Affine { a: x[0][k], b: x[1][k] };
+        }
     }
-    let x = lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?;
-    let out: Vec<Affine> = (0..n).map(|i| Affine { a: x[0][i], b: x[1][i] }).collect();
     out.iter().all(|f| f.a.is_finite() && f.a >= 0.0 && f.b.is_finite() && f.b >= -1e-9).then_some(out)
 }
 
@@ -330,10 +366,10 @@ fn lu_solve(n: usize, a: &mut [f64], rhs: &mut [&mut Vec<f64>]) -> Option<Vec<Ve
     Some(out)
 }
 
-/// Strongly connected components, successors before predecessors (Tarjan, iterative).
-fn components(edges: &[Vec<Edge>]) -> Vec<Vec<usize>> {
-    let n = edges.len();
-    let succ: Vec<Vec<usize>> = edges.iter().map(|es| es.iter().flat_map(|e| e.to.iter().map(|o| o.1)).collect()).collect();
+/// Strongly connected components of a successor graph, successors before predecessors
+/// (Tarjan, iterative).
+fn components(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let n = succ.len();
     let (mut index, mut low, mut on) = (vec![usize::MAX; n], vec![0; n], vec![false; n]);
     let (mut stack, mut out, mut counter) = (Vec::new(), Vec::new(), 0);
     for root in 0..n {

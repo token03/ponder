@@ -162,7 +162,9 @@ starting points and recombinators live.
 by repeating operations"), it finds the cheapest policy over the derived states: a stochastic
 shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
 goal, and solves strongly connected components from the goal backwards with exact policy
-evaluation inside each. Starting over is a restart state worth the start's own value, found by
+evaluation inside each; evaluation splits again by the components of the chosen policy's graph,
+so each linear solve is only as large as one loop. A fixed policy (a guide recipe) may give up:
+states it can never finish restart instead, as a crafter abandons a bricked item. Starting over is a restart state worth the start's own value, found by
 Newton steps on the start's affine value, so buying fresh does not merge every state into one
 component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
 item after its reset, so their thousands of outcomes are stored once per hub rather than once
@@ -245,6 +247,8 @@ caches.
 | Eldritch implicits | Only which side is dominant (Exarch prefixes, Eater suffixes); implicit tiers are not modelled | Game rule, simplified. Medium. |
 | Fracturing | Rare, at least 4 mods, not influenced, none fractured; fractures one random mod | Game rule. High. |
 | Starting over | Any item can be abandoned for nothing and a new start bought | Modelling choice. |
+| Guide recipe at the goal | A recipe stops the moment the item meets the goal, even partway through an attempt (no annul after the exalt that finished it) | How crafters play. High. |
+| Essence tiers | An essence mod's tier is where its level falls among the base's natural tiers of the same template | Matches how guides name essence tiers. Medium. |
 | Guide recipe without a lock | When a step's "Cannot Be Changed" craft cannot be made, the attempt goes to the step's `else` (step 1 if none) | Reading of how guides are followed. Medium. |
 
 ## 11. Scope

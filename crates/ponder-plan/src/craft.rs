@@ -79,6 +79,19 @@ impl<'a> Craft<'a> {
     pub fn outcomes_of(&self, s: &State, i: usize) -> Vec<(f64, State)> {
         self.lens.run(self.ctx, self.ops[i].0.steps(), s)
     }
+
+    /// The item after operation `i`'s reset, when it has one and it is certain.
+    pub fn reset(&self, s: &State, i: usize) -> Option<State> {
+        let k = self.hubs[i]?;
+        let mut out = self.lens.run(self.ctx, &self.ops[i].0.steps()[..k], s);
+        (out.len() == 1).then(|| out.remove(0).1)
+    }
+
+    /// Outcomes of the rest of operation `i` after its reset.
+    pub fn after_reset(&self, s: &State, i: usize) -> Vec<(f64, State)> {
+        let k = self.hubs[i].expect("an operation with a reset");
+        self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s)
+    }
 }
 
 impl Model for Craft<'_> {
@@ -111,19 +124,11 @@ impl Model for Craft<'_> {
         }
         match (n, self.start_of(i)) {
             (_, Some(b)) => vec![(1.0, Node::Item(b.state.clone()))],
-            (Node::Item(s), None) => {
-                let steps = self.ops[i].0.steps();
-                if let Some(k) = self.hubs[i]
-                    && let [(_, t)] = &self.lens.run(self.ctx, &steps[..k], s)[..]
-                {
-                    return vec![(1.0, Node::Hub(i, t.clone()))];
-                }
-                self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect()
-            }
-            (Node::Hub(_, s), None) => {
-                let k = self.hubs[i].expect("hub of an operation with a reset");
-                self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s).into_iter().map(|(p, t)| (p, Node::Item(t))).collect()
-            }
+            (Node::Item(s), None) => match self.reset(s, i) {
+                Some(t) => vec![(1.0, Node::Hub(i, t))],
+                None => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),
+            },
+            (Node::Hub(_, s), None) => self.after_reset(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),
             _ => Vec::new(),
         }
     }

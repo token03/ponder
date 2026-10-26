@@ -29,6 +29,7 @@ mods = [
   { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
   { text = ["+#% to Global Critical Strike Multiplier", "#% increased Attack Speed"], tier = 2 },
 ]
+open_suffix = 1
 
 [[steps]]
 do = ["buy:base"]
@@ -52,3 +53,6 @@ note = "Or reforge speed; add/remove avoids filling the item."
 [[steps]]
 do = ["bench:critical-strike-chance"]
 until = "goal"
+max = 1
+else = 4
+note = "A natural critical strike chance mod blocks the craft: reforge again."

@@ -6,11 +6,11 @@ ilvl = 82
 [goal]
 mods = [
   { text = ["Adds # to # Fire Damage", "Adds # to # Cold Damage", "Adds # to # Lightning Damage"], tier = 2, count = 3 },
-  { text = ["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"], count = 2 },
+  { text = ["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"] }, # one, not two: both hybrids share the Intelligence family
 ]
 
 [stages.fractured_base]
-mods = [{ text = ["Adds # to # Fire Damage", "Adds # to # Cold Damage", "Adds # to # Lightning Damage"], fractured = true }]
+mods = [{ text = ["Adds # to # Fire Damage", "Adds # to # Cold Damage", "Adds # to # Lightning Damage"], tier = 2, fractured = true }]
 price = 30.0 # rough market estimate, not from the guide
 
 [stages.prefixes]
@@ -25,5 +25,5 @@ until = "prefixes"
 note = "Wrath, Anger or Hatred: whichever element the base lacks."
 
 [[steps]]
-do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:speed-or-critical"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:remove-crafted", "bench:speed-or-critical"]
 until = "goal"

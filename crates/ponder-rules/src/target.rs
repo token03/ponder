@@ -47,7 +47,9 @@ impl Target {
                     let source = game.def(m).source;
                     let fits = match (req.source, req.tier) {
                         (Some(s), _) if s != source => false,
-                        (_, Some(t)) if matches!(source, Source::Natural | Source::Influence) => game.tier(kind, m).is_some_and(|x| x <= t),
+                        (_, Some(t)) if matches!(source, Source::Natural | Source::Influence | Source::Essence) => {
+                            game.tier(kind, m).is_some_and(|x| x <= t)
+                        }
                         (None, Some(_)) => false,
                         _ => true,
                     };
@@ -97,7 +99,8 @@ impl Target {
         item.quality = self.quality;
         let pool = game.pool(kind);
         for need in &self.needs {
-            let rolls = |m: &ModId| game.def(*m).source == Source::Crafted || pool.mods.iter().any(|(id, _)| id == m);
+            let rolls =
+                |m: &ModId| matches!(game.def(*m).source, Source::Crafted | Source::Essence) || pool.mods.iter().any(|(id, _)| id == m);
             let mut ok: Vec<ModId> = need.ok.iter().copied().filter(rolls).collect();
             ok.sort_by_key(|m| (game.def(*m).level, m.0));
             for _ in 0..need.count {

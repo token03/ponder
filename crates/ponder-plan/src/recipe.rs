@@ -4,11 +4,12 @@
 //! The recipe is a state machine over (step, operation in step, failed attempts, item). An
 //! attempt applies the step's operations in order, skipping any that do not apply. After it,
 //! the step's `until` stage sends the item on; otherwise it repeats, or after `max` attempts
-//! returns to the `else` step, which then runs at least once. Steps whose stage already holds
+//! returns to the `else` step, which then runs at least once. The recipe ends as soon as the item
+//! meets the goal, even partway through an attempt. Steps whose stage already holds
 //! are skipped on the way forward. A `buy:` replaces the item with a fresh purchase, so falling
 //! back to a step that buys starts over. A lock ("Cannot Be Changed") that cannot be crafted
 //! abandons the attempt instead: to the `else` step, or to the first step (buying afresh)
-//! without one. The recipe ends when the item meets the goal.
+//! without one.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -115,7 +116,7 @@ impl Recipe {
                     Applied::Abandon => format!("(cannot {}: abandoned)", craft.action_name(a)),
                 });
                 abandoned = applied == Applied::Abandon;
-                if abandoned {
+                if abandoned || holds(self.goal, &item) {
                     break;
                 }
             }
@@ -166,7 +167,7 @@ impl Recipe {
                         let (applied, c) = self.apply(craft, a, &mut item, rng);
                         cost += c;
                         abandoned = applied == Applied::Abandon;
-                        if abandoned {
+                        if abandoned || holds(self.goal, &item) {
                             break;
                         }
                     }
@@ -200,16 +201,19 @@ type Outcomes = Vec<(f64, State)>;
 pub struct Following<'a> {
     pub craft: &'a Craft<'a>,
     pub recipe: &'a Recipe,
-    /// Item outcomes, computed once: a recipe reaches one item state at many positions.
-    cache: Mutex<HashMap<(State, usize), Outcomes>>,
+    /// Item outcomes, computed once: a recipe reaches one item state at many positions. The
+    /// flag marks the rest of an operation after its reset.
+    cache: Mutex<HashMap<(State, usize, bool), Outcomes>>,
 }
 
-/// Before the first purchase, at (step, operation within the step, failed attempts, item), or
-/// buying again: worth what the fresh start is worth.
+/// Before the first purchase, at (step, operation within the step, failed attempts, item),
+/// partway through that operation after its reset (as [`crate::craft::Node::Hub`]), or buying
+/// again: worth what the fresh start is worth.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Position {
     Fresh,
     At(u8, u8, u16, State),
+    Hub(u8, u8, u16, State),
     Restart,
 }
 
@@ -218,12 +222,12 @@ impl<'a> Following<'a> {
         Following { craft, recipe, cache: Mutex::default() }
     }
 
-    fn outcomes_of(&self, s: &State, a: usize) -> Outcomes {
-        let key = (s.clone(), a);
+    fn outcomes_of(&self, s: &State, a: usize, hub: bool) -> Outcomes {
+        let key = (s.clone(), a, hub);
         if let Some(out) = self.cache.lock().unwrap().get(&key) {
             return out.clone();
         }
-        let out = self.craft.outcomes_of(s, a);
+        let out = if hub { self.craft.after_reset(s, a) } else { self.craft.outcomes_of(s, a) };
         self.cache.lock().unwrap().insert(key, out.clone());
         out
     }
@@ -248,12 +252,18 @@ impl Model for Following<'_> {
         *p == Position::Restart
     }
 
+    /// A crafter abandons an item the recipe can never finish.
+    fn gives_up(&self) -> bool {
+        true
+    }
+
     /// One action: 0 applies the step's next action (buying again restarts), 1 skips an
     /// operation that does not apply, 2 abandons the attempt for want of a lock.
     fn actions(&self, p: &Position) -> Vec<(usize, f64)> {
         let (i, j, s) = match p {
             Position::Fresh => return vec![(0, self.craft.starts[self.recipe.start].price)],
             Position::At(i, j, _, s) => (*i as usize, *j as usize, s),
+            Position::Hub(..) => return vec![(0, 0.0)],
             Position::Restart => return Vec::new(),
         };
         let Some(step) = self.recipe.steps.get(i) else { return Vec::new() };
@@ -272,15 +282,17 @@ impl Model for Following<'_> {
                 let (i, j) = self.recipe.begin;
                 return vec![(1.0, self.advance(i, j + 1, 0, self.craft.starts[self.recipe.start].state.clone()))];
             }
-            Position::At(i, j, k, s) => (*i as usize, *j as usize, *k, s),
+            Position::At(i, j, k, s) | Position::Hub(i, j, k, s) => (*i as usize, *j as usize, *k, s),
             Position::Restart => return Vec::new(),
         };
         let a = self.recipe.steps[i].ops[j];
+        let hub = matches!(p, Position::Hub(..));
         match action {
             1 => vec![(1.0, self.advance(i, j + 1, k, s.clone()))],
             2 => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, s.clone()))],
             _ if self.craft.start_of(a).is_some() => vec![(1.0, Position::Restart)],
-            _ => self.outcomes_of(s, a).into_iter().map(|(p, t)| (p, self.advance(i, j + 1, k, t))).collect(),
+            _ if !hub && let Some(t) = self.craft.reset(s, a) => vec![(1.0, Position::Hub(i as u8, j as u8, k, t))],
+            _ => self.outcomes_of(s, a, hub).into_iter().map(|(p, t)| (p, self.advance(i, j + 1, k, t))).collect(),
         }
     }
 }

@@ -250,12 +250,13 @@ impl Game {
     }
 
     /// Tier of a mod on this kind: 1 for the highest required level of its template.
+    /// Tier 1 is the highest natural level of the mod's template on this base. Other mods
+    /// (essences) rank where their level falls among the natural ones.
     pub fn tier(&self, kind: Kind, m: ModId) -> Option<u8> {
         let pool = self.pool(kind);
         let list = pool.tiers.get(&self.def(m).template)?;
-        let mut levels: Vec<u32> = list.iter().map(|id| self.def(*id).level).collect();
-        levels.dedup();
-        levels.iter().position(|&l| l == self.def(m).level).map(|p| p as u8 + 1)
+        let levels: std::collections::BTreeSet<u32> = list.iter().map(|id| self.def(*id).level).collect();
+        Some(levels.iter().filter(|&&l| l > self.def(m).level).count() as u8 + 1)
     }
 }
 

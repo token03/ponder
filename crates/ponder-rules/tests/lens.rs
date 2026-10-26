@@ -17,13 +17,16 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// (guide, base, item class, operations besides the basic currency).
-const CASES: &[(&str, &str, &str, &[&str])] = &[
+/// (guide, base, item class, operations besides the basic currency, stage whose plainest item
+/// starts the walks instead of a plain base).
+type Case = (&'static str, &'static str, &'static str, &'static [&'static str], Option<&'static str>);
+const CASES: &[Case] = &[
     (
         "crit-mana-es-focused-amulet",
         "Focused Amulet",
         "Amulet",
         &["essence:deafening-woe", "bench:prefixes-cannot-be-changed", "bench:remove-crafted", "harvest:reforge-critical"],
+        None,
     ),
     (
         "bv-ele-gloves",
@@ -38,6 +41,7 @@ const CASES: &[(&str, &str, &str, &[&str])] = &[
             "unveil:area-of-effect",
             "bench:convert-cold",
         ],
+        None,
     ),
     (
         "dex-armour-chaos-gloves",
@@ -51,12 +55,21 @@ const CASES: &[(&str, &str, &str, &[&str])] = &[
             "eldritch-annulment",
             "bench:armour",
         ],
+        None,
     ),
     (
         "life-plus-two-phys-focused-amulet",
         "Focused Amulet",
         "Amulet",
         &["harvest:reforge-life", "bench:cannot-roll-attack", "harvest:add-remove-physical", "influence-exalted:crusader"],
+        None,
+    ),
+    (
+        "dex-armour-chaos-gloves",
+        "Titan Gauntlets",
+        "Gloves",
+        &["essence:deafening-sorrow", "eldritch-implicit:lesser-ember", "bench:armour", "eldritch-annulment"],
+        Some("resist"),
     ),
 ];
 
@@ -66,18 +79,18 @@ const CURRENCY: [&str; 10] =
 #[test]
 fn exact_outcomes_match_sampled_items() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
-    for (case, &(file, base, class, extra)) in CASES.iter().enumerate() {
-        agree(&game, file, base, class, extra, case as u64);
+    for (case, &(file, base, class, extra, start)) in CASES.iter().enumerate() {
+        agree(&game, file, base, class, extra, start, case as u64);
     }
 }
 
-fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed: u64) {
+fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], start: Option<&str>, seed: u64) {
     let assumptions = Assumptions::default();
     let ctx = Ctx { game, assumptions: &assumptions };
     let text = std::fs::read_to_string(root().join(format!("fixtures/guides/{file}.toml"))).unwrap();
     let guide: Guide = toml::from_str(&text).unwrap();
-    let names = ["goal"].into_iter().chain(guide.stages.keys().map(String::as_str));
-    let compiled: Vec<Target> = names.map(|n| Target::compile(game, &guide.target(n).unwrap()).unwrap()).collect();
+    let names: Vec<&str> = ["goal"].into_iter().chain(guide.stages.keys().map(String::as_str)).collect();
+    let compiled: Vec<Target> = names.iter().map(|n| Target::compile(game, &guide.target(n).unwrap()).unwrap()).collect();
     let kind = Kind { base: game.base(base).unwrap(), ilvl: 86, influences: Influences::default() };
     let ops: Vec<Box<dyn Operation>> =
         CURRENCY.iter().chain(extra).map(|n| parse(game, class, n, &[]).unwrap_or_else(|| panic!("{n}"))).collect();
@@ -89,9 +102,14 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed:
     let mut worst: (f64, String) = (0.0, String::new());
     let mut worst_tv: (f64, String) = (0.0, String::new());
     for walk in 0..12 {
-        let mut item = Item::new(kind);
+        let mut item = match start {
+            Some(stage) => lens_start(game, kind, &guide, &names, stage),
+            None => Item::new(kind),
+        };
         for _ in 0..walk {
-            let usable: Vec<&dyn Operation> = refs.iter().copied().filter(|o| o.applies(&ctx, &(game, &item))).collect();
+            // From a stage, walk the guide's own loop: its extra ops and exalts.
+            let looped = |o: &&dyn Operation| start.is_none() || o.name() == "exalted" || extra[1..].contains(&o.name().as_str());
+            let usable: Vec<&dyn Operation> = refs.iter().copied().filter(looped).filter(|o| o.applies(&ctx, &(game, &item))).collect();
             run(&ctx, usable[(rng.next_u64() % usable.len() as u64) as usize].steps(), &mut item, &mut rng);
         }
         let state = lens.project(&item);
@@ -140,4 +158,10 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed:
         worst_tv.1
     );
     assert!(worst.0 < 4.0, "{file}: target chances disagree: z = {:.2}: {}", worst.0, worst.1);
+}
+
+/// A witness item of a stage: where a walk starts when sampling items the empty base rarely reaches.
+fn lens_start(game: &Game, kind: Kind, guide: &Guide, names: &[&str], stage: &str) -> Item {
+    let i = names.iter().position(|n| *n == stage).unwrap();
+    Target::compile(game, &guide.target(names[i]).unwrap()).unwrap().witness(game, kind).unwrap()
 }

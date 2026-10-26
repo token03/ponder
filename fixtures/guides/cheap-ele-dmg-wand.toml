@@ -23,6 +23,8 @@ mods = [
   { text = "Adds # to # Lightning Damage", fractured = true, source = "essence" },
   { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
 ]
+open_prefix = 1
+open_suffix = 1
 
 [[steps]]
 do = ["buy:base"]
@@ -38,9 +40,12 @@ max = 1
 else = 1
 
 [[steps]]
-do = ["essence:deafening-hatred"]
+do = ["bench:remove-crafted", "essence:deafening-hatred"]
 until = "multiplier"
 
 [[steps]]
 do = ["bench:multimod", "bench:spell-damage", "bench:critical-strike-multiplier"]
 until = "goal"
+max = 1
+else = 4
+note = "A caster damage prefix blocks the spell damage craft: back to the essence."

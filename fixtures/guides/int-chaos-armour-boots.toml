@@ -23,6 +23,7 @@ max_mods = 4
 [stages.resist]
 mods = [
   { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+# to Intelligence", source = "essence" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
 ]
 open_suffix = 1
@@ -30,6 +31,7 @@ open_suffix = 1
 [stages.suffixes]
 mods = [
   { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+# to Intelligence", source = "essence" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
 ]

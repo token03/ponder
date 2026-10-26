@@ -114,6 +114,16 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
     let clock = std::time::Instant::now();
     let guided = solve(&Following::new(&craft, &recipe), &[(1.0, Position::Fresh)], limit).map_err(|e| format!("recipe: {e:?}"))?;
     if std::env::var("TRACE").is_ok() {
+        println!("  the recipe gives up in {} states, such as:", guided.given_up.len());
+        for p in guided.given_up.iter().take(3) {
+            if let Position::At(i, j, k, s) | Position::Hub(i, j, k, s) = p {
+                let item = (0..2 * lens.classes())
+                    .filter(|&c| s.counts[c] > 0)
+                    .map(|c| format!("{}×{}", s.counts[c], lens.describe(c % lens.classes()).split(" [").nth(1).unwrap_or("")))
+                    .collect::<Vec<_>>();
+                println!("    step {} op {j} try {k}: {:?} {}", i + 1, s.rarity, item.join(" "));
+            }
+        }
         for c in 0..lens.classes() {
             println!("    {c}: {}", lens.describe(c));
         }
