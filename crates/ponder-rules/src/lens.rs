@@ -3,7 +3,7 @@
 //! A lens is built from the targets and operations of one problem. Mods fall into classes:
 //! - tracked: mods sharing a group with anything a target asks for, an operation forces or an
 //!   unveil prefers, split by which needs they serve and which tags operations read;
-//! - fixed: forced mods that never roll (essence-only, crafted) and veiled placeholders;
+//! - fixed: crafted mods and veiled placeholders;
 //! - untracked: everything else, counted per side, origin and read tags. A class holding `k`
 //!   mods keeps the weight expected after `k` weighted draws without replacement over its groups,
 //!   the one estimate the lens makes.
@@ -222,7 +222,11 @@ impl<'g> Lens<'g> {
             keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by)).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
-            keys.insert((game.def(m).side, Vec::new(), serves(m), tag_bits(m), Origin::Fixed, Some(m), 0, 0), vec![m]);
+            let def = game.def(m);
+            let fixed = (def.source == Source::Crafted || game.veils.contains(&m)).then_some(m);
+            let group = def.groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect();
+            let origin = fixed.map_or(Origin::Natural(def.influence), |_| Origin::Fixed);
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0)).or_default().push(m);
         }
 
         let mut classes = Vec::new();
@@ -397,6 +401,24 @@ impl<'g> Lens<'g> {
         })
     }
 
+    pub fn viable(&self, t: usize, state: &State) -> bool {
+        if !self.partners.is_empty() {
+            return true;
+        }
+        let n = self.classes.len();
+        let fixed: Vec<_> = (0..n).filter(|&c| state.counts[c + n] > 0).collect();
+        if fixed.is_empty() {
+            return true;
+        }
+        let (target, offset) = &self.targets[t];
+        target.needs.iter().enumerate().all(|(i, need)| {
+            let serves = |c: usize| self.classes[c].serves & (1 << (offset + i)) != 0;
+            let have: usize = fixed.iter().filter(|&&c| serves(c)).map(|&c| state.counts[c + n] as usize).sum();
+            have >= need.count as usize
+                || (!need.fractured && (0..n).any(|c| serves(c) && !fixed.iter().any(|f| self.classes[c].conflicts.contains(f))))
+        })
+    }
+
     /// The exact outcome distribution of `steps` on `state`.
     pub fn run(&self, ctx: &Ctx, steps: &[Step], state: &State) -> Vec<(f64, State)> {
         let mut dist: Vec<(f64, State, u8)> = vec![(1.0, state.clone(), 0)];
@@ -421,6 +443,13 @@ impl<'g> Lens<'g> {
         }
         let mut out: Vec<(f64, State)> = dist.into_iter().map(|(p, s, _)| (p, s)).collect();
         out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.dedup_by(|a, b| {
+            if a.1 != b.1 {
+                return false;
+            }
+            b.0 += a.0;
+            true
+        });
         out
     }
 

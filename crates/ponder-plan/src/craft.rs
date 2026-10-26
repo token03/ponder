@@ -105,6 +105,24 @@ impl<'a> Craft<'a> {
         let k = self.hubs[i].expect("an operation with a reset");
         self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s)
     }
+
+    fn nodes(&self, states: impl Iterator<Item = (f64, State)>) -> Vec<(f64, Node)> {
+        let mut abandoned = 0.0;
+        let mut out: Vec<_> = states
+            .filter_map(|(p, s)| {
+                if self.lens.viable(self.goal, &s) {
+                    Some((p, Node::Item(s)))
+                } else {
+                    abandoned += p;
+                    None
+                }
+            })
+            .collect();
+        if abandoned > 0.0 {
+            out.push((abandoned, Node::Restart));
+        }
+        out
+    }
 }
 
 impl Model for Craft<'_> {
@@ -122,6 +140,9 @@ impl Model for Craft<'_> {
         match n {
             Node::Market => self.starts.iter().enumerate().map(|(j, b)| (self.ops.len() + j, b.price())).collect(),
             Node::Item(s) => {
+                if !self.lens.viable(self.goal, s) {
+                    return vec![(self.restart(), 0.0)];
+                }
                 let view = self.lens.view(s);
                 let ops = (0..self.ops.len())
                     .filter(|&i| !self.dominated[i] && self.ops[i].0.applies(self.ctx, &view))
@@ -138,12 +159,12 @@ impl Model for Craft<'_> {
             return vec![(1.0, Node::Restart)];
         }
         match (n, self.start_of(i)) {
-            (_, Some(_)) => self.start_states(i - self.ops.len()).iter().map(|(p, s)| (*p, Node::Item(s.clone()))).collect(),
+            (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
             (Node::Item(s), None) => match self.reset(s, i) {
                 Some(t) => vec![(1.0, Node::Hub(i, t))],
-                None => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),
+                None => self.nodes(self.outcomes_of(s, i).into_iter()),
             },
-            (Node::Hub(_, s), None) => self.after_reset(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),
+            (Node::Hub(_, s), None) => self.nodes(self.after_reset(s, i).into_iter()),
             _ => Vec::new(),
         }
     }
@@ -198,7 +219,13 @@ impl Craft<'_> {
             let mut item: Option<Item> = None;
             let (mut cost, mut actions) = (0.0, Vec::new());
             for _ in 0..200_000 {
-                let node = item.as_ref().map_or(Node::Market, |i| Node::Item(self.lens.project(i)));
+                let state = item.as_ref().map(|i| self.lens.project(i));
+                if state.as_ref().is_some_and(|s| !self.lens.viable(self.goal, s)) {
+                    actions.push(self.restart());
+                    item = None;
+                    continue;
+                }
+                let node = state.map_or(Node::Market, Node::Item);
                 if self.is_goal(&node) {
                     return (cost, actions, item);
                 }

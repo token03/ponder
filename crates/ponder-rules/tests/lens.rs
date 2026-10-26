@@ -6,13 +6,14 @@ use std::path::PathBuf;
 use ponder_rules::assumptions::Assumptions;
 use ponder_rules::data::Repoe;
 use ponder_rules::game::{Game, Influences, Kind};
+use ponder_rules::goal::Source;
 use ponder_rules::guide::Guide;
 use ponder_rules::item::Item;
 use ponder_rules::lens::{Lens, State};
 use std::sync::Arc;
 
 use ponder_rules::ops::recombinator::Recombinator;
-use ponder_rules::ops::{Ctx, Operation, Supply, parse, run};
+use ponder_rules::ops::{Ctx, Operation, Pick, Step, Supply, eligible, parse, run};
 use ponder_rules::rng::Rng;
 use ponder_rules::target::Target;
 
@@ -270,6 +271,91 @@ fn recombination_matches_sampled_items() {
     // Untracked mods conflict by chance in the lens, so whole outcomes need not match one
     // partner set; what the solver reads must.
     assert!(worst.0 < 4.0, "target chances disagree: z = {:.2}: {}", worst.0, worst.1);
+}
+
+#[test]
+fn permanent_conflicts_are_pruned_only_when_they_cannot_be_removed() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let guide: Guide =
+        toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-high-es-regalia.toml")).unwrap()).unwrap();
+    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 86, influences: Influences::default() };
+    let flat = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
+    let mut fractured = flat.clone();
+    fractured.needs[0].fractured = true;
+    let ops: Vec<Box<dyn Operation>> = CURRENCY.iter().map(|name| parse(&game, "Body Armour", name, &[]).unwrap()).collect();
+    let refs: Vec<_> = ops.iter().map(|op| op.as_ref()).collect();
+    let mut good = flat.witness(&game, kind).unwrap();
+    good.affixes[0].fractured = true;
+    let mut bad = good.clone();
+    bad.affixes[0].id = game
+        .pool(kind)
+        .mods
+        .iter()
+        .map(|(m, _)| *m)
+        .find(|m| game.def(*m).template == game.def(good.affixes[0].id).template && !flat.needs[0].ok.contains(m))
+        .unwrap();
+    let lens = Lens::new(&game, kind, vec![flat.clone(), fractured.clone()], &refs, &[&good, &bad]);
+    assert!(lens.viable(0, &lens.project(&good)));
+    assert!(lens.viable(1, &lens.project(&good)));
+    assert!(!lens.viable(0, &lens.project(&bad)));
+    assert!(!lens.viable(1, &lens.project(&bad)));
+    bad.affixes[0].fractured = false;
+    assert!(lens.viable(0, &lens.project(&bad)));
+    let partner = Arc::new(Handful { items: vec![good] });
+    let recombine = Recombinator::new("Body Armour", "rescue", partner);
+    let mut refs = refs;
+    refs.push(&recombine);
+    bad.affixes[0].fractured = true;
+    let lens = Lens::new(&game, kind, vec![flat, fractured], &refs, &[&bad]);
+    assert!(lens.viable(0, &lens.project(&bad)));
+    assert!(lens.viable(1, &lens.project(&bad)));
+}
+
+#[test]
+fn unused_roll_counts_do_not_duplicate_item_outcomes() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let kind = Kind { base: game.base("Vaal Axe").unwrap(), ilvl: 83, influences: Influences::default() };
+    let assumptions = Assumptions::default();
+    let ctx = Ctx { game: &game, assumptions: &assumptions };
+    let lens = Lens::new(&game, kind, Vec::new(), &[], &[]);
+    let mut item = Item::new(kind);
+    item.rarity = ponder_rules::goal::Rarity::Rare;
+    let state = lens.project(&item);
+    let out = lens.run(&ctx, &[Step::RollCount], &state);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].1, state);
+    assert!((out[0].0 - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn essence_origin_is_tracked_only_when_the_goal_distinguishes_it() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
+    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let mut goal = guide.target("flat").unwrap();
+    goal.rarity = None;
+    let target = Target::compile(&game, &goal).unwrap();
+    let natural = target.witness(&game, kind).unwrap();
+    let essence = parse(&game, "Two Hand Axe", "essence:deafening-contempt", &[]).unwrap();
+    let mut forced = natural.clone();
+    forced.affixes[0].id = essence
+        .steps()
+        .iter()
+        .find_map(|s| match s {
+            Step::Force(m) => Some(*m),
+            _ => None,
+        })
+        .unwrap();
+    let assumptions = Assumptions::default();
+    let ctx = Ctx { game: &game, assumptions: &assumptions };
+    assert_eq!(eligible(&ctx, &natural, &Pick::ANY), eligible(&ctx, &forced, &Pick::ANY));
+    let lens = Lens::new(&game, kind, vec![target.clone()], &[essence.as_ref()], &[]);
+    assert_eq!(lens.project(&natural), lens.project(&forced));
+    goal.mods[0].source = Some(Source::Essence);
+    let explicit = Target::compile(&game, &goal).unwrap();
+    let lens = Lens::new(&game, kind, vec![target, explicit], &[essence.as_ref()], &[]);
+    assert!(!lens.holds(1, &lens.project(&natural)));
+    assert!(lens.holds(1, &lens.project(&forced)));
 }
 
 /// A witness item of a stage: where a walk starts when sampling items the empty base rarely reaches.

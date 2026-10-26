@@ -205,6 +205,9 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
         let craft = Craft::new(&ctx, &lens, &refs, market, starts, 0);
         println!("  {item} best: {} classes, {} operations", lens.classes(), craft.dominated.iter().filter(|d| !**d).count());
         if std::env::var("OPS").is_ok() {
+            for c in 0..lens.classes() {
+                println!("  class {c}: {}", lens.describe(c));
+            }
             println!(
                 "  {} classes; ops: {:?}",
                 lens.classes(),

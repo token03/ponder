@@ -139,11 +139,10 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
             }
         }
         let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut seen = vec![usize::MAX; n];
         for (s, out) in edges.iter().enumerate() {
-            for e in out {
-                for &(_, t) in &e.to {
-                    into[t].push(s);
-                }
+            for t in successors(out, &mut seen, s) {
+                into[t].push(s);
             }
         }
         let mut reach = end.clone();
@@ -172,12 +171,13 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         alive = reach;
     }
 
-    let succ: Vec<Vec<usize>> = edges.iter().map(|es| es.iter().flat_map(|e| e.to.iter().map(|o| o.1)).collect()).collect();
-    let order: Vec<Vec<usize>> = components(&succ)
-        .into_iter()
-        .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
-        .filter(|c: &Vec<usize>| !c.is_empty())
-        .collect();
+    let mut seen = vec![usize::MAX; n];
+    let order: Vec<Vec<usize>> =
+        components(&edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect::<Vec<_>>())
+            .into_iter()
+            .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
+            .filter(|c: &Vec<usize>| !c.is_empty())
+            .collect();
     let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
     let mut choice = vec![usize::MAX; n];
     let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
@@ -209,6 +209,14 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         w = next;
     }
     Err(Error::Unreachable)
+}
+
+fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl Iterator<Item = usize> + 'a {
+    edges.iter().flat_map(|e| e.to.iter().map(|o| o.1)).filter(move |&t| {
+        let new = seen[t] != s;
+        seen[t] = s;
+        new
+    })
 }
 
 fn q(e: &Edge, values: &[f64]) -> f64 {
