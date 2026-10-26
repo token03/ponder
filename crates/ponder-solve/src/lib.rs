@@ -298,17 +298,17 @@ fn evaluate(
         for (k, &i) in part.iter().enumerate() {
             place[i] = k;
         }
-        let mut m = vec![0.0; n * n];
+        // Row k: transitions inside the part, and the known value of the rest.
+        let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
         let mut ra = vec![0.0; n];
         let mut rb = vec![0.0; n];
         for (k, &i) in part.iter().enumerate() {
             let e = chosen(i);
-            m[k * n + k] += 1.0;
             ra[k] = e.cost;
             for &(p, t) in &e.to {
                 let known = match local.get(&t) {
                     Some(&j) if place[j] != usize::MAX && part.get(place[j]) == Some(&j) => {
-                        m[k * n + place[j]] -= p;
+                        rows[k].push((place[j], p));
                         continue;
                     }
                     Some(&j) => out[j],
@@ -318,12 +318,52 @@ fn evaluate(
                 rb[k] += p * known.b;
             }
         }
-        let x = lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?;
+        let x = if n <= DENSE {
+            let mut m = vec![0.0; n * n];
+            for (k, row) in rows.iter().enumerate() {
+                m[k * n + k] += 1.0;
+                for &(j, p) in row {
+                    m[k * n + j] -= p;
+                }
+            }
+            lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?
+        } else {
+            let start = |f: fn(&Affine) -> f64| {
+                part.iter().map(|&i| Some(f(&affine[states[i]])).filter(|v| v.is_finite()).unwrap_or(0.0)).collect()
+            };
+            vec![gauss_seidel(&rows, &ra, start(|f| f.a))?, gauss_seidel(&rows, &rb, start(|f| f.b))?]
+        };
         for (k, &i) in part.iter().enumerate() {
             out[i] = Affine { a: x[0][k], b: x[1][k] };
         }
     }
     out.iter().all(|f| f.a.is_finite() && f.a >= 0.0 && f.b.is_finite() && f.b >= -1e-9).then_some(out)
+}
+
+/// Largest policy component solved by dense elimination; larger ones iterate.
+const DENSE: usize = 1500;
+
+/// Solves x = r + P x by Gauss-Seidel sweeps from `x`, each state's self-loop eliminated (rerolls
+/// mostly return to themselves), until no value moves by more than a relative 1e-12. `None` when
+/// it does not converge.
+fn gauss_seidel(rows: &[Vec<(usize, f64)>], r: &[f64], mut x: Vec<f64>) -> Option<Vec<f64>> {
+    let stay: Vec<f64> = rows.iter().enumerate().map(|(k, row)| row.iter().filter(|e| e.0 == k).map(|e| e.1).sum()).collect();
+    if stay.iter().any(|p| 1.0 - p < 1e-14) {
+        return None;
+    }
+    for _ in 0..1_000_000 {
+        let mut moved = 0.0f64;
+        for (k, row) in rows.iter().enumerate() {
+            let inflow: f64 = row.iter().filter(|e| e.0 != k).map(|&(j, p)| p * x[j]).sum();
+            let v = (r[k] + inflow) / (1.0 - stay[k]);
+            moved = moved.max((v - x[k]).abs() / v.abs().max(1.0));
+            x[k] = v;
+        }
+        if moved < 1e-12 {
+            return Some(x);
+        }
+    }
+    None
 }
 
 /// Gaussian elimination with partial pivoting, for several right-hand sides; `None` when

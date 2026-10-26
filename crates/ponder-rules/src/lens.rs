@@ -77,8 +77,8 @@ pub struct Lens<'g> {
     bans: Vec<(usize, u32)>,
 }
 
-/// (side, tracked group, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
-type Key = (Side, Option<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
+/// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
+type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
 /// Expands one (state, rolled count) into weighted successors.
 type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
@@ -189,17 +189,18 @@ impl<'g> Lens<'g> {
         };
         for &(m, w) in &rolls {
             let def = game.def(m);
-            let group = def.groups.iter().copied().find(|g| tracked_groups.contains(g));
+            // All tracked groups, not just the first: a hybrid's conflicts are not its parts'.
+            let group: Vec<GroupId> = def.groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect();
             // Fossil and veiled mods differ from natural ones only in their weights.
             let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
             let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
             // Untracked mods split by the pools that can roll them: a mod a pool cannot roll (a
             // fracture, an earlier fossil's) must not count as one of that pool's draws.
-            let rolled_by = if group.is_some() { 0 } else { rolled_by(m, w) };
+            let rolled_by = if !group.is_empty() { 0 } else { rolled_by(m, w) };
             keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by)).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
-            keys.insert((game.def(m).side, None, serves(m), tag_bits(m), Origin::Fixed, Some(m), 0, 0), vec![m]);
+            keys.insert((game.def(m).side, Vec::new(), serves(m), tag_bits(m), Origin::Fixed, Some(m), 0, 0), vec![m]);
         }
 
         let mut classes = Vec::new();
@@ -218,7 +219,7 @@ impl<'g> Lens<'g> {
                 side,
                 origin,
                 veiled: mods.iter().filter(|m| game.def(**m).source == Source::Veiled).count(),
-                tracked: group.is_some() || fixed.is_some(),
+                tracked: !group.is_empty() || fixed.is_some(),
                 crafted: fixed.is_some_and(|m| game.def(m).source == Source::Crafted),
                 veil: fixed.is_some_and(|m| game.veils.contains(&m)),
                 tags,
