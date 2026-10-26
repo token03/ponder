@@ -69,12 +69,29 @@ pub struct Fossil {
     pub forced_mods: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BenchActions {
+    #[serde(default)]
+    pub add_explicit_mod: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BenchOption {
+    pub actions: BenchActions,
+    #[serde(default)]
+    pub item_classes: Vec<String>,
+    /// Currency metadata id -> amount.
+    #[serde(default)]
+    pub cost: BTreeMap<String, u32>,
+}
+
 /// Every export the rules read, keyed by RePoE id.
 pub struct Repoe {
     pub mods: BTreeMap<String, Mod>,
     pub bases: BTreeMap<String, Base>,
     pub essences: BTreeMap<String, Essence>,
     pub fossils: BTreeMap<String, Fossil>,
+    pub bench: Vec<BenchOption>,
 }
 
 impl Repoe {
@@ -84,6 +101,7 @@ impl Repoe {
             bases: read(dir, "base_items")?,
             essences: read(dir, "essences")?,
             fossils: read(dir, "fossils")?,
+            bench: read(dir, "crafting_bench_options")?,
         })
     }
 

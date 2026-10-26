@@ -33,6 +33,11 @@ impl Rng {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
 
+    /// Uniform in 0..n (n > 0).
+    pub fn below(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
+
     /// An index drawn with probability proportional to its weight; `None` if all are zero.
     pub fn pick(&mut self, weights: impl Iterator<Item = f64> + Clone) -> Option<usize> {
         let total: f64 = weights.clone().sum();

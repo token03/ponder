@@ -1,6 +1,6 @@
 //! Essences: reforge as rare with one forced mod.
 
-use super::{Cost, Ctx, Operation, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Sides, Step, View};
 use crate::game::{Game, ModId};
 use crate::goal::Rarity;
 
@@ -8,7 +8,7 @@ pub struct Essence {
     /// e.g. "deafening-woe".
     pub name: String,
     price: String,
-    steps: [Step; 5],
+    steps: Vec<Step>,
 }
 
 impl Essence {
@@ -22,7 +22,13 @@ impl Essence {
         Some(Essence {
             name: name.into(),
             price: wanted,
-            steps: [Step::Clear { keep_locked: false }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Force(forced), Step::Fill],
+            steps: vec![
+                Step::Clear { sides: Sides::Both, respect_lock: false },
+                Step::Rarity(Rarity::Rare),
+                Step::RollCount,
+                Step::Force(forced),
+                Step::Fill(Pick::ANY),
+            ],
         })
     }
 
@@ -50,6 +56,6 @@ impl Operation for Essence {
     }
 
     fn cost(&self) -> Cost {
-        Cost { items: vec![(self.price.clone(), 1.0)], seconds: 2.0 }
+        Cost::of(&self.price, 1.0, 2.0)
     }
 }

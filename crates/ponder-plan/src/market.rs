@@ -10,6 +10,8 @@ pub struct Market {
     pub prices: HashMap<String, f64>,
     /// The user's value of an hour of crafting, in chaos (SPEC §10).
     pub chaos_per_hour: f64,
+    /// Chaos for a plain base of the right item level (SPEC §10; bases are not in the price file).
+    pub base: f64,
 }
 
 impl Market {
@@ -23,7 +25,7 @@ impl Market {
             bytes = out;
         }
         let prices = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
-        Ok(Market { prices, chaos_per_hour: 1500.0 })
+        Ok(Market { prices, chaos_per_hour: 1500.0, base: 5.0 })
     }
 
     /// Chaos for one use, or `None` when something is unpriced (never "free", SPEC §5.6).

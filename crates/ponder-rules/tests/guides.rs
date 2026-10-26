@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ponder_rules::data::Repoe;
-use ponder_rules::game::Game;
+use ponder_rules::game::{Game, Influences, Kind, ModId};
+use ponder_rules::goal::{Influence, Source};
 use ponder_rules::guide::Guide;
 use ponder_rules::target::Target;
 
@@ -45,6 +46,18 @@ const MECHANICS: &[&str] = &[
     "catalyst",
 ];
 
+/// Requirements that name mods their base cannot get, until the mechanic that explains them
+/// exists: (guide, stage, why).
+const KNOWN: &[(&str, &str, &str)] = &[
+    ("chill-convert-gloves", "quality_ready", "M4: the donor is another glove base"),
+    ("necrotic-dmg-shocked", "armour_only", "M4: the donor is another body armour base"),
+    ("plus-two-minion-gloves", "mana_base", "M4: the donor is another glove base"),
+    ("plus-two-minion-fire-chaos-armour-gloves", "mana_base", "M4: the donor is another glove base"),
+    ("int-mana-stacking-simplex", "*", "M5: Simplex influence pools"),
+    ("dagger-plus-two-explode-synth", "*", "M5: synthesis implicits"),
+    ("plus-one-phys-spell-crit-shield", "*", "M5: corrupted +1 socketed gems on the imprint"),
+];
+
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -66,6 +79,25 @@ fn guides() -> Vec<(String, Guide)> {
     out
 }
 
+/// Can some mechanic put `m` on this base: rolling (natural, influence, fossil, veiled), an
+/// essence, the bench, or a legacy or elevated mod bought or made elsewhere?
+fn obtainable(game: &Game, base: &str, m: ModId) -> bool {
+    let base = game.base(base).unwrap();
+    let class = &game.bases[base.0 as usize].class;
+    let def = game.def(m);
+    match def.source {
+        Source::Essence => game.essences.iter().any(|e| e.mods.get(class).is_some_and(|k| k.as_deref() == Some(def.key.as_str()))),
+        Source::Crafted => {
+            game.bench.iter().any(|b| b.item_classes.contains(class) && b.actions.add_explicit_mod.as_deref() == Some(def.key.as_str()))
+        }
+        Source::Legacy | Source::Elevated => true,
+        _ => Influence::ALL.iter().any(|i| {
+            let kind = Kind { base, ilvl: 100, influences: Influences::of(&[*i]) };
+            game.pool(kind).mods.iter().any(|(id, _)| *id == m)
+        }),
+    }
+}
+
 #[test]
 fn guides_name_real_things() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
@@ -76,8 +108,17 @@ fn guides_name_real_things() {
         let mut local = Vec::new();
         let targets = std::iter::once("goal").chain(guide.stages.keys().map(String::as_str));
         for target in targets {
-            if let Err(e) = Target::compile(&game, &guide.target(target).unwrap()) {
-                local.push(format!("{target}: {e}"));
+            let goal = guide.target(target).unwrap();
+            match Target::compile(&game, &goal) {
+                Err(e) => local.push(format!("{target}: {e}")),
+                Ok(t) => {
+                    for (need, req) in t.needs.iter().zip(&goal.mods) {
+                        let known = KNOWN.iter().any(|k| k.0 == name && (k.1 == target || k.1 == "*"));
+                        if !known && !need.ok.iter().any(|m| obtainable(&game, &guide.base, *m)) {
+                            local.push(format!("{target}: {:?} cannot appear on {}", req.text, guide.base));
+                        }
+                    }
+                }
             }
         }
         for (i, step) in guide.steps.iter().enumerate() {

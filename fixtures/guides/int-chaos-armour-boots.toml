@@ -46,7 +46,7 @@ until = "life_four_mods"
 do = ["fracturing"]
 until = "fractured_life"
 max = 1
-else = 2
+else = 1
 
 [[steps]]
 do = ["essence:deafening-spite"]

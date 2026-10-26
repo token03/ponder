@@ -9,7 +9,7 @@ use ponder_rules::game::{Game, Influences, Kind, Side};
 use ponder_rules::goal::{Rarity, Source};
 use ponder_rules::item::{Affix, Item};
 use ponder_rules::ops::currency::Currency;
-use ponder_rules::ops::{Ctx, Operation, eligible, run};
+use ponder_rules::ops::{Ctx, Operation, Pick, eligible, run};
 use ponder_rules::rng::Rng;
 
 fn game() -> &'static Game {
@@ -46,7 +46,10 @@ fn check(game: &Game, item: &Item, fractured: &[Affix]) -> Result<(), String> {
             if def.source == Source::Essence {
                 continue;
             }
-            if !matches!(def.source, Source::Natural | Source::Influence) || !pool.mods.iter().any(|(m, _)| *m == a.id) {
+            if game.veils.contains(&a.id) {
+                continue;
+            }
+            if !pool.mods.iter().any(|(m, _)| *m == a.id) {
                 return Err(format!("{} cannot roll here", def.key));
             }
             let forced = game.essences.iter().any(|e| e.mods.values().any(|m| m.as_deref() == Some(def.key.as_str())));
@@ -70,7 +73,12 @@ fn operations(game: &Game, class: &str) -> Vec<Box<dyn Operation>> {
     names.extend(["essence:deafening-woe", "essence:deafening-anger", "essence:deafening-envy"].map(String::from));
     names.extend(["prefixes-cannot-be-changed", "suffixes-cannot-be-changed", "multimod", "remove-crafted"].map(|b| format!("bench:{b}")));
     names.extend(["critical", "life", "fire", "defence", "caster"].map(|h| format!("harvest:reforge-{h}")));
-    names.iter().filter_map(|n| ponder_rules::ops::parse(game, class, n)).collect()
+    names.extend(["add-remove-life", "augment-caster", "add-fire-remove-non-fire"].map(|h| format!("harvest:{h}")));
+    names.extend(["fossil:pristine", "fossil:aetheric+frigid+hollow+sanctified", "fossil:jagged+bound", "fossil:dense"].map(String::from));
+    names.extend(["veiled-chaos", "veiled-exalted", "unveil:movement-speed", "unveil:area-of-effect"].map(String::from));
+    names.extend(["eldritch-implicit:lesser-ichor", "eldritch-implicit:exarch-dominant", "eldritch-chaos", "eldritch-exalted", "eldritch-annulment"].map(String::from));
+    names.extend(["bench:any-prefix", "bench:any-suffix", "bench:cannot-roll-attack", "bench:cannot-roll-caster"].map(String::from));
+    names.iter().filter_map(|n| ponder_rules::ops::parse(game, class, n, &[])).collect()
 }
 
 #[test]
@@ -86,7 +94,7 @@ fn random_walks_obey_the_rules() {
             if walk % 2 == 1 {
                 // Start from a rare with one fractured mod.
                 item.rarity = Rarity::Rare;
-                let pool = eligible(&ctx, &item, None, None);
+                let pool = eligible(&ctx, &item, &Pick::ANY);
                 let a = Affix { id: pool[walk % pool.len()].0, crafted: false, fractured: true };
                 item.affixes.push(a);
                 fractured.push(a);

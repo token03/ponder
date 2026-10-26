@@ -45,7 +45,7 @@ until = "life_four_mods"
 do = ["fracturing"]
 until = "fractured"
 max = 1
-else = 2
+else = 1
 
 [[steps]]
 do = ["essence:deafening-envy"]
@@ -58,5 +58,5 @@ max = 1
 else = 4
 
 [[steps]]
-do = ["bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:convert-fire"]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:convert-fire"]
 until = "goal"

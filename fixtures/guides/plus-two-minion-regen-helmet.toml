@@ -46,7 +46,7 @@ note = "Reforge for +2 minion (1/12), then annul or exalt to exactly four mods."
 do = ["fracturing"]
 until = "fractured"
 max = 1
-else = 2
+else = 1
 
 [[steps]]
 do = ["essence:deafening-envy"]

@@ -8,7 +8,7 @@ mods = [
   { text = "+# to maximum Life", tier = 1, fractured = true },
   { text = "+#% to Cold Resistance", tier = 1 },
   { text = "+#% to Fire Resistance", tier = 2 },
-  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "veiled" },
+  { text = "#% increased Area Damage / #% increased Area of Effect", source = "veiled" },
   { text = ["#% of Physical Damage Converted to Fire Damage", "#% of Physical Damage Converted to Cold Damage", "#% of Physical Damage Converted to Lightning Damage"], source = "crafted" },
 ]
 
@@ -41,7 +41,7 @@ mods = [
   { text = "+# to maximum Life", tier = 1, fractured = true },
   { text = "+#% to Cold Resistance", tier = 1 },
   { text = "+#% to Fire Resistance", tier = 2 },
-  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "veiled" },
+  { text = "#% increased Area Damage / #% increased Area of Effect", source = "veiled" },  { text = "#% of Physical Damage Converted to Cold Damage", source = "crafted" },
 ]
 
 [[steps]]
@@ -65,7 +65,8 @@ max = 1
 else = 3
 
 [[steps]]
-do = ["bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:area-of-effect"]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:area-of-effect"]
+note = "Remove-crafted clears the last attempt's conversion craft so the lock fits."
 until = "unveiled"
 
 [[steps]]

@@ -75,6 +75,6 @@ max = 1
 else = 1
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:damage-over-time-multiplier", "unveil:critical-or-speed"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:damage-over-time-multiplier", "unveil:critical-or-speed"]
 until = "goal"
 note = "The guide then uses Harvest add/remove or a veiled exalt for the remaining suffix."

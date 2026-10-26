@@ -12,6 +12,7 @@ mods = [
 
 [stages.fractured_base]
 mods = [{ text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, fractured = true }]
+price = 40.0 # rough market estimate, not from the guide
 
 [stages.prefixes]
 mods = [{ text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, count = 2 }]

@@ -37,7 +37,7 @@ until = "dex_four_mods"
 do = ["fracturing"]
 until = "fractured"
 max = 1
-else = 2
+else = 1
 
 [[steps]]
 do = ["essence:deafening-envy"]

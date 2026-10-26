@@ -12,6 +12,7 @@ mods = [
 
 [stages.fractured_base]
 mods = [{ text = "#% increased Physical Damage", tier = 2, fractured = true }]
+price = 50.0 # rough market estimate, not from the guide
 
 [stages.hybrid]
 mods = [

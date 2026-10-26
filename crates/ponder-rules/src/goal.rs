@@ -105,6 +105,9 @@ pub struct Goal {
     pub max_mods: Option<u8>,
     #[serde(default)]
     pub min_mods: Option<u8>,
+    /// Chaos to buy an item meeting this stage (`buy:<stage>` in guides). Rough estimates.
+    #[serde(default)]
+    pub price: Option<f64>,
 }
 
 fn one() -> u8 {

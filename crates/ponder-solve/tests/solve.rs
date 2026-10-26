@@ -68,3 +68,48 @@ fn a_cheap_loop_without_an_exit_is_not_a_policy() {
     assert!((s.cost - 100.5).abs() < 1e-9, "{}", s.cost);
     assert_eq!(s.policy[s.index[&0]], Some(1));
 }
+
+/// A chain whose state `restart` starts over.
+struct Restarting {
+    chain: Chain,
+    restart: u32,
+}
+
+impl Model for Restarting {
+    type State = u32;
+    fn is_goal(&self, s: &u32) -> bool {
+        self.chain.is_goal(s)
+    }
+    fn is_restart(&self, s: &u32) -> bool {
+        *s == self.restart
+    }
+    fn actions(&self, s: &u32) -> Vec<(usize, f64)> {
+        self.chain.actions(s)
+    }
+    fn outcomes(&self, s: &u32, a: usize) -> Vec<(f64, u32)> {
+        self.chain.outcomes(s, a)
+    }
+}
+
+#[test]
+fn bricked_items_start_over() {
+    // From 0: cost 1, half the time the goal (1), half a brick (2). The brick can only be
+    // abandoned: cost 3 to buy afresh (state 3 restarts). V0 = 1 + 0.5 (3 + V0) = 5.
+    let chain = Chain { goal: 1, actions: vec![vec![(1.0, vec![(0.5, 1), (0.5, 2)])], vec![], vec![(3.0, vec![(1.0, 3)])], vec![]] };
+    let m = Restarting { chain, restart: 3 };
+    let s = solve(&m, &[(1.0, 0)], 100).unwrap();
+    assert!((s.cost - 5.0).abs() < 1e-9, "{}", s.cost);
+}
+
+#[test]
+fn restarting_competes_with_repair() {
+    // The brick (2) can also be repaired: cost 10 back to 0. Restarting (3 + V0 = 8) is cheaper,
+    // until it costs more: with a restart price of 20, repair wins (V0 = 1 + 0.5 (10 + V0) = 12).
+    for (price, want) in [(3.0, 5.0), (20.0, 12.0)] {
+        let chain =
+            Chain { goal: 1, actions: vec![vec![(1.0, vec![(0.5, 1), (0.5, 2)])], vec![], vec![(price, vec![(1.0, 3)]), (10.0, vec![(1.0, 0)])], vec![]] };
+        let m = Restarting { chain, restart: 3 };
+        let s = solve(&m, &[(1.0, 0)], 100).unwrap();
+        assert!((s.cost - want).abs() < 1e-9, "price {price}: {}", s.cost);
+    }
+}

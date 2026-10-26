@@ -227,6 +227,17 @@ caches.
 | Recombinator dust cost | priced, not zero | Guide note: "dust for recombs still has price". To source. |
 | Time per operation | 1–5 s by type; recombine 15 s | Current code; rough. |
 | Chaos per hour | 1,500 | User preference. |
+| Plain base price | 5c at any item level | Bases are not in the price file. Low. |
+| Bought stage prices | `price` on the guide stage | Rough market estimates, marked in each guide. Low. |
+| "Cannot Be Changed" refill | New mods may land on either side when it has room | Game behaviour as commonly reported. Medium. |
+| Veiled side | Prefix or suffix, even odds | Unverified. Low. |
+| Unveil | 3 offers drawn by weight without repeats (mods of one class share its mean weight); the wanted offer is kept, else the first | Approximation. Medium. |
+| Harvest add/remove cost | 10 × the matching reforge's lifeforce | Unverified (`ADD_REMOVE_FACTOR`). Low. |
+| Influence orb price | Priced as the matching conqueror exalted orb | Proxy; not in the price file. Low. |
+| Eldritch implicits | Only which side is dominant (Exarch prefixes, Eater suffixes); implicit tiers are not modelled | Game rule, simplified. Medium. |
+| Fracturing | Rare, at least 4 mods, not influenced, none fractured; fractures one random mod | Game rule. High. |
+| Starting over | Any item can be abandoned for nothing and a new start bought | Modelling choice. |
+| Guide recipe without a lock | When a step's "Cannot Be Changed" craft cannot be made, the attempt goes to the step's `else` (step 1 if none) | Reading of how guides are followed. Medium. |
 
 ## 11. Scope
 

@@ -3,16 +3,25 @@
 //! A mechanic is a type implementing [`Operation`]: when it applies, what it costs, and the
 //! primitive [`Step`]s it performs. Steps are data, so the same mechanic is sampled on real
 //! items ([`run`]) and enumerated exactly on solver states (`lens`) without a second copy of
-//! its logic. All randomness is in `Draw`, `Fill`, `Remove` and `RollCount` (SPEC §4.3–4.4).
+//! its logic. All randomness is in `Draw`, `Fill`, `Remove`, `Swap`, `RollCount`, `Fracture`,
+//! `Veil` and `Unveil` (SPEC §4.3–4.4).
 
 pub mod bench;
 pub mod currency;
+pub mod eldritch;
 pub mod essence;
+pub mod fossil;
 pub mod harvest;
+pub mod influence;
+pub mod misc;
+pub mod veiled;
+
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use crate::assumptions::Assumptions;
-use crate::game::{Game, ModId, Side, TagId};
-use crate::goal::Rarity;
+use crate::game::{Game, ModDef, ModId, Side, TagId};
+use crate::goal::{Influence, Rarity, Source};
 use crate::item::{Affix, Item};
 use crate::rng::Rng;
 
@@ -21,34 +30,114 @@ pub struct Ctx<'a> {
     pub assumptions: &'a Assumptions,
 }
 
-/// One primitive. Fractured mods survive every step (SPEC §4.5); a "Cannot Be Changed"
-/// metamod protects its side from `Clear` and `Remove` (SPEC §4.7).
+/// The sides a step may touch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sides {
+    Both,
+    Only(Side),
+    /// The side the item's dominant Eldritch implicit selects; none without one.
+    Eldritch,
+}
+
+/// A tag a mod must carry (`true`) or must not carry (`false`).
+pub type TagFilter = Option<(TagId, bool)>;
+
+/// Where a draw takes its mods from.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Pool {
+    /// Natural mods and those of the item's influences, reweighted by fossils if any.
+    Natural(Option<Arc<Bias>>),
+    /// Only the mods of one influence.
+    Influence(Influence),
+}
+
+/// What one random addition may pick.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Pick {
+    pub sides: Sides,
+    pub tag: TagFilter,
+    pub pool: Pool,
+}
+
+impl Pick {
+    pub const ANY: Pick = Pick { sides: Sides::Both, tag: None, pool: Pool::Natural(None) };
+}
+
+/// Fossil weight changes: per tag, the summed "more" and multiplied "less" factors of every
+/// fossil in the set, and the fossil-only mods it adds.
+#[derive(Debug)]
+pub struct Bias {
+    pub name: String,
+    pub tags: Vec<(TagId, f64, f64)>,
+    pub added: Vec<ModId>,
+}
+
+impl Bias {
+    /// A mod's weight multiplier: the more factors of its tags add, the less factors multiply.
+    pub fn factor(&self, def: &ModDef) -> f64 {
+        let (mut more, mut less) = (0.0, 1.0);
+        for (t, m, l) in &self.tags {
+            if def.tags.contains(t) {
+                more += m;
+                less *= l;
+            }
+        }
+        f64::max(more, 1.0) * less
+    }
+}
+
+impl PartialEq for Bias {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+impl Eq for Bias {}
+impl Hash for Bias {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.name.hash(h)
+    }
+}
+
+/// One primitive. Fractured mods survive every step (SPEC §4.5); a "Cannot Be Changed"
+/// metamod protects its side when a step respects locks (SPEC §4.7).
+#[derive(Clone, Debug)]
 pub enum Step {
-    /// Remove every mod except fractured ones and, when `keep_locked`, the locked side.
-    Clear {
-        keep_locked: bool,
-    },
+    /// Remove the mods on these sides, except fractured ones and, when `respect_lock`, the
+    /// locked side.
+    Clear { sides: Sides, respect_lock: bool },
     Rarity(Rarity),
     /// Rarity from what is left: no mods normal, at most one per side magic, else rare.
     Settle,
     /// Choose the total mod count of the item's rarity (SPEC §10).
     RollCount,
-    /// Add this mod (crafted or forced by an essence).
+    /// Add this mod (forced by an essence).
     Force(ModId),
-    /// Add one weighted natural mod, optionally only on one side or carrying a tag.
-    Draw {
-        side: Option<Side>,
-        tag: Option<TagId>,
-    },
+    /// Add the first of these crafted mods that fits (the bench).
+    Craft(Arc<Vec<ModId>>),
+    /// Add one weighted mod.
+    Draw(Pick),
     /// Draw until the item has the rolled count, or nothing fits.
-    Fill,
-    /// Remove one random mod the lock (when `respect_lock`) and fractures allow.
-    Remove {
-        respect_lock: bool,
-    },
+    Fill(Pick),
+    /// Remove one random mod.
+    Remove { sides: Sides, tag: TagFilter, respect_lock: bool },
+    /// Add a mod, then remove another random one (Harvest "add X, remove another").
+    Swap { add: Pick, remove: TagFilter },
     RemoveCrafted,
+    /// Give the item an influence.
+    Influence(Influence),
+    /// Set the side the dominant Eldritch implicit selects.
+    Eldritch(Option<Side>),
+    /// Fracture one random mod (not crafted, not veiled).
+    Fracture,
+    /// Add a veiled mod on a random side with room.
+    Veil(Sides),
+    /// Replace the veiled mod: three offers from its side's unveil pool, keeping the most
+    /// preferred one (earlier lists first), else the first offered.
+    Unveil(Arc<Vec<Vec<ModId>>>),
 }
+
+/// How many offers an unveil shows.
+pub const UNVEIL_OFFERS: usize = 3;
 
 /// What an operation's `applies` may ask, answered by real items and solver states alike.
 pub trait View {
@@ -56,8 +145,9 @@ pub trait View {
     fn count(&self, side: Side) -> usize;
     fn limit(&self) -> usize;
     fn crafted(&self) -> usize;
+    fn fractured(&self) -> usize;
     fn has(&self, m: ModId) -> bool;
-    /// Mods `Remove` could take.
+    /// Mods a `Remove` could take.
     fn removable(&self, respect_lock: bool) -> usize;
     /// Could `m` be added now: its side has room and no mod shares its group?
     fn fits(&self, m: ModId) -> bool;
@@ -67,10 +157,64 @@ pub trait View {
     fn locked(&self) -> Option<Side>;
     /// Any bench metamod on the item.
     fn has_metamod(&self) -> bool;
+    fn influenced(&self) -> bool;
+    fn eldritch(&self) -> Option<Side>;
+    fn veiled(&self) -> bool;
 
     fn open(&self, side: Side) -> usize {
         self.limit().saturating_sub(self.count(side))
     }
+    fn mods(&self) -> usize {
+        self.count(Side::Prefix) + self.count(Side::Suffix)
+    }
+    /// Can `sides` take another mod?
+    fn room(&self, sides: Sides) -> bool {
+        resolve(sides, self.eldritch()).iter().zip(Side::BOTH).any(|(ok, s)| *ok && self.open(s) > 0)
+    }
+}
+
+/// Which of [prefix, suffix] `sides` allows.
+pub fn resolve(sides: Sides, eldritch: Option<Side>) -> [bool; 2] {
+    match sides {
+        Sides::Both => [true, true],
+        Sides::Only(s) => [s == Side::Prefix, s == Side::Suffix],
+        Sides::Eldritch => match eldritch {
+            Some(s) => [s == Side::Prefix, s == Side::Suffix],
+            None => [false, false],
+        },
+    }
+}
+
+/// Does a mod pass a tag filter?
+pub fn tag_ok(def: &ModDef, tag: TagFilter) -> bool {
+    tag.is_none_or(|(t, want)| def.tags.contains(&t) == want)
+}
+
+/// A mod's weight in a draw from `pool` before item-dependent checks (side room, groups,
+/// item level, the item's influences): its spawn weight `w`, or 0 when the pool excludes it.
+pub fn pool_weight(def: &ModDef, m: ModId, w: f64, pool: &Pool) -> f64 {
+    match pool {
+        Pool::Natural(bias) => {
+            let added = bias.as_ref().is_some_and(|b| b.added.contains(&m));
+            let ok = matches!(def.source, Source::Natural | Source::Influence) || (def.source == Source::Fossil && added);
+            if !ok {
+                return 0.0;
+            }
+            bias.as_ref().map_or(w, |b| w * b.factor(def))
+        }
+        Pool::Influence(i) => {
+            if def.source == Source::Influence && def.influence == Some(*i) {
+                w
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
+/// Unveiled mods (not placeholders) that can be offered on this side.
+pub fn unveil_weight(game: &Game, def: &ModDef, m: ModId, w: f64) -> f64 {
+    if def.source == Source::Veiled && !game.veils.contains(&m) { w } else { 0.0 }
 }
 
 /// Price ids and amounts, plus clicking time.
@@ -78,6 +222,12 @@ pub trait View {
 pub struct Cost {
     pub items: Vec<(String, f64)>,
     pub seconds: f64,
+}
+
+impl Cost {
+    pub fn of(id: &str, amount: f64, seconds: f64) -> Cost {
+        Cost { items: vec![(id.into(), amount)], seconds }
+    }
 }
 
 pub trait Operation: Send + Sync {
@@ -92,12 +242,16 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
     let game = ctx.game;
     let mut total = 0;
     for step in steps {
-        match *step {
-            Step::Clear { keep_locked } => {
-                let locked = if keep_locked { item.locked(game) } else { None };
-                item.affixes.retain(|a| a.fractured || locked == Some(game.def(a.id).side));
+        match step {
+            Step::Clear { sides, respect_lock } => {
+                let allowed = resolve(*sides, item.eldritch);
+                let locked = if *respect_lock { item.locked(game) } else { None };
+                item.affixes.retain(|a| {
+                    let side = game.def(a.id).side;
+                    a.fractured || !allowed[side as usize] || locked == Some(side)
+                });
             }
-            Step::Rarity(r) => item.rarity = r,
+            Step::Rarity(r) => item.rarity = *r,
             Step::Settle => {
                 let most = Side::BOTH.iter().map(|s| item.count(game, *s)).max().unwrap_or(0);
                 item.rarity = match most {
@@ -107,24 +261,97 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                 };
             }
             Step::RollCount => total = roll_count(ctx, item, rng),
-            Step::Force(m) => {
-                item.affixes.push(Affix { id: m, crafted: game.def(m).source == crate::goal::Source::Crafted, fractured: false })
+            Step::Force(m) => item.affixes.push(Affix { id: *m, crafted: game.def(*m).source == Source::Crafted, fractured: false }),
+            Step::Craft(mods) => {
+                if let Some(&m) = mods.iter().find(|m| (game, &*item).fits(**m)) {
+                    item.affixes.push(Affix { id: m, crafted: true, fractured: false });
+                }
             }
-            Step::Draw { side, tag } => {
-                draw(ctx, item, rng, side, tag);
+            Step::Draw(pick) => {
+                draw(ctx, item, rng, pick);
             }
-            Step::Fill => while item.affixes.len() < total && draw(ctx, item, rng, None, None) {},
-            Step::Remove { respect_lock } => {
-                let locked = if respect_lock { item.locked(game) } else { None };
-                let removable: Vec<usize> = (0..item.affixes.len())
-                    .filter(|&i| !item.affixes[i].fractured && locked != Some(game.def(item.affixes[i].id).side))
-                    .collect();
-                if !removable.is_empty() {
-                    item.affixes.remove(removable[(rng.next_u64() % removable.len() as u64) as usize]);
+            Step::Fill(pick) => while item.affixes.len() < total && draw(ctx, item, rng, pick) {},
+            Step::Remove { sides, tag, respect_lock } => {
+                let options = removable(game, item, *sides, *tag, *respect_lock, None);
+                if !options.is_empty() {
+                    item.affixes.remove(options[rng.below(options.len())]);
+                }
+            }
+            Step::Swap { add, remove } => {
+                if draw(ctx, item, rng, add) {
+                    let new = item.affixes.len() - 1;
+                    let options = removable(game, item, Sides::Both, *remove, true, Some(new));
+                    if !options.is_empty() {
+                        item.affixes.remove(options[rng.below(options.len())]);
+                    }
                 }
             }
             Step::RemoveCrafted => item.affixes.retain(|a| !a.crafted),
+            Step::Influence(i) => item.kind.influences.0 |= 1 << *i as u8,
+            Step::Eldritch(side) => item.eldritch = *side,
+            Step::Fracture => {
+                let options: Vec<usize> = (0..item.affixes.len())
+                    .filter(|&i| {
+                        let a = item.affixes[i];
+                        !a.crafted && !a.fractured && !game.veils.contains(&a.id)
+                    })
+                    .collect();
+                if !options.is_empty() {
+                    item.affixes[options[rng.below(options.len())]].fractured = true;
+                }
+            }
+            Step::Veil(sides) => {
+                let allowed = resolve(*sides, item.eldritch);
+                let options: Vec<Side> =
+                    Side::BOTH.into_iter().filter(|s| allowed[*s as usize] && item.open(game, *s) > 0 && !item.blocks(game, game.veils[*s as usize])).collect();
+                if !options.is_empty() {
+                    let side = options[rng.below(options.len())];
+                    item.affixes.push(Affix { id: game.veils[side as usize], crafted: false, fractured: false });
+                }
+            }
+            Step::Unveil(prefs) => unveil(ctx, item, rng, prefs),
         }
+    }
+}
+
+/// Indices of mods a removal may take.
+fn removable(game: &Game, item: &Item, sides: Sides, tag: TagFilter, respect_lock: bool, except: Option<usize>) -> Vec<usize> {
+    let allowed = resolve(sides, item.eldritch);
+    let locked = if respect_lock { item.locked(game) } else { None };
+    (0..item.affixes.len())
+        .filter(|&i| {
+            let a = item.affixes[i];
+            let def = game.def(a.id);
+            Some(i) != except && !a.fractured && allowed[def.side as usize] && locked != Some(def.side) && tag_ok(def, tag)
+        })
+        .collect()
+}
+
+fn unveil(ctx: &Ctx, item: &mut Item, rng: &mut Rng, prefs: &[Vec<ModId>]) {
+    let game = ctx.game;
+    let Some(at) = item.affixes.iter().position(|a| game.veils.contains(&a.id)) else { return };
+    let side = game.def(item.affixes[at].id).side;
+    item.affixes.remove(at);
+    let mut pool: Vec<(ModId, f64)> = game
+        .pool(item.kind)
+        .mods
+        .iter()
+        .filter(|(m, _)| {
+            let def = game.def(*m);
+            def.side == side && def.level <= item.kind.ilvl as u32 && !item.blocks(game, *m)
+        })
+        .map(|&(m, w)| (m, unveil_weight(game, game.def(m), m, w)))
+        .filter(|p| p.1 > 0.0)
+        .collect();
+    let mut offers = Vec::new();
+    for _ in 0..UNVEIL_OFFERS {
+        let Some(i) = rng.pick(pool.iter().map(|p| p.1)) else { break };
+        offers.push(pool.remove(i).0);
+    }
+    let rank = |m: ModId| prefs.iter().position(|p| p.contains(&m)).unwrap_or(usize::MAX);
+    if let Some(&best) = offers.iter().min_by_key(|m| rank(**m)) {
+        let chosen = if rank(best) == usize::MAX { offers[0] } else { best };
+        item.affixes.push(Affix { id: chosen, crafted: false, fractured: false });
     }
 }
 
@@ -138,27 +365,39 @@ pub fn sample(op: &dyn Operation, ctx: &Ctx, item: &Item, rng: &mut Rng) -> Opti
     })
 }
 
-/// Natural mods that could be added to `item` now, with their spawn weights.
-pub fn eligible(ctx: &Ctx, item: &Item, side: Option<Side>, tag: Option<TagId>) -> Vec<(ModId, f64)> {
+/// Mods `pick` could add to `item` now, with their weights.
+pub fn eligible(ctx: &Ctx, item: &Item, pick: &Pick) -> Vec<(ModId, f64)> {
     let game = ctx.game;
-    let open = Side::BOTH.map(|s| item.open(game, s) > 0);
+    let allowed = resolve(pick.sides, item.eldritch);
+    let open = Side::BOTH.map(|s| allowed[s as usize] && item.open(game, s) > 0);
+    let banned = banned_tags(game, |m| item.affixes.iter().any(|a| a.id == m));
     game.pool(item.kind)
         .mods
         .iter()
-        .filter(|(m, _)| {
-            let def = game.def(*m);
-            def.level <= item.kind.ilvl as u32
+        .filter_map(|&(m, w)| {
+            let def = game.def(m);
+            let ok = def.level <= item.kind.ilvl as u32
                 && open[def.side as usize]
-                && side.is_none_or(|s| s == def.side)
-                && tag.is_none_or(|t| def.tags.contains(&t))
-                && !item.blocks(game, *m)
+                && tag_ok(def, pick.tag)
+                && !banned.iter().any(|t| def.tags.contains(t))
+                && !item.blocks(game, m);
+            let w = if ok { pool_weight(def, m, w, &pick.pool) } else { 0.0 };
+            (w > 0.0).then_some((m, w))
         })
-        .copied()
         .collect()
 }
 
-fn draw(ctx: &Ctx, item: &mut Item, rng: &mut Rng, side: Option<Side>, tag: Option<TagId>) -> bool {
-    let pool = eligible(ctx, item, side, tag);
+/// Tags the "Cannot roll Attack/Caster Modifiers" metamods present (per `has`) rule out.
+pub fn banned_tags(game: &Game, has: impl Fn(ModId) -> bool) -> Vec<TagId> {
+    [(2, "attack"), (3, "caster")]
+        .into_iter()
+        .filter(|(i, _)| game.metamods.get(*i).is_some_and(|m| has(*m)))
+        .filter_map(|(_, t)| game.tag_id(t))
+        .collect()
+}
+
+fn draw(ctx: &Ctx, item: &mut Item, rng: &mut Rng, pick: &Pick) -> bool {
+    let pool = eligible(ctx, item, pick);
     match rng.pick(pool.iter().map(|p| p.1)) {
         Some(i) => {
             item.affixes.push(Affix { id: pool[i].0, crafted: false, fractured: false });
@@ -197,12 +436,14 @@ impl View for (&Game, &Item) {
     fn crafted(&self) -> usize {
         self.1.crafted()
     }
+    fn fractured(&self) -> usize {
+        self.1.affixes.iter().filter(|a| a.fractured).count()
+    }
     fn has(&self, m: ModId) -> bool {
         self.1.affixes.iter().any(|a| a.id == m)
     }
     fn removable(&self, respect_lock: bool) -> usize {
-        let locked = if respect_lock { self.1.locked(self.0) } else { None };
-        self.1.affixes.iter().filter(|a| !a.fractured && locked != Some(self.0.def(a.id).side)).count()
+        removable(self.0, self.1, Sides::Both, None, respect_lock, None).len()
     }
     fn fits(&self, m: ModId) -> bool {
         self.1.open(self.0, self.0.def(m).side) > 0 && !self.1.blocks(self.0, m)
@@ -217,19 +458,40 @@ impl View for (&Game, &Item) {
     fn has_metamod(&self) -> bool {
         self.1.affixes.iter().any(|a| self.0.metamods.contains(&a.id))
     }
+    fn influenced(&self) -> bool {
+        self.1.kind.influences.0 != 0
+    }
+    fn eldritch(&self) -> Option<Side> {
+        self.1.eldritch
+    }
+    fn veiled(&self) -> bool {
+        self.1.affixes.iter().any(|a| self.0.veils.contains(&a.id))
+    }
 }
 
 /// The operation a guide names (`annulment`, `essence:deafening-woe`, `bench:remove-crafted`,
-/// `harvest:reforge-critical`) for an item class, if it is implemented.
-pub fn parse(game: &Game, class: &str, op: &str) -> Option<Box<dyn Operation>> {
+/// `harvest:reforge-critical`, ...) for an item class, if it is implemented. Bench "any" crafts
+/// avoid the groups in `avoid` (what the goals want).
+pub fn parse(game: &Game, class: &str, op: &str, avoid: &[crate::game::GroupId]) -> Option<Box<dyn Operation>> {
+    fn boxed<O: Operation + 'static>(o: Option<O>) -> Option<Box<dyn Operation>> {
+        o.map(|o| Box::new(o) as Box<dyn Operation>)
+    }
     if let Some(c) = currency::Currency::parse(op) {
         return Some(Box::new(c));
     }
+    if let Some(o) = misc::parse(op) {
+        return Some(o);
+    }
     let (mechanic, arg) = op.split_once(':')?;
     match mechanic {
-        "essence" => essence::Essence::new(game, arg, class).map(|e| Box::new(e) as Box<dyn Operation>),
-        "bench" => bench::Bench::new(game, arg).map(|b| Box::new(b) as Box<dyn Operation>),
-        "harvest" => harvest::Reforge::new(game, arg).map(|r| Box::new(r) as Box<dyn Operation>),
+        "essence" => boxed(essence::Essence::new(game, arg, class)),
+        "bench" => boxed(bench::Bench::new(game, arg, class, avoid)),
+        "harvest" => harvest::parse(game, arg),
+        "fossil" => boxed(fossil::Fossils::new(game, arg, class)),
+        "influence-exalted" => boxed(influence::Exalt::new(arg, false)),
+        "influence-orb" => boxed(influence::Exalt::new(arg, true)),
+        "eldritch-implicit" => boxed(eldritch::Implicit::new(arg)),
+        "unveil" => boxed(veiled::Unveil::new(game, arg)),
         _ => None,
     }
 }

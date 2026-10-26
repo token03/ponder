@@ -7,7 +7,7 @@ mods = [
   { text = "+# to Level of all Spell Skill Gems" },
   { text = "+# to Level of all Minion Skill Gems" },
   { text = "Minions have #% increased Attack Speed / Minions have #% increased Cast Speed", source = "veiled" },
-  { text = "Trigger Socketed Spells when you Focus, with a # second Cooldown", source = "crafted" },
+  { text = "Trigger a Socketed Spell when you Use a Skill, with a # second Cooldown / Spells Triggered this way have #% more Cost", source = "crafted" },
 ]
 
 [stages.gems]
@@ -38,9 +38,9 @@ until = "gems_clean"
 note = "Only needed when the suffixes are not already empty."
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:minion-cast-speed"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:minion-cast-speed"]
 until = "unveiled"
 
 [[steps]]
-do = ["bench:remove-crafted", "bench:trigger-on-focus"]
+do = ["bench:remove-crafted", "bench:trigger-on-skill-use"]
 until = "goal"

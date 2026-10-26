@@ -89,6 +89,26 @@ impl Target {
             })
     }
 
+    /// The plainest item meeting the target, as bought: rare (unless the target says otherwise)
+    /// with the lowest acceptable tier of each needed mod the base can roll, and nothing else.
+    pub fn witness(&self, game: &Game, kind: Kind) -> Option<Item> {
+        let mut item = Item::new(kind);
+        item.rarity = self.rarity.unwrap_or(if self.needs.is_empty() { Rarity::Normal } else { Rarity::Rare });
+        item.quality = self.quality;
+        let pool = game.pool(kind);
+        for need in &self.needs {
+            let rolls = |m: &ModId| game.def(*m).source == Source::Crafted || pool.mods.iter().any(|(id, _)| id == m);
+            let mut ok: Vec<ModId> = need.ok.iter().copied().filter(rolls).collect();
+            ok.sort_by_key(|m| (game.def(*m).level, m.0));
+            for _ in 0..need.count {
+                let m = ok.iter().copied().find(|&m| item.open(game, game.def(m).side) > 0 && !item.blocks(game, m))?;
+                let crafted = game.def(m).source == Source::Crafted;
+                item.affixes.push(crate::item::Affix { id: m, crafted, fractured: need.fractured });
+            }
+        }
+        self.holds(game, &item).then_some(item)
+    }
+
     /// The rarity and affix-count conditions.
     pub fn shape(&self, rarity: Rarity, count: [usize; 2], open: [usize; 2]) -> bool {
         let n = count[0] + count[1];

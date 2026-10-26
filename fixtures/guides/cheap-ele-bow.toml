@@ -77,5 +77,5 @@ else = 1
 note = "Both inputs share the cold mod, which raises the odds of keeping three prefixes."
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:speed-or-critical"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:speed-or-critical"]
 until = "goal"

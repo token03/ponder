@@ -4,23 +4,23 @@ base = "Prophecy Wand"
 
 [goal]
 mods = [
-  { text = "Adds # to # Lightning Damage to Spells", fractured = true, source = "essence" },
+  { text = "Adds # to # Lightning Damage", fractured = true, source = "essence" },
   { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
   { text = "Can have up to # Crafted Modifiers", source = "crafted" },
   { text = "#% increased Spell Damage", source = "crafted" },
 ]
 
 [stages.lightning]
-mods = [{ text = "Adds # to # Lightning Damage to Spells", source = "essence" }]
+mods = [{ text = "Adds # to # Lightning Damage", source = "essence" }]
 min_mods = 4
 max_mods = 4
 
 [stages.fractured]
-mods = [{ text = "Adds # to # Lightning Damage to Spells", fractured = true, source = "essence" }]
+mods = [{ text = "Adds # to # Lightning Damage", fractured = true, source = "essence" }]
 
 [stages.multiplier]
 mods = [
-  { text = "Adds # to # Lightning Damage to Spells", fractured = true, source = "essence" },
+  { text = "Adds # to # Lightning Damage", fractured = true, source = "essence" },
   { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
 ]
 
@@ -35,7 +35,7 @@ until = "lightning"
 do = ["fracturing"]
 until = "fractured"
 max = 1
-else = 2
+else = 1
 
 [[steps]]
 do = ["essence:deafening-hatred"]

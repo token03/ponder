@@ -33,6 +33,8 @@ pub struct ModDef {
     pub tags: Vec<TagId>,
     pub level: u32,
     pub template: String,
+    /// The influence an influenced mod needs on the item.
+    pub influence: Option<Influence>,
     /// The first matching tag decides the weight; zero means it cannot roll there.
     spawn: Vec<(TagId, u32)>,
     /// Percent multipliers by tag.
@@ -67,7 +69,8 @@ impl Influences {
     }
 }
 
-/// The natural mods of one item kind with their spawn weights, best tier first per template.
+/// The mods that can roll on one item kind (natural, influenced, fossil-only, unveiled) with their
+/// spawn weights, and the natural tiers per template.
 pub struct Pool {
     pub mods: Vec<(ModId, f64)>,
     /// Template -> natural mods of that template on this kind, highest level first.
@@ -88,6 +91,9 @@ pub struct Game {
     pub metamods: Vec<ModId>,
     pub essences: Vec<data::Essence>,
     pub fossils: Vec<data::Fossil>,
+    pub bench: Vec<data::BenchOption>,
+    /// The veiled placeholder mod of each side, until unveiled.
+    pub veils: [ModId; 2],
     pools: Mutex<HashMap<Kind, Arc<Pool>>>,
 }
 
@@ -105,6 +111,8 @@ impl Game {
             metamods: Vec::new(),
             essences: repoe.essences.into_values().collect(),
             fossils: repoe.fossils.into_values().collect(),
+            bench: repoe.bench,
+            veils: [ModId(0); 2],
             pools: Mutex::default(),
         };
         let mut group_ids: BTreeMap<String, GroupId> = BTreeMap::new();
@@ -114,8 +122,13 @@ impl Game {
                 "suffix" => Side::Suffix,
                 _ => continue,
             };
-            let Some(source) = source_of(key, m) else { continue };
-            let Some(text) = &m.text else { continue };
+            let veil = m.domain == "veiled" && VEILS.contains(&key.as_str());
+            let Some(source) = (if veil { Some(Source::Veiled) } else { source_of(key, m) }) else { continue };
+            let text = match &m.text {
+                Some(t) => t.clone(),
+                None if veil => format!("<{key}>"),
+                None => continue,
+            };
             let groups = m
                 .groups
                 .iter()
@@ -131,7 +144,10 @@ impl Game {
                 groups,
                 tags: m.implicit_tags.iter().map(|t| game.tag(t)).collect(),
                 level: m.required_level,
-                template: data::template(text),
+                template: data::template(&text),
+                influence: Influence::ALL
+                    .into_iter()
+                    .find(|i| m.spawn_weights.iter().any(|w| w.weight > 0 && w.tag.ends_with(&format!("_{}", i.tag())))),
                 spawn: m.spawn_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
                 generation: m.generation_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
             };
@@ -141,6 +157,7 @@ impl Game {
             game.mods.push(def);
         }
         game.groups = group_ids.into_keys().collect();
+        game.veils = VEILS.map(|k| game.mod_id(k).expect("veiled placeholder mods"));
         game.metamods = METAMODS.iter().filter_map(|k| game.mod_id(k)).collect();
         for b in repoe.bases.values() {
             if b.release_state != "released" || b.name.is_empty() || game.base_ids.contains_key(&b.name) {
@@ -213,13 +230,15 @@ impl Game {
         let mut mods = Vec::new();
         let mut tiers: HashMap<String, Vec<ModId>> = HashMap::new();
         for (i, m) in self.mods.iter().enumerate() {
-            if !matches!(m.source, Source::Natural | Source::Influence) {
+            if !matches!(m.source, Source::Natural | Source::Influence | Source::Fossil | Source::Veiled) {
                 continue;
             }
             let w = weight(&m.spawn, 0) as f64 * weight(&m.generation, 100) as f64 / 100.0;
             if w > 0.0 {
                 mods.push((ModId(i as u32), w));
-                tiers.entry(m.template.clone()).or_default().push(ModId(i as u32));
+                if matches!(m.source, Source::Natural | Source::Influence) {
+                    tiers.entry(m.template.clone()).or_default().push(ModId(i as u32));
+                }
             }
         }
         for list in tiers.values_mut() {
@@ -230,7 +249,7 @@ impl Game {
         pool
     }
 
-    /// Tier of a natural mod on this kind: 1 for the highest required level of its template.
+    /// Tier of a mod on this kind: 1 for the highest required level of its template.
     pub fn tier(&self, kind: Kind, m: ModId) -> Option<u8> {
         let pool = self.pool(kind);
         let list = pool.tiers.get(&self.def(m).template)?;
@@ -239,6 +258,9 @@ impl Game {
         levels.iter().position(|&l| l == self.def(m).level).map(|p| p as u8 + 1)
     }
 }
+
+/// The veiled placeholder mods, prefix then suffix.
+const VEILS: [&str; 2] = ["VeiledPrefix", "VeiledSuffix"];
 
 /// Bench metamod keys, in `Game::metamods` order.
 pub const METAMODS: [&str; 5] = [

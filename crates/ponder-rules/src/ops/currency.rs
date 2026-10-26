@@ -1,6 +1,6 @@
 //! Basic currency orbs.
 
-use super::{Cost, Ctx, Operation, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Sides, Step, View};
 use crate::game::Side;
 use crate::goal::Rarity;
 
@@ -15,18 +15,25 @@ pub enum Currency {
     Exalted,
     Annulment,
     Scouring,
+    Fracturing,
 }
 
-const REMAKE_MAGIC: &[Step] = &[Step::Clear { keep_locked: false }, Step::Rarity(Rarity::Magic), Step::RollCount, Step::Fill];
-const REMAKE_RARE: &[Step] = &[Step::Clear { keep_locked: false }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill];
-const CHAOS: &[Step] = &[Step::Clear { keep_locked: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill];
-const ADD: &[Step] = &[Step::Draw { side: None, tag: None }];
-const REGAL: &[Step] = &[Step::Rarity(Rarity::Rare), Step::Draw { side: None, tag: None }];
-const ANNUL: &[Step] = &[Step::Remove { respect_lock: true }];
-const SCOUR: &[Step] = &[Step::Clear { keep_locked: true }, Step::Settle];
+const ANY: Pick = Pick::ANY;
+const REMAKE_MAGIC: &[Step] =
+    &[Step::Clear { sides: Sides::Both, respect_lock: false }, Step::Rarity(Rarity::Magic), Step::RollCount, Step::Fill(ANY)];
+const REMAKE_RARE: &[Step] =
+    &[Step::Clear { sides: Sides::Both, respect_lock: false }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(ANY)];
+/// Under a lock, chaos keeps the locked mods; new ones may land on either side (SPEC §4.7).
+const CHAOS: &[Step] =
+    &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(ANY)];
+const ADD: &[Step] = &[Step::Draw(ANY)];
+const REGAL: &[Step] = &[Step::Rarity(Rarity::Rare), Step::Draw(ANY)];
+const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true }];
+const SCOUR: &[Step] = &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Settle];
+const FRACTURE: &[Step] = &[Step::Fracture];
 
 impl Currency {
-    pub const ALL: [Currency; 9] = [
+    pub const ALL: [Currency; 10] = [
         Currency::Transmutation,
         Currency::Alteration,
         Currency::Augmentation,
@@ -36,6 +43,7 @@ impl Currency {
         Currency::Exalted,
         Currency::Annulment,
         Currency::Scouring,
+        Currency::Fracturing,
     ];
 
     pub fn parse(name: &str) -> Option<Currency> {
@@ -54,6 +62,7 @@ impl Currency {
             Currency::Exalted => "exalted",
             Currency::Annulment => "annul",
             Currency::Scouring => "scour",
+            Currency::Fracturing => "fracturing-orb",
         }
     }
 }
@@ -74,6 +83,8 @@ impl Operation for Currency {
             Currency::Exalted => item.rarity() == Rarity::Rare && room,
             Currency::Annulment => item.rarity() != Rarity::Normal && item.removable(true) > 0,
             Currency::Scouring => item.rarity() != Rarity::Normal,
+            // SPEC §4.5: a rare with at least four mods, not influenced, nothing fractured yet.
+            Currency::Fracturing => item.rarity() == Rarity::Rare && item.mods() >= 4 && !item.influenced() && item.fractured() == 0,
         }
     }
 
@@ -86,6 +97,7 @@ impl Operation for Currency {
             Currency::Regal => REGAL,
             Currency::Annulment => ANNUL,
             Currency::Scouring => SCOUR,
+            Currency::Fracturing => FRACTURE,
         }
     }
 

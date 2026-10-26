@@ -44,5 +44,5 @@ until = "energy_shield"
 note = "Repeat until the energy shield total is satisfying (1000+)."
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:dexterity-and-intelligence", "unveil:energy-shield-regeneration"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:dexterity-and-intelligence", "unveil:energy-shield-regeneration"]
 until = "goal"

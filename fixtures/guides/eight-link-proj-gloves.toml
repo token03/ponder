@@ -8,7 +8,7 @@ mods = [
   { text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 },
   { text = "Socketed Spells have +#% to Critical Strike Multiplier", tier = 1 },
   { text = "#% increased Projectile Speed / Socketed Gems are supported by Level # Faster Projectiles" },
-  { text = "#% increased Projectile Speed", source = "crafted" },
+  { text = "#% increased Projectile Damage / #% increased Projectile Speed", source = "crafted" },
 ]
 
 [stages.elder]

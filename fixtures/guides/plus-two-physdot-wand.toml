@@ -45,3 +45,4 @@ until = "goal"
 
 [stages.fractured_base]
 mods = [{ text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true }]
+price = 40.0 # rough market estimate, not from the guide

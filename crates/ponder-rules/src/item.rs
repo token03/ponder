@@ -16,11 +16,13 @@ pub struct Item {
     pub rarity: Rarity,
     pub quality: u8,
     pub affixes: Vec<Affix>,
+    /// The side the dominant Eldritch implicit makes Eldritch currency work on.
+    pub eldritch: Option<Side>,
 }
 
 impl Item {
     pub fn new(kind: Kind) -> Item {
-        Item { kind, rarity: Rarity::Normal, quality: 0, affixes: Vec::new() }
+        Item { kind, rarity: Rarity::Normal, quality: 0, affixes: Vec::new(), eldritch: None }
     }
 
     pub fn count(&self, game: &Game, side: Side) -> usize {
