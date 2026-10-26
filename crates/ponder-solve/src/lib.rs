@@ -57,7 +57,7 @@ pub enum Error {
 struct Edge {
     action: usize,
     cost: f64,
-    to: Vec<(f64, usize)>,
+    to: Box<[(f64, usize)]>,
 }
 
 /// Where a state's value comes from: `a + b w`, with `w` the value of restarting.
