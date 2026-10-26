@@ -3,7 +3,6 @@
 use std::sync::OnceLock;
 
 use ponder_rules::item::Item;
-use ponder_rules::lens::{Lens, State};
 use ponder_rules::ops::Supply;
 use ponder_rules::rng::Rng;
 
@@ -11,13 +10,12 @@ use ponder_rules::rng::Rng;
 pub struct Stock {
     name: String,
     price: f64,
-    item: Item,
-    states: Vec<(f64, State)>,
+    items: [Item; 1],
 }
 
 impl Stock {
-    pub fn new(name: &str, price: f64, item: Item, lens: &Lens) -> Stock {
-        Stock { name: name.into(), price, states: vec![(1.0, lens.project(&item))], item }
+    pub fn new(name: &str, price: f64, item: Item) -> Stock {
+        Stock { name: name.into(), price, items: [item] }
     }
 }
 
@@ -28,16 +26,14 @@ impl Supply for Stock {
     fn price(&self) -> f64 {
         self.price
     }
-    fn states(&self) -> &[(f64, State)] {
-        &self.states
+    fn items(&self) -> &[Item] {
+        &self.items
     }
     fn item(&self, _: &mut Rng) -> Item {
-        self.item.clone()
+        self.items[0].clone()
     }
 }
 
-/// What a craft makes: empty until the craft is solved, then its expected cost, the states it
-/// ends in, and real items made by following it.
 pub struct Product {
     name: String,
     made: OnceLock<Made>,
@@ -45,7 +41,6 @@ pub struct Product {
 
 struct Made {
     price: f64,
-    states: Vec<(f64, State)>,
     items: Vec<Item>,
 }
 
@@ -54,10 +49,9 @@ impl Product {
         Product { name: name.into(), made: OnceLock::new() }
     }
 
-    /// Fill once: the craft's cost, its end states, and real items it made.
-    pub fn fill(&self, price: f64, states: Vec<(f64, State)>, items: Vec<Item>) {
+    pub fn fill(&self, price: f64, items: Vec<Item>) {
         assert!(!items.is_empty(), "{}: no real items made", self.name);
-        assert!(self.made.set(Made { price, states, items }).is_ok(), "{} filled twice", self.name);
+        assert!(self.made.set(Made { price, items }).is_ok(), "{} filled twice", self.name);
     }
 
     fn made(&self) -> &Made {
@@ -72,8 +66,8 @@ impl Supply for Product {
     fn price(&self) -> f64 {
         self.made().price
     }
-    fn states(&self) -> &[(f64, State)] {
-        &self.made().states
+    fn items(&self) -> &[Item] {
+        &self.made().items
     }
     fn item(&self, rng: &mut Rng) -> Item {
         let items = &self.made().items;

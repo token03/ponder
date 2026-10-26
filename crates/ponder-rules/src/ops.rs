@@ -150,14 +150,11 @@ pub enum Step {
     Recombine(SupplyRef),
 }
 
-/// Where an item comes from: bought, or made by another craft (a recombination's second
-/// item). Its price, how its solver states are distributed (for the lens) and real ones (for
-/// the simulator). A made one is filled in once solved, so it can exist before its lens.
 pub trait Supply: Send + Sync {
     fn name(&self) -> String;
     /// Chaos for one.
     fn price(&self) -> f64;
-    fn states(&self) -> &[(f64, crate::lens::State)];
+    fn items(&self) -> &[Item];
     fn item(&self, rng: &mut Rng) -> Item;
 }
 

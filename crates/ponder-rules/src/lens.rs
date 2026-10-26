@@ -14,12 +14,13 @@
 //! class's average mod weight per offer (exact for single-mod classes).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
 
 use crate::game::{Game, GroupId, Influences, Kind, ModId, Side, TagId};
 use crate::goal::{Influence, Rarity, Source};
 use crate::item::Item;
 use crate::ops::{
-    Ctx, Operation, Pick, Pool, Sides, Step, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
+    Ctx, Operation, Pick, Pool, Sides, Step, SupplyRef, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
 };
 use crate::target::{Target, matches};
 
@@ -77,17 +78,21 @@ pub struct Lens<'g> {
     lock: [Option<usize>; 2],
     metamods: Vec<usize>,
     bans: Vec<(usize, u32)>,
+    partners: Vec<(SupplyRef, Vec<(f64, State)>)>,
+    samples: Mutex<SampleCache>,
 }
 
 static ANY: Pick = Pick::ANY;
 
 /// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
 type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
+type Samples = Arc<[(f64, Vec<u8>)]>;
+type SampleCache = HashMap<(Vec<(usize, u8)>, usize), Samples>;
 /// Expands one (state, rolled count) into weighted successors.
 type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
 impl<'g> Lens<'g> {
-    pub fn new(game: &'g Game, kind: Kind, targets: Vec<Target>, ops: &[&dyn Operation]) -> Lens<'g> {
+    pub fn new(game: &'g Game, kind: Kind, targets: Vec<Target>, ops: &[&dyn Operation], inputs: &[&Item]) -> Lens<'g> {
         let mut offsets = Vec::new();
         let mut bits = 0;
         for t in &targets {
@@ -109,11 +114,21 @@ impl<'g> Lens<'g> {
 
         // What the operations read and add.
         let steps: Vec<&Step> = ops.iter().flat_map(|op| op.steps()).collect();
+        let mut partners = Vec::new();
+        for step in &steps {
+            if let Step::Recombine(p) = step
+                && !partners.contains(p)
+            {
+                partners.push(p.clone());
+            }
+        }
+        let inputs: Vec<&Item> = inputs.iter().copied().chain(partners.iter().flat_map(|p| p.0.items())).collect();
         let mut picks: Vec<&Pick> = Vec::new();
         let mut filters: Vec<TagFilter> = Vec::new();
         let mut forced: BTreeSet<ModId> = BTreeSet::new();
         let mut prefs: Vec<&Vec<Vec<ModId>>> = Vec::new();
         let mut influences = kind.influences.0 | targets.iter().fold(0, |b, t| b | t.influences.0);
+        influences |= inputs.iter().fold(0, |b, i| b | i.kind.influences.0);
         for step in &steps {
             match step {
                 Step::Draw(p) | Step::Fill(p) => picks.push(p),
@@ -181,6 +196,7 @@ impl<'g> Lens<'g> {
             .copied()
             .collect();
         let roll_ids: BTreeSet<ModId> = rolls.iter().map(|p| p.0).collect();
+        forced.extend(inputs.iter().flat_map(|i| &i.affixes).map(|a| a.id).filter(|m| !roll_ids.contains(m)));
         let pref_mods = prefs.iter().flat_map(|p| p.iter().flatten().copied());
         let wanted = targets.iter().flat_map(|t| t.needs.iter().flat_map(|n| n.ok.iter().copied()));
         let tracked_groups: BTreeSet<GroupId> =
@@ -290,7 +306,31 @@ impl<'g> Lens<'g> {
         let bans = bans.iter().filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?))).collect();
         let targets = targets.into_iter().zip(offsets).collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
-        Lens { game, kind, class_name, classes, class_of, read_tags, pools, unveil, collide, targets, lock, metamods, bans }
+        let mut lens = Lens {
+            game,
+            kind,
+            class_name,
+            classes,
+            class_of,
+            read_tags,
+            pools,
+            unveil,
+            collide,
+            targets,
+            lock,
+            metamods,
+            bans,
+            partners: Vec::new(),
+            samples: Mutex::default(),
+        };
+        lens.partners = partners
+            .into_iter()
+            .map(|p| {
+                let states = lens.project_items(p.0.items());
+                (p, states)
+            })
+            .collect();
+        lens
     }
 
     pub fn classes(&self) -> usize {
@@ -312,6 +352,14 @@ impl<'g> Lens<'g> {
             counts[c + if a.fractured { n } else { 0 }] += 1;
         }
         State { rarity: item.rarity, influences: item.kind.influences.0, eldritch: item.eldritch, counts: counts.into() }
+    }
+
+    pub fn project_items(&self, items: &[Item]) -> Vec<(f64, State)> {
+        let mut counts = BTreeMap::<State, usize>::new();
+        for item in items {
+            *counts.entry(self.project(item)).or_default() += 1;
+        }
+        counts.into_iter().map(|(s, n)| (n as f64 / items.len() as f64, s)).collect()
     }
 
     /// Whether two step lists do the same to every state: equal but for forcing different
@@ -495,7 +543,10 @@ impl<'g> Lens<'g> {
                 }
             }
             Step::Unveil(_) => self.unveil(s, total, emit),
-            Step::Recombine(p) => self.recombine(ctx, &s, total, p.0.states(), emit),
+            Step::Recombine(p) => {
+                let partner = &self.partners.iter().find(|(supply, _)| supply == p).expect("partner read by an operation").1;
+                self.recombine(ctx, &s, total, partner, emit);
+            }
         }
     }
 
@@ -574,8 +625,8 @@ impl<'g> Lens<'g> {
                     let all: f64 = table.iter().map(|e| e.1).sum();
                     let mut kept: HashMap<Vec<u8>, f64> = HashMap::new();
                     for &(k, w) in table {
-                        for (p, chosen) in self.sample(&pool, (k as usize).min(limit)) {
-                            *kept.entry(chosen).or_default() += w / all * p;
+                        for (p, chosen) in self.sample(&pool, (k as usize).min(limit)).iter() {
+                            *kept.entry(chosen.clone()).or_default() += w / all * p;
                         }
                     }
                     let pool = &pool;
@@ -615,7 +666,11 @@ impl<'g> Lens<'g> {
     /// kept or none are left; one conflicting with a kept affix is discarded (for untracked
     /// classes, sharing a group with each kept one of its class by chance). Per outcome, how
     /// many of each entry were kept.
-    fn sample(&self, pool: &[(usize, u8)], keep: usize) -> Vec<(f64, Vec<u8>)> {
+    fn sample(&self, pool: &[(usize, u8)], keep: usize) -> Samples {
+        let key = (pool.to_vec(), keep);
+        if let Some(out) = self.samples.lock().unwrap().get(&key) {
+            return out.clone();
+        }
         let n = self.classes.len();
         let conflicts = |a: usize, b: usize| {
             let (a, b) = (a % n, b % n);
@@ -655,7 +710,11 @@ impl<'g> Lens<'g> {
             }
             open = next.into_iter().map(|((l, k), p)| (p, l, k)).collect();
         }
-        done.into_iter().map(|(k, p)| (p, k)).collect()
+        let mut out: Vec<_> = done.into_iter().map(|(k, p)| (p, k)).collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        let out: Samples = out.into();
+        self.samples.lock().unwrap().insert(key, out.clone());
+        out
     }
 
     fn draw(&self, s: State, total: u8, pick: &Pick, emit: &mut dyn FnMut(f64, State, u8)) {

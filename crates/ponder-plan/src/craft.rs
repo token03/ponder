@@ -36,6 +36,7 @@ pub struct Craft<'a> {
     pub goal: usize,
     /// Per operation, where its reset ends, if it has one.
     hubs: Vec<Option<usize>>,
+    start_states: Vec<Vec<(f64, State)>>,
 }
 
 impl<'a> Craft<'a> {
@@ -62,7 +63,12 @@ impl<'a> Craft<'a> {
             })
             .collect();
         let hubs = ops.iter().map(|(op, _)| hub(op.steps())).collect();
-        Craft { ctx, lens, ops, dominated, starts, goal, hubs }
+        let start_states = starts.iter().map(|s| lens.project_items(s.items())).collect();
+        Craft { ctx, lens, ops, dominated, starts, goal, hubs, start_states }
+    }
+
+    pub fn start_states(&self, i: usize) -> &[(f64, State)] {
+        &self.start_states[i]
     }
 
     /// Action id `i` names a purchase rather than an operation.
@@ -132,7 +138,7 @@ impl Model for Craft<'_> {
             return vec![(1.0, Node::Restart)];
         }
         match (n, self.start_of(i)) {
-            (_, Some(b)) => b.states().iter().map(|(p, s)| (*p, Node::Item(s.clone()))).collect(),
+            (_, Some(_)) => self.start_states(i - self.ops.len()).iter().map(|(p, s)| (*p, Node::Item(s.clone()))).collect(),
             (Node::Item(s), None) => match self.reset(s, i) {
                 Some(t) => vec![(1.0, Node::Hub(i, t))],
                 None => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),

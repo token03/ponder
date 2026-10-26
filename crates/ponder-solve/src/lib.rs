@@ -44,6 +44,7 @@ pub struct Solution<S> {
     pub index: HashMap<S, usize>,
     /// States that gave up (see [`Model::gives_up`]).
     pub given_up: Vec<S>,
+    pub outcomes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,23 +78,26 @@ impl Affine {
 pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
     let mut states: Vec<M::State> = Vec::new();
     let mut index: HashMap<M::State, usize> = HashMap::new();
-    let mut intern = |s: M::State, states: &mut Vec<M::State>| -> usize {
-        *index.entry(s.clone()).or_insert_with(|| {
-            states.push(s);
-            states.len() - 1
-        })
+    let mut intern = |s: M::State, states: &mut Vec<M::State>| -> Result<usize, Error> {
+        if let Some(&i) = index.get(&s) {
+            return Ok(i);
+        }
+        if states.len() >= limit {
+            return Err(Error::TooManyStates(limit));
+        }
+        let i = states.len();
+        index.insert(s.clone(), i);
+        states.push(s);
+        Ok(i)
     };
-    let starts: Vec<(f64, usize)> = start.iter().map(|(p, s)| (*p, intern(s.clone(), &mut states))).collect();
+    let starts: Vec<(f64, usize)> = start.iter().map(|(p, s)| intern(s.clone(), &mut states).map(|i| (*p, i))).collect::<Result<_, _>>()?;
     let mut edges: Vec<Vec<Edge>> = Vec::new();
     let mut end = Vec::new();
     let mut fixed: Vec<Option<Affine>> = Vec::new();
     // Expand states in batches, the model's work in parallel, numbering in order.
     let mut next = 0;
     while next < states.len() {
-        if states.len() > limit {
-            return Err(Error::TooManyStates(limit));
-        }
-        let batch = next..states.len().min(next + 4096);
+        let batch = next..states.len().min(next + rayon::current_num_threads());
         let expanded: Vec<_> = states[batch.clone()]
             .par_iter()
             .map(|s| {
@@ -110,20 +114,20 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
             })
             .collect();
         for (value, out) in expanded {
-            let out = out
-                .into_iter()
-                .map(|(action, cost, to)| {
-                    let to = to.into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| (p, intern(t, &mut states))).collect();
-                    Edge { action, cost, to }
-                })
-                .collect();
+            let mut successors = Vec::new();
+            for (action, cost, to) in out {
+                let to =
+                    to.into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| intern(t, &mut states).map(|i| (p, i))).collect::<Result<_, _>>()?;
+                successors.push(Edge { action, cost, to });
+            }
             end.push(value.is_some());
             fixed.push(value);
-            edges.push(out);
+            edges.push(successors);
         }
         next = batch.end;
     }
     let n = states.len();
+    let outcomes = edges.iter().flatten().map(|e| e.to.len()).sum();
     // Keep only actions whose every outcome can still reach the goal (or a restart) and that
     // leave the state; a state is alive while some kept action path gets there.
     let mut alive = vec![true; n];
@@ -200,7 +204,7 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
             let values: Vec<f64> = affine.iter().map(|f| f.at(next)).collect();
             let policy = (0..n).map(|s| (choice[s] != usize::MAX && !end[s] && alive[s]).then(|| edges[s][choice[s]].action)).collect();
             let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
-            return Ok(Solution { cost: at_start.at(next), states, values, policy, index, given_up });
+            return Ok(Solution { cost: at_start.at(next), states, values, policy, index, given_up, outcomes });
         }
         w = next;
     }

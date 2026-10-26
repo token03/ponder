@@ -111,6 +111,16 @@ impl Recipe {
         i
     }
 
+    fn bought(&self, holds: impl Fn(usize) -> bool) -> (usize, usize, u16) {
+        let (i, j) = self.begin;
+        if j + 1 < self.steps[i].ops.len() {
+            (i, j + 1, 0)
+        } else {
+            let (i, k) = self.after(i, 0, holds);
+            (i, 0, k)
+        }
+    }
+
     /// One run on a real item, as lines: each attempt's step, the operations applied or
     /// skipped, and the item afterwards. Stops at the goal, the end of the recipe or `limit`.
     pub fn trace(&self, craft: &Craft, targets: &[Target], limit: usize, rng: &mut Rng) -> Vec<String> {
@@ -118,11 +128,11 @@ impl Recipe {
         let holds = |t: usize, item: &Item| targets[t].holds(game, item);
         let mut item = craft.starts[self.start].item(rng);
         let mut out = Vec::new();
-        let (mut i, mut k) = (self.forward(0, |t| holds(t, &item)), 0);
+        let (mut i, mut j, mut k) = self.bought(|t| holds(t, &item));
         while !holds(self.goal, &item) && i < self.steps.len() && out.len() < limit {
             let mut done = Vec::new();
             let mut abandoned = false;
-            for &a in &self.steps[i].ops {
+            for &a in self.steps[i].ops.iter().skip(j) {
                 let (applied, _) = self.apply(craft, a, &mut item, rng);
                 done.push(match applied {
                     Applied::Done => craft.action_name(a),
@@ -141,6 +151,7 @@ impl Recipe {
                 .collect();
             out.push(format!("step {} [{}] -> {}", i + 1, done.join(", "), mods.join(" ")));
             (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
+            j = 0;
         }
         out.push(if holds(self.goal, &item) { "goal".into() } else { format!("stuck at step {}", i + 1) });
         out
@@ -174,19 +185,18 @@ impl Recipe {
                 let rng = &mut Rng::new(seed + r);
                 let mut item = start.item(rng);
                 let mut cost = start.price();
-                let mut i = self.forward(0, |t| holds(t, &item));
-                let mut k = 0;
+                let (mut i, mut j, mut k) = self.bought(|t| holds(t, &item));
                 let mut guard = 0;
                 while !holds(self.goal, &item) && i < self.steps.len() && guard < 1_000_000 {
                     guard += 1;
-                    if !given_up.is_empty() && given_up.contains(&Position::At(i as u8, 0, k, craft.lens.project(&item))) {
+                    if !given_up.is_empty() && given_up.contains(&Position::At(i as u8, j as u8, k, craft.lens.project(&item))) {
                         item = start.item(rng);
                         cost += start.price();
-                        (i, k) = (self.forward(0, |t| holds(t, &item)), 0);
+                        (i, j, k) = self.bought(|t| holds(t, &item));
                         continue;
                     }
                     let mut abandoned = false;
-                    for &a in &self.steps[i].ops {
+                    for &a in self.steps[i].ops.iter().skip(j) {
                         let (applied, c) = self.apply(craft, a, &mut item, rng);
                         cost += c;
                         abandoned = applied == Applied::Abandon;
@@ -195,6 +205,7 @@ impl Recipe {
                         }
                     }
                     (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
+                    j = 0;
                 }
                 (cost, item)
             })
@@ -309,9 +320,14 @@ impl Model for Following<'_> {
     fn outcomes(&self, p: &Position, action: usize) -> Vec<(f64, Position)> {
         let (i, j, k, s) = match p {
             Position::Fresh => {
-                let (i, j) = self.recipe.begin;
-                let states = self.craft.starts[self.recipe.start].states();
-                return states.iter().map(|(p, s)| (*p, self.advance(i, j + 1, 0, s.clone()))).collect();
+                let states = self.craft.start_states(self.recipe.start);
+                return states
+                    .iter()
+                    .map(|(p, s)| {
+                        let (i, j, k) = self.recipe.bought(|t| self.craft.lens.holds(t, s));
+                        (*p, Position::At(i as u8, j as u8, k, s.clone()))
+                    })
+                    .collect();
             }
             Position::At(i, j, k, s) | Position::Hub(i, j, k, s) => (*i as usize, *j as usize, *k, s),
             Position::Restart => return Vec::new(),

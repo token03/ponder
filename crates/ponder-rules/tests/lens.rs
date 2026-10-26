@@ -114,7 +114,7 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], start
         CURRENCY.iter().chain(extra).map(|n| parse(game, class, n, &[]).unwrap_or_else(|| panic!("{n}"))).collect();
     let refs: Vec<&dyn Operation> = ops.iter().map(|o| o.as_ref()).collect();
     let targets = compiled.len();
-    let lens = Lens::new(game, kind, compiled, &refs);
+    let lens = Lens::new(game, kind, compiled, &refs, &[]);
 
     let mut rng = Rng::new(3 + seed);
     let mut worst: (f64, String) = (0.0, String::new());
@@ -213,7 +213,6 @@ fn compare(
 /// Supply items for recombination tests: a fixed handful, equally likely.
 struct Handful {
     items: Vec<Item>,
-    states: std::sync::OnceLock<Vec<(f64, State)>>,
 }
 
 impl Supply for Handful {
@@ -223,8 +222,8 @@ impl Supply for Handful {
     fn price(&self) -> f64 {
         1.0
     }
-    fn states(&self) -> &[(f64, State)] {
-        self.states.get().expect("filled once the lens exists")
+    fn items(&self) -> &[Item] {
+        &self.items
     }
     fn item(&self, rng: &mut Rng) -> Item {
         self.items[rng.below(self.items.len())].clone()
@@ -255,14 +254,12 @@ fn recombination_matches_sampled_items() {
     // Magic and rare partners, some with a crafted suffix.
     let plans: [&[&str]; 4] =
         [&["transmutation", "augmentation"], &["transmutation", "bench:any-suffix"], &["alchemy"], &["transmutation", "regal"]];
-    let partner = Arc::new(Handful { items: plans.iter().map(|p| walk(&mut rng, p)).collect(), states: Default::default() });
+    let partner = Arc::new(Handful { items: plans.iter().map(|p| walk(&mut rng, p)).collect() });
     let mut ops: Vec<Box<dyn Operation>> =
         CURRENCY.iter().chain(&["bench:any-suffix"]).map(|n| parse(&game, "Body Armour", n, &[]).unwrap()).collect();
     ops.push(Box::new(Recombinator::new("Body Armour", "a+b", partner.clone())));
     let refs: Vec<&dyn Operation> = ops.iter().map(|o| o.as_ref()).collect();
-    let lens = Lens::new(&game, kind, compiled, &refs);
-    let n = partner.items.len() as f64;
-    let _ = partner.states.set(partner.items.iter().map(|i| (1.0 / n, lens.project(i))).collect());
+    let lens = Lens::new(&game, kind, compiled, &refs, &[]);
     let recombine = *refs.last().unwrap();
     let (mut worst, mut worst_tv) = ((0.0, String::new()), (0.0, String::new()));
     for (i, plan) in plans.iter().chain(&[&["alchemy", "exalted"][..], &[][..]]).enumerate() {

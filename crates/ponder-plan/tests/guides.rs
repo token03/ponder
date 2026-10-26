@@ -22,7 +22,7 @@ use ponder_rules::ops::recombinator::Recombinator;
 use ponder_rules::ops::{Ctx, Operation, Supply, catalogue, parse};
 use ponder_rules::rng::Rng;
 use ponder_rules::target::Target;
-use ponder_solve::{ends, solve};
+use ponder_solve::solve;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -40,7 +40,24 @@ struct Outcome {
     times: Vec<f64>,
 }
 
-fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String> {
+enum CheckError {
+    Inactive(String),
+    Solve(String, ponder_solve::Error),
+}
+
+impl From<String> for CheckError {
+    fn from(value: String) -> Self {
+        Self::Inactive(value)
+    }
+}
+
+impl From<&str> for CheckError {
+    fn from(value: &str) -> Self {
+        Self::Inactive(value.into())
+    }
+}
+
+fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckError> {
     let assumptions = Assumptions::default();
     let ctx = Ctx { game, assumptions: &assumptions };
     let base = game.base(&guide.base).ok_or("unknown base")?;
@@ -53,7 +70,7 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
     for name in &names {
         let goal = guide.target(name).unwrap();
         if goal.base.as_deref() != Some(&guide.base) {
-            return Err(format!("stage {name} is another base"));
+            return Err(format!("stage {name} is another base").into());
         }
         index.insert(name.clone(), targets.len());
         targets.push(Target::compile(game, &goal)?);
@@ -70,89 +87,123 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
     let products: HashMap<&str, [Arc<Product>; 2]> =
         items.iter().map(|i| (i.as_str(), [Arc::new(Product::new(i)), Arc::new(Product::new(i))])).collect();
 
-    // Bench "any" crafts block groups the goal does not want.
-    let avoid: Vec<GroupId> =
-        targets[index["goal"]].needs.iter().flat_map(|n| n.ok.iter()).flat_map(|m| game.def(*m).groups.iter().copied()).collect();
-    let mut ops: Vec<Box<dyn Operation>> = Currency::ALL.iter().map(|c| Box::new(*c) as Box<dyn Operation>).collect();
-    ops.extend(parse(game, &class, "bench:remove-crafted", &avoid));
-    // Besides the guide's own: every essence and reforge that serves some stage.
-    let wanted = targets.iter().flat_map(|t| &t.needs).flat_map(|n| n.ok.iter().copied()).collect();
-    ops.extend(catalogue(game, &class, &wanted));
-    // Recombinations: (item made first, partner item, op for the guide's partner, op for ponder's).
-    let mut recombinations: Vec<(usize, usize, Box<dyn Operation>, Box<dyn Operation>)> = Vec::new();
+    let mut recombinations = Vec::new();
     for op in guide.steps.iter().flat_map(|s| &s.ops) {
-        if op.starts_with("buy:") || ops.iter().any(|o| o.name() == *op) || recombinations.iter().any(|r| r.2.name() == *op) {
-            continue;
-        }
         if let Some((x, y)) = op.strip_prefix("recombinator:").and_then(|r| r.split_once('+')) {
             let (Some(i), Some(j)) = (items.iter().position(|n| n == x), items.iter().position(|n| n == y)) else {
-                return Err(format!("needs {op}"));
+                return Err(format!("needs {op}").into());
             };
-            let made = |k: usize| Box::new(Recombinator::new(&class, &format!("{x}+{y}"), products[y][k].clone())) as Box<dyn Operation>;
-            recombinations.push((i, j, made(0), made(1)));
-            continue;
+            if !recombinations.iter().any(|r: &(usize, usize, String)| r.2 == *op) {
+                recombinations.push((i, j, op.clone()));
+            }
         }
-        ops.push(parse(game, &class, op, &avoid).ok_or_else(|| format!("needs {op}"))?);
     }
-    let all: Vec<&dyn Operation> =
-        ops.iter().map(|o| o.as_ref()).chain(recombinations.iter().flat_map(|r| [r.2.as_ref(), r.3.as_ref()])).collect();
-    let lens = Lens::new(game, kind, targets.clone(), &all);
-
-    // Things to buy: a plain base and any stage the guide buys, each at its price.
     let mut plain = Item::new(kind);
     plain.quality = guide.quality.unwrap_or(0);
-    let mut stocks: Vec<Arc<dyn Supply>> = vec![Arc::new(Stock::new("base", market.base, plain, &lens))];
+    let mut stocks: Vec<Arc<dyn Supply>> = vec![Arc::new(Stock::new("base", market.base, plain))];
     for stage in guide.steps.iter().flat_map(|s| &s.ops).filter_map(|op| op.strip_prefix("buy:")) {
         if stocks.iter().any(|s| s.name() == stage) {
             continue;
         }
         let price = guide.stages.get(stage).and_then(|g| g.price).ok_or_else(|| format!("no price for {stage}"))?;
         let item = targets[index[stage]].witness(game, kind).ok_or_else(|| format!("cannot build {stage}"))?;
-        stocks.push(Arc::new(Stock::new(stage, price, item, &lens)));
+        stocks.push(Arc::new(Stock::new(stage, price, item)));
     }
 
     let mut outcome = None;
-    let clock = std::time::Instant::now();
-    let limit = std::env::var("LIMIT").map_or(4_000_000, |l| l.parse().unwrap());
+    let limit = std::env::var("LIMIT").map_or(200_000, |l| l.parse().unwrap());
     for (n, item) in items.iter().enumerate() {
+        let clock = std::time::Instant::now();
         let last = n + 1 == items.len();
-        let first = guide.steps.iter().find(|s| s.item == *item).unwrap();
-        let goal = index[guide.steps.iter().rev().find(|s| s.item == *item).unwrap().until.as_deref().ok_or("no stage")?];
-        // An item made from others starts from the first of them.
-        let from = recombinations.iter().find(|r| first.ops.contains(&r.2.name())).map(|r| r.0);
-        // Operations whose partner is made by now.
-        let usable = |k: usize| -> Vec<&dyn Operation> {
-            ops.iter()
-                .map(|o| o.as_ref())
-                .chain(recombinations.iter().filter(|r| r.1 < n).map(|r| if k == 0 { r.2.as_ref() } else { r.3.as_ref() }))
-                .collect()
+        let own: Vec<_> = guide.steps.iter().filter(|s| s.item == *item).collect();
+        let goal_name = own.last().unwrap().until.as_deref().ok_or("no stage")?;
+        let goal = &targets[index[goal_name]];
+        let from = recombinations.iter().find(|r| own[0].ops.contains(&r.2)).map(|r| r.0);
+        let avoid: Vec<GroupId> = goal.needs.iter().flat_map(|n| &n.ok).flat_map(|m| game.def(*m).groups.iter().copied()).collect();
+        let operations = |which: usize| -> Result<Vec<Box<dyn Operation>>, String> {
+            let mut ops: Vec<Box<dyn Operation>> = Vec::new();
+            if which == 1 {
+                ops.extend(Currency::ALL.iter().map(|c| Box::new(*c) as Box<dyn Operation>));
+                ops.extend(parse(game, &class, "bench:remove-crafted", &avoid));
+                let wanted = goal.needs.iter().flat_map(|n| n.ok.iter().copied()).collect();
+                ops.extend(catalogue(game, &class, &wanted));
+            }
+            for op in own.iter().flat_map(|s| &s.ops) {
+                if op.starts_with("buy:") || ops.iter().any(|o| o.name() == *op) {
+                    continue;
+                }
+                let operation = if let Some((_, j, _)) = recombinations.iter().find(|r| r.2 == *op) {
+                    Box::new(Recombinator::new(
+                        &class,
+                        op.strip_prefix("recombinator:").unwrap(),
+                        products[items[*j].as_str()][which].clone(),
+                    )) as Box<dyn Operation>
+                } else {
+                    parse(game, &class, op, &avoid).ok_or_else(|| format!("needs {op}"))?
+                };
+                ops.push(operation);
+            }
+            if which == 1 {
+                for (_, j, op) in recombinations.iter().filter(|r| r.1 < n) {
+                    if !ops.iter().any(|o| o.name() == *op) {
+                        ops.push(Box::new(Recombinator::new(
+                            &class,
+                            op.strip_prefix("recombinator:").unwrap(),
+                            products[items[*j].as_str()][which].clone(),
+                        )));
+                    }
+                }
+            }
+            Ok(ops)
         };
 
-        // The guide's recipe, exactly and on real items.
+        let mut local_names = vec![goal_name.to_string()];
+        for name in own.iter().filter_map(|s| s.until.as_ref()) {
+            if !local_names.contains(name) {
+                local_names.push(name.clone());
+            }
+        }
+        let local_index: HashMap<_, _> = local_names.iter().enumerate().map(|(i, name)| (name.clone(), i)).collect();
+        let local_targets: Vec<_> = local_names.iter().map(|name| targets[index[name]].clone()).collect();
         let mut starts = stocks.clone();
         starts.extend(from.map(|i| products[items[i].as_str()][0].clone() as Arc<dyn Supply>));
-        let guide_ops = usable(0);
-        let craft = Craft::new(&ctx, &lens, &guide_ops, market, starts, goal);
-        let actions: Vec<String> = (0..craft.ops.len() + craft.starts.len()).map(|i| craft.action_name(i)).collect();
-        let start = from.map(|_| craft.ops.len() + craft.starts.len() - 1);
-        let recipe = Recipe::new(guide, item, &index, &actions, craft.ops.len(), start)?;
+        let guide_ops = operations(0)?;
+        let refs: Vec<_> = guide_ops.iter().map(|o| o.as_ref()).collect();
+        let inputs: Vec<_> = starts.iter().flat_map(|s| s.items()).collect();
+        let guide_lens = Lens::new(game, kind, local_targets.clone(), &refs, &inputs);
+        let guide_craft = Craft::new(&ctx, &guide_lens, &refs, market, starts, 0);
+        let actions: Vec<String> = (0..guide_craft.ops.len() + guide_craft.starts.len()).map(|i| guide_craft.action_name(i)).collect();
+        let start = from.map(|_| guide_craft.ops.len() + guide_craft.starts.len() - 1);
+        let recipe = Recipe::new(guide, item, &local_index, &actions, guide_craft.ops.len(), start)?;
         if last && std::env::var("TRACE").is_ok() {
-            trace(&recipe, &craft, &targets);
+            trace(&recipe, &guide_craft, &local_targets);
         }
-        let following = Following::new(&craft, &recipe);
-        let guided = solve(&following, &[(1.0, Position::Fresh)], limit).map_err(|e| format!("recipe for {item}: {e:?}"))?;
+        let following = Following::new(&guide_craft, &recipe);
+        let guided = solve(&following, &[(1.0, Position::Fresh)], limit).map_err(|e| CheckError::Solve(format!("recipe for {item}"), e))?;
+        println!(
+            "  {item} recipe: {} classes, {} states, {} outcomes, {:.3}s, {:.1}c",
+            guide_lens.classes(),
+            guided.states.len(),
+            guided.outcomes,
+            clock.elapsed().as_secs_f64(),
+            guided.cost
+        );
         let given_up = guided.given_up.iter().cloned().collect();
-        let simulated = recipe.simulate(&craft, &targets, &given_up, 500, 1);
+        let simulated = recipe.simulate(&guide_craft, &local_targets, &given_up, 500, 1);
+        println!("  {item} recipe on real items: {:.1}c ± {:.1}", simulated.mean, simulated.error);
         if std::env::var("RECIPE_ONLY").is_ok() && last {
-            return Err(format!("recipe {:.1}c, simulated {:.1} ± {:.1}", guided.cost, simulated.mean, simulated.error));
+            return Err(format!("recipe {:.1}c, simulated {:.1} ± {:.1}", guided.cost, simulated.mean, simulated.error).into());
         }
         let mut times = vec![clock.elapsed().as_secs_f64()];
 
-        // Ponder's plan for the same item, free to use anything made before it.
         let mut starts = stocks.clone();
         starts.extend(items[..n].iter().map(|i| products[i.as_str()][1].clone() as Arc<dyn Supply>));
-        let best_ops = usable(1);
-        let craft = Craft::new(&ctx, &lens, &best_ops, market, starts, goal);
+        let best_ops = operations(1)?;
+        let refs: Vec<_> = best_ops.iter().map(|o| o.as_ref()).collect();
+        let inputs: Vec<_> = starts.iter().flat_map(|s| s.items()).collect();
+        let lens = Lens::new(game, kind, vec![goal.clone()], &refs, &inputs);
+        let craft = Craft::new(&ctx, &lens, &refs, market, starts, 0);
+        println!("  {item} best: {} classes, {} operations", lens.classes(), craft.dominated.iter().filter(|d| !**d).count());
         if std::env::var("OPS").is_ok() {
             println!(
                 "  {} classes; ops: {:?}",
@@ -165,30 +216,19 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
                     .collect::<Vec<_>>()
             );
         }
-        let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| format!("best for {item}: {e:?}"))?;
+        let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
+        println!(
+            "  {item} best: {} states, {} outcomes, {:.3}s",
+            best.states.len(),
+            best.outcomes,
+            clock.elapsed().as_secs_f64() - times[0]
+        );
         times.push(clock.elapsed().as_secs_f64());
         let followed = craft.follow(&best, 500, 1_000_000);
         times.push(clock.elapsed().as_secs_f64());
         if !last {
-            let at = |p: &Position| match p {
-                Position::At(_, _, _, s) => s.clone(),
-                _ => unreachable!("only items meet a stage"),
-            };
-            let ends_guided = ends(&following, &guided, &[(1.0, Position::Fresh)]).into_iter().map(|(p, s)| (p, at(&s))).collect();
-            products[item.as_str()][0].fill(guided.cost, ends_guided, simulated.items.clone());
-            let item_of = |s: Node| match s {
-                Node::Item(s) => s,
-                _ => unreachable!("only items meet a stage"),
-            };
-            let ends_best = ends(&craft, &best, &[(1.0, Node::Market)]).into_iter().map(|(p, s)| (p, item_of(s))).collect();
-            products[item.as_str()][1].fill(best.cost, ends_best, followed.items.clone());
-            if std::env::var("OPS").is_ok() {
-                println!(
-                    "  {item} ends in {} (guided) and {} (best) states",
-                    products[item.as_str()][0].states().len(),
-                    products[item.as_str()][1].states().len()
-                );
-            }
+            products[item.as_str()][0].fill(guided.cost, simulated.items.clone());
+            products[item.as_str()][1].fill(best.cost, followed.items.clone());
         }
         let start = craft.first_buy(&best).map_or("?".into(), |s| s.name());
         let done = Outcome {
@@ -276,7 +316,12 @@ fn guides_cost_no_less_than_ponder() {
                     failures.push(format!("{name}: simulated {:.1} ± {:.1} vs exact {:.1}", o.simulated.0, o.simulated.1, o.guide));
                 }
             }
-            Err(why) => println!("{name:42} inactive: {why}"),
+            Err(CheckError::Inactive(why)) => println!("{name:42} inactive: {why}"),
+            Err(CheckError::Solve(stage, why)) => {
+                let why = format!("{name}: {stage}: {why:?}");
+                println!("{why}");
+                failures.push(why);
+            }
         }
         println!("{:42} {:.1}s", "", clock.elapsed().as_secs_f64());
     }
