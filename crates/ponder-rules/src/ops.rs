@@ -104,7 +104,10 @@ impl Hash for Bias {
 pub enum Step {
     /// Remove the mods on these sides, except fractured ones and, when `respect_lock`, the
     /// locked side.
-    Clear { sides: Sides, respect_lock: bool },
+    Clear {
+        sides: Sides,
+        respect_lock: bool,
+    },
     Rarity(Rarity),
     /// Rarity from what is left: no mods normal, at most one per side magic, else rare.
     Settle,
@@ -119,9 +122,16 @@ pub enum Step {
     /// Draw until the item has the rolled count, or nothing fits.
     Fill(Pick),
     /// Remove one random mod.
-    Remove { sides: Sides, tag: TagFilter, respect_lock: bool },
+    Remove {
+        sides: Sides,
+        tag: TagFilter,
+        respect_lock: bool,
+    },
     /// Add a mod, then remove another random one (Harvest "add X, remove another").
-    Swap { add: Pick, remove: TagFilter },
+    Swap {
+        add: Pick,
+        remove: TagFilter,
+    },
     RemoveCrafted,
     /// Give the item an influence.
     Influence(Influence),
@@ -302,8 +312,10 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
             }
             Step::Veil(sides) => {
                 let allowed = resolve(*sides, item.eldritch);
-                let options: Vec<Side> =
-                    Side::BOTH.into_iter().filter(|s| allowed[*s as usize] && item.open(game, *s) > 0 && !item.blocks(game, game.veils[*s as usize])).collect();
+                let options: Vec<Side> = Side::BOTH
+                    .into_iter()
+                    .filter(|s| allowed[*s as usize] && item.open(game, *s) > 0 && !item.blocks(game, game.veils[*s as usize]))
+                    .collect();
                 if !options.is_empty() {
                     let side = options[rng.below(options.len())];
                     item.affixes.push(Affix { id: game.veils[side as usize], crafted: false, fractured: false });

@@ -42,7 +42,8 @@ impl Operation for Exalt {
 
     /// A rare (any rarity for the orb) without influence, with room for the mod.
     fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
-        !item.influenced() && if self.orb { item.rarity() != Rarity::Normal } else { item.rarity() == Rarity::Rare && item.room(Sides::Both) }
+        !item.influenced()
+            && if self.orb { item.rarity() != Rarity::Normal } else { item.rarity() == Rarity::Rare && item.room(Sides::Both) }
     }
 
     fn steps(&self) -> &[Step] {

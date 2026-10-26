@@ -14,8 +14,10 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub trait Model {
-    type State: Clone + Eq + Hash;
+use rayon::prelude::*;
+
+pub trait Model: Sync {
+    type State: Clone + Eq + Hash + Send + Sync;
     fn is_goal(&self, s: &Self::State) -> bool;
     /// A state that starts over: it is worth what the start is worth.
     fn is_restart(&self, _: &Self::State) -> bool {
@@ -78,30 +80,41 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
     let mut edges: Vec<Vec<Edge>> = Vec::new();
     let mut end = Vec::new();
     let mut fixed: Vec<Option<Affine>> = Vec::new();
+    // Expand states in batches, the model's work in parallel, numbering in order.
     let mut next = 0;
     while next < states.len() {
         if states.len() > limit {
             return Err(Error::TooManyStates(limit));
         }
-        let s = states[next].clone();
-        let value = if model.is_goal(&s) {
-            Some(Affine { a: 0.0, b: 0.0 })
-        } else if model.is_restart(&s) {
-            Some(Affine { a: 0.0, b: 1.0 })
-        } else {
-            None
-        };
-        let mut out = Vec::new();
-        if value.is_none() {
-            for (action, cost) in model.actions(&s) {
-                let to = model.outcomes(&s, action).into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| (p, intern(t, &mut states))).collect();
-                out.push(Edge { action, cost, to });
-            }
+        let batch = next..states.len().min(next + 4096);
+        let expanded: Vec<_> = states[batch.clone()]
+            .par_iter()
+            .map(|s| {
+                let value = if model.is_goal(s) {
+                    Some(Affine { a: 0.0, b: 0.0 })
+                } else if model.is_restart(s) {
+                    Some(Affine { a: 0.0, b: 1.0 })
+                } else {
+                    None
+                };
+                let actions = if value.is_some() { Vec::new() } else { model.actions(s) };
+                let out: Vec<_> = actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect();
+                (value, out)
+            })
+            .collect();
+        for (value, out) in expanded {
+            let out = out
+                .into_iter()
+                .map(|(action, cost, to)| {
+                    let to = to.into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| (p, intern(t, &mut states))).collect();
+                    Edge { action, cost, to }
+                })
+                .collect();
+            end.push(value.is_some());
+            fixed.push(value);
+            edges.push(out);
         }
-        end.push(value.is_some());
-        fixed.push(value);
-        edges.push(out);
-        next += 1;
+        next = batch.end;
     }
     let n = states.len();
 
@@ -138,8 +151,11 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         alive = reach;
     }
 
-    let order: Vec<Vec<usize>> =
-        components(&edges).into_iter().map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect()).filter(|c: &Vec<usize>| !c.is_empty()).collect();
+    let order: Vec<Vec<usize>> = components(&edges)
+        .into_iter()
+        .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
+        .filter(|c: &Vec<usize>| !c.is_empty())
+        .collect();
     let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
     let mut choice = vec![usize::MAX; n];
     let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
@@ -150,7 +166,8 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
         for component in &order {
             solve_component(component, &edges, &mut values, &mut choice, &mut affine, w);
         }
-        let at_start = starts.iter().fold(Affine { a: 0.0, b: 0.0 }, |acc, &(p, s)| Affine { a: acc.a + p * affine[s].a, b: acc.b + p * affine[s].b });
+        let at_start =
+            starts.iter().fold(Affine { a: 0.0, b: 0.0 }, |acc, &(p, s)| Affine { a: acc.a + p * affine[s].a, b: acc.b + p * affine[s].b });
         if !at_start.a.is_finite() {
             return Err(Error::Unreachable);
         }
@@ -243,7 +260,13 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
 
 /// Exact values of a fixed policy inside a component, as `a + b w`: solve (I - P) x = r for the
 /// cost part (r = c + P_out a_out) and the restart part (r = P_out b_out) together.
-fn evaluate(states: &[usize], local: &HashMap<usize, usize>, edges: &[Vec<Edge>], choice: &[usize], affine: &[Affine]) -> Option<Vec<Affine>> {
+fn evaluate(
+    states: &[usize],
+    local: &HashMap<usize, usize>,
+    edges: &[Vec<Edge>],
+    choice: &[usize],
+    affine: &[Affine],
+) -> Option<Vec<Affine>> {
     let n = states.len();
     let mut m = vec![0.0; n * n];
     let mut ra = vec![0.0; n];

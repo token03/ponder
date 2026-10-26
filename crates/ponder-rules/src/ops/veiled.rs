@@ -68,23 +68,38 @@ impl Operation for Orb {
 
 /// What a guide keeps from an unveil, as mod templates in preference order.
 const KEEPS: [(&str, &[&str]); 12] = [
-    ("area-of-effect", &["#% increased Area of Effect / +# to Level of Socketed AoE Gems", "#% increased Area Damage / #% increased Area of Effect"]),
+    (
+        "area-of-effect",
+        &["#% increased Area of Effect / +# to Level of Socketed AoE Gems", "#% increased Area Damage / #% increased Area of Effect"],
+    ),
     ("chaos-penetration", &["Attacks with this Weapon Penetrate #% Chaos Resistance"]),
     ("convert-cold", &["#% of Physical Damage Converted to Cold Damage"]),
     ("convert-fire", &["#% of Physical Damage Converted to Fire Damage"]),
     (
         "critical-or-speed",
-        &["#% increased Critical Strike Chance / +# to Strength and Intelligence", "#% increased Attack Speed / +# to Dexterity and Intelligence"],
+        &[
+            "#% increased Critical Strike Chance / +# to Strength and Intelligence",
+            "#% increased Attack Speed / +# to Dexterity and Intelligence",
+        ],
     ),
     (
         "speed-or-critical",
-        &["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"],
+        &[
+            "#% increased Attack Speed / +# to Dexterity and Intelligence",
+            "#% increased Critical Strike Chance / +# to Strength and Intelligence",
+        ],
     ),
     ("energy-shield-regeneration", &["Regenerate # Energy Shield per second while a Rare or Unique Enemy is Nearby"]),
     ("fire-and-chaos", &["+#% to Fire and Chaos Resistances"]),
     ("minion-cast-speed", &["Minions have #% increased Attack Speed / Minions have #% increased Cast Speed"]),
     ("movement-speed", &["#% increased Movement Speed / #% chance to gain Onslaught for # seconds on Kill", "#% increased Movement Speed"]),
-    ("physical-damage", &["#% increased Physical Damage / #% chance to cause Bleeding on Hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks"]),
+    (
+        "physical-damage",
+        &[
+            "#% increased Physical Damage / #% chance to cause Bleeding on Hit",
+            "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks",
+        ],
+    ),
     ("trigger-on-focus", &["Trigger Socketed Spells when you Focus, with a # second Cooldown"]),
 ];
 

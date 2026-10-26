@@ -135,7 +135,8 @@ trait Operation {
     fn steps(&self) -> &[Step];                             // what it does, as data
     fn cost(&self) -> Cost;                                 // price ids + seconds
 }
-enum Step { Clear, Rarity, Settle, RollCount, Force, Draw, Fill, Remove, RemoveCrafted }
+enum Step { Clear, Rarity, Settle, RollCount, Force, Craft, Draw, Fill, Remove, Swap,
+            RemoveCrafted, Influence, Eldritch, Fracture, Veil, Unveil }
 ```
 
 A mechanic is a composition of primitive steps. `ops::run` samples them on real items (the
@@ -144,8 +145,11 @@ therefore written once, and a new mechanic needs no solver change. Only a new pr
 and it gets both interpretations plus the agreement test. The **lens** derives the state from
 the goals and operations (SPEC §5.3).
 
-Still to come in the same shape: observation steps (unveil, Awakener preview: draw offers,
-then choose), operations on two items (recombinator, Awakener), and **subgoal generators**:
+Lens classes split mods only where it changes an outcome: by goal need, tracked group, a tag
+that a draw, removal or ban filters on, influence and unveil preference. Fossil and veiled mods
+join the natural mods they share these with, since they differ only in their weights.
+
+Still to come in the same shape: observation steps (Awakener preview: draw offers, then choose), operations on two items (recombinator, Awakener), and **subgoal generators**:
 the intermediates a mechanic makes useful (a recombinator suggests "only these mods on this
 side"; fracturing suggests "4-mod item with X").
 
@@ -158,7 +162,11 @@ starting points and recombinators live.
 by repeating operations"), it finds the cheapest policy over the derived states: a stochastic
 shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
 goal, and solves strongly connected components from the goal backwards with exact policy
-evaluation inside each. Any focused search (iLAO\* and friends) is a later swap behind the same
+evaluation inside each. Starting over is a restart state worth the start's own value, found by
+Newton steps on the start's affine value, so buying fresh does not merge every state into one
+component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
+item after its reset, so their thousands of outcomes are stored once per hub rather than once
+per item. Any focused search (iLAO\* and friends) is a later swap behind the same
 `Model` trait, adopted only if it wins on the full workload.
 
 **Simulator.** Runs a plan (ponder's policy or a guide recipe) on real items for validation and

@@ -76,7 +76,10 @@ fn operations(game: &Game, class: &str) -> Vec<Box<dyn Operation>> {
     names.extend(["add-remove-life", "augment-caster", "add-fire-remove-non-fire"].map(|h| format!("harvest:{h}")));
     names.extend(["fossil:pristine", "fossil:aetheric+frigid+hollow+sanctified", "fossil:jagged+bound", "fossil:dense"].map(String::from));
     names.extend(["veiled-chaos", "veiled-exalted", "unveil:movement-speed", "unveil:area-of-effect"].map(String::from));
-    names.extend(["eldritch-implicit:lesser-ichor", "eldritch-implicit:exarch-dominant", "eldritch-chaos", "eldritch-exalted", "eldritch-annulment"].map(String::from));
+    names.extend(
+        ["eldritch-implicit:lesser-ichor", "eldritch-implicit:exarch-dominant", "eldritch-chaos", "eldritch-exalted", "eldritch-annulment"]
+            .map(String::from),
+    );
     names.extend(["bench:any-prefix", "bench:any-suffix", "bench:cannot-roll-attack", "bench:cannot-roll-caster"].map(String::from));
     names.iter().filter_map(|n| ponder_rules::ops::parse(game, class, n, &[])).collect()
 }

@@ -106,8 +106,10 @@ fn restarting_competes_with_repair() {
     // The brick (2) can also be repaired: cost 10 back to 0. Restarting (3 + V0 = 8) is cheaper,
     // until it costs more: with a restart price of 20, repair wins (V0 = 1 + 0.5 (10 + V0) = 12).
     for (price, want) in [(3.0, 5.0), (20.0, 12.0)] {
-        let chain =
-            Chain { goal: 1, actions: vec![vec![(1.0, vec![(0.5, 1), (0.5, 2)])], vec![], vec![(price, vec![(1.0, 3)]), (10.0, vec![(1.0, 0)])], vec![]] };
+        let chain = Chain {
+            goal: 1,
+            actions: vec![vec![(1.0, vec![(0.5, 1), (0.5, 2)])], vec![], vec![(price, vec![(1.0, 3)]), (10.0, vec![(1.0, 0)])], vec![]],
+        };
         let m = Restarting { chain, restart: 3 };
         let s = solve(&m, &[(1.0, 0)], 100).unwrap();
         assert!((s.cost - want).abs() < 1e-9, "price {price}: {}", s.cost);

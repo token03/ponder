@@ -18,7 +18,10 @@ const NAMES: [(&str, &[&str]); 31] = [
     ("cannot-roll-caster", &["Cannot roll Caster Modifiers"]),
     ("multimod", &["Can have up to # Crafted Modifiers"]),
     ("accuracy-strength-and-dexterity", &["+# to Accuracy Rating / +# to Strength and Dexterity"]),
-    ("area-of-effect", &["#% increased Area Damage / #% increased Area of Effect", "#% increased Area of Effect / +# to Level of Socketed AoE Gems"]),
+    (
+        "area-of-effect",
+        &["#% increased Area Damage / #% increased Area of Effect", "#% increased Area of Effect / +# to Level of Socketed AoE Gems"],
+    ),
     ("area-of-effect-and-socketed-aoe", &["#% increased Area of Effect / +# to Level of Socketed AoE Gems"]),
     ("armour", &["#% increased Armour", "+# to Armour"]),
     ("attributes", &["+# to all Attributes"]),
@@ -26,7 +29,11 @@ const NAMES: [(&str, &[&str]); 31] = [
     ("chaos-damage-over-time-multiplier", &["+#% to Chaos Damage over Time Multiplier"]),
     (
         "convert",
-        &["#% of Physical Damage Converted to Fire Damage", "#% of Physical Damage Converted to Cold Damage", "#% of Physical Damage Converted to Lightning Damage"],
+        &[
+            "#% of Physical Damage Converted to Fire Damage",
+            "#% of Physical Damage Converted to Cold Damage",
+            "#% of Physical Damage Converted to Lightning Damage",
+        ],
     ),
     ("convert-cold", &["#% of Physical Damage Converted to Cold Damage"]),
     ("convert-fire", &["#% of Physical Damage Converted to Fire Damage"]),
@@ -49,7 +56,11 @@ const NAMES: [(&str, &[&str]); 31] = [
     ("minion-damage", &["Minions deal #% increased Damage"]),
     (
         "minion-damage-or-life",
-        &["Minions deal #% increased Damage / Minions have #% increased maximum Life", "Minions deal #% increased Damage", "Minions have #% increased maximum Life"],
+        &[
+            "Minions deal #% increased Damage / Minions have #% increased maximum Life",
+            "Minions deal #% increased Damage",
+            "Minions have #% increased maximum Life",
+        ],
     ),
     ("physical-damage", &["#% increased Physical Damage", "Adds # to # Physical Damage"]),
     ("physical-damage-over-time-multiplier", &["+#% to Physical Damage over Time Multiplier"]),
@@ -58,7 +69,10 @@ const NAMES: [(&str, &[&str]); 31] = [
     ("socketed-support-gems", &["+# to Level of Socketed Support Gems"]),
     (
         "speed-or-critical",
-        &["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"],
+        &[
+            "#% increased Attack Speed / +# to Dexterity and Intelligence",
+            "#% increased Critical Strike Chance / +# to Strength and Intelligence",
+        ],
     ),
 ];
 
@@ -66,7 +80,10 @@ const NAMES: [(&str, &[&str]); 31] = [
 const MORE: [(&str, &str); 3] = [
     ("spell-damage", "#% increased Spell Damage"),
     ("trigger-on-focus", "Trigger Socketed Spells when you Focus, with a # second Cooldown"),
-    ("trigger-on-skill-use", "Trigger a Socketed Spell when you Use a Skill, with a # second Cooldown / Spells Triggered this way have #% more Cost"),
+    (
+        "trigger-on-skill-use",
+        "Trigger a Socketed Spell when you Use a Skill, with a # second Cooldown / Spells Triggered this way have #% more Cost",
+    ),
 ];
 
 /// Bench currency by metadata id: price id and how cheap it is (for blockers).
@@ -93,7 +110,11 @@ const CURRENCY: [(&str, &str, u8); 18] = [
 
 pub enum Bench {
     /// Add the first of these crafted mods that fits.
-    Craft { name: String, steps: [Step; 1], cost: Cost },
+    Craft {
+        name: String,
+        steps: [Step; 1],
+        cost: Cost,
+    },
     RemoveCrafted,
 }
 
@@ -134,7 +155,12 @@ impl Bench {
             // Per template, the highest-level craft for this class.
             templates
                 .iter()
-                .filter_map(|t| options.iter().filter(|(m, _)| game.def(*m).template.eq_ignore_ascii_case(t)).max_by_key(|(m, _)| (game.def(*m).level, *m)))
+                .filter_map(|t| {
+                    options
+                        .iter()
+                        .filter(|(m, _)| game.def(*m).template.eq_ignore_ascii_case(t))
+                        .max_by_key(|(m, _)| (game.def(*m).level, *m))
+                })
                 .copied()
                 .collect()
         };

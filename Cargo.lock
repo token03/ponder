@@ -2486,6 +2486,7 @@ dependencies = [
  "flate2",
  "ponder-rules",
  "ponder-solve",
+ "rayon",
  "serde_json",
  "toml",
 ]
@@ -2503,6 +2504,9 @@ dependencies = [
 [[package]]
 name = "ponder-solve"
 version = "0.1.0"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "portable-atomic"

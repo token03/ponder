@@ -9,6 +9,7 @@ description = "Crafting problems for the solver: market costs, craft models, gui
 [dependencies]
 ponder-rules.workspace = true
 ponder-solve.workspace = true
+rayon.workspace = true
 serde_json.workspace = true
 flate2 = "1"
 

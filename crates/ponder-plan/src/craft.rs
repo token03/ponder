@@ -3,8 +3,9 @@
 
 use ponder_rules::item::Item;
 use ponder_rules::lens::{Lens, State};
-use ponder_rules::ops::{Ctx, Operation};
+use ponder_rules::ops::{Ctx, Operation, Step};
 use ponder_solve::Model;
+use rayon::prelude::*;
 
 use crate::market::Market;
 
@@ -14,6 +15,9 @@ pub enum Node {
     /// Choosing what to buy.
     Market,
     Item(State),
+    /// Partway through a reroll (operation, item after its reset): every item that resets to
+    /// the same remains shares these outcomes, so they are stored once.
+    Hub(usize, State),
     /// Back to the market: worth what the market is worth.
     Restart,
 }
@@ -26,6 +30,8 @@ pub struct Craft<'a> {
     pub starts: Vec<Start>,
     /// Lens target index of the goal.
     pub goal: usize,
+    /// Per operation, where its reset ends, if it has one.
+    hubs: Vec<Option<usize>>,
 }
 
 #[derive(Clone)]
@@ -46,9 +52,10 @@ impl<'a> Craft<'a> {
         starts: Vec<(String, f64, Item)>,
         goal: usize,
     ) -> Craft<'a> {
-        let ops = ops.iter().filter_map(|op| market.price(&op.cost()).map(|c| (*op, c))).collect();
+        let ops: Vec<(&dyn Operation, f64)> = ops.iter().filter_map(|op| market.price(&op.cost()).map(|c| (*op, c))).collect();
         let starts = starts.into_iter().map(|(name, price, item)| Start { name, price, state: lens.project(&item), item }).collect();
-        Craft { ctx, lens, ops, starts, goal }
+        let hubs = ops.iter().map(|(op, _)| hub(op.steps())).collect();
+        Craft { ctx, lens, ops, starts, goal, hubs }
     }
 
     /// Action id `i` names a purchase rather than an operation.
@@ -93,6 +100,7 @@ impl Model for Craft<'_> {
                 let ops = (0..self.ops.len()).filter(|&i| self.ops[i].0.applies(self.ctx, &view)).map(|i| (i, self.ops[i].1));
                 ops.chain([(self.restart(), 0.0)]).collect()
             }
+            Node::Hub(i, _) => vec![(*i, 0.0)],
             Node::Restart => Vec::new(),
         }
     }
@@ -103,10 +111,42 @@ impl Model for Craft<'_> {
         }
         match (n, self.start_of(i)) {
             (_, Some(b)) => vec![(1.0, Node::Item(b.state.clone()))],
-            (Node::Item(s), None) => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect(),
+            (Node::Item(s), None) => {
+                let steps = self.ops[i].0.steps();
+                if let Some(k) = self.hubs[i]
+                    && let [(_, t)] = &self.lens.run(self.ctx, &steps[..k], s)[..]
+                {
+                    return vec![(1.0, Node::Hub(i, t.clone()))];
+                }
+                self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Item(t))).collect()
+            }
+            (Node::Hub(_, s), None) => {
+                let k = self.hubs[i].expect("hub of an operation with a reset");
+                self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s).into_iter().map(|(p, t)| (p, Node::Item(t))).collect()
+            }
             _ => Vec::new(),
         }
     }
+}
+
+/// Where an operation's reset ends: after its first `Clear` and the certain steps that follow.
+fn hub(steps: &[Step]) -> Option<usize> {
+    let clear = steps.iter().position(|s| matches!(s, Step::Clear { .. }))?;
+    let certain = |s: &Step| {
+        matches!(
+            s,
+            Step::Clear { .. }
+                | Step::Rarity(_)
+                | Step::Settle
+                | Step::Force(_)
+                | Step::Craft(_)
+                | Step::RemoveCrafted
+                | Step::Influence(_)
+                | Step::Eldritch(_)
+        )
+    };
+    let end = clear + steps[clear..].iter().take_while(|s| certain(s)).count();
+    (end < steps.len()).then_some(end)
 }
 
 /// Follow a solved policy on real items: mean cost, standard error, and how often each
@@ -127,49 +167,49 @@ impl Craft<'_> {
         solution.index.get(&Node::Market).and_then(|&i| solution.policy[i]).and_then(|a| self.start_of(a))
     }
 
-    /// Runs start at the market.
-    pub fn follow(&self, solution: &ponder_solve::Solution<Node>, runs: usize, rng: &mut ponder_rules::rng::Rng) -> Followed {
-        let mut costs = Vec::with_capacity(runs);
-        let mut uses = vec![0usize; self.restart() + 1];
-        let mut lost = 0;
-        let mut example: Vec<(String, usize)> = Vec::new();
+    /// Runs start at the market; run `r` is seeded with `seed + r`.
+    pub fn follow(&self, solution: &ponder_solve::Solution<Node>, runs: usize, seed: u64) -> Followed {
         let policy = |n: &Node| solution.index.get(n).and_then(|&i| solution.policy[i]);
-        for _ in 0..runs {
+        // One run: its cost, its actions in order, and whether it got lost.
+        let run = |r: u64| {
+            let rng = &mut ponder_rules::rng::Rng::new(seed + r);
             let mut item: Option<Item> = None;
-            let mut cost = 0.0;
+            let (mut cost, mut actions) = (0.0, Vec::new());
             for _ in 0..200_000 {
                 let node = item.as_ref().map_or(Node::Market, |i| Node::Item(self.lens.project(i)));
                 if self.is_goal(&node) {
-                    break;
+                    return (cost, actions, false);
                 }
-                let Some(op) = policy(&node) else {
-                    lost += 1;
-                    break;
-                };
-                uses[op] += 1;
-                if costs.is_empty() {
-                    match example.last_mut() {
-                        Some((last, n)) if *last == self.action_name(op) => *n += 1,
-                        _ => example.push((self.action_name(op), 1)),
-                    }
-                }
+                let Some(op) = policy(&node) else { return (cost, actions, true) };
+                actions.push(op);
                 if op == self.restart() {
                     item = None;
-                    continue;
-                }
-                if let Some(b) = self.start_of(op) {
+                } else if let Some(b) = self.start_of(op) {
                     item = Some(b.item.clone());
                     cost += b.price;
-                    continue;
+                } else {
+                    let (operation, price) = self.ops[op];
+                    ponder_rules::ops::run(self.ctx, operation.steps(), item.as_mut().unwrap(), rng);
+                    cost += price;
                 }
-                let (operation, price) = self.ops[op];
-                ponder_rules::ops::run(self.ctx, operation.steps(), item.as_mut().unwrap(), rng);
-                cost += price;
             }
-            costs.push(cost);
+            (cost, actions, false)
+        };
+        let done: Vec<(f64, Vec<usize>, bool)> = (0..runs as u64).into_par_iter().map(run).collect();
+        let mut uses = vec![0usize; self.restart() + 1];
+        for &op in done.iter().flat_map(|d| &d.1) {
+            uses[op] += 1;
         }
-        let mean = costs.iter().sum::<f64>() / runs as f64;
-        let var = costs.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
+        let mut example: Vec<(String, usize)> = Vec::new();
+        for &op in &done[0].1 {
+            match example.last_mut() {
+                Some((last, n)) if *last == self.action_name(op) => *n += 1,
+                _ => example.push((self.action_name(op), 1)),
+            }
+        }
+        let lost = done.iter().filter(|d| d.2).count();
+        let mean = done.iter().map(|d| d.0).sum::<f64>() / runs as f64;
+        let var = done.iter().map(|d| (d.0 - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
         let uses = uses.iter().enumerate().filter(|(_, n)| **n > 0).map(|(i, n)| (self.action_name(i), *n as f64 / runs as f64)).collect();
         Followed { mean, error: (var / runs as f64).sqrt(), uses, lost, example }
     }

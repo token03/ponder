@@ -43,7 +43,14 @@ const CASES: &[(&str, &str, &str, &[&str])] = &[
         "dex-armour-chaos-gloves",
         "Titan Gauntlets",
         "Gloves",
-        &["essence:deafening-envy", "eldritch-implicit:lesser-ember", "eldritch-chaos", "eldritch-exalted", "eldritch-annulment", "bench:armour"],
+        &[
+            "essence:deafening-envy",
+            "eldritch-implicit:lesser-ember",
+            "eldritch-chaos",
+            "eldritch-exalted",
+            "eldritch-annulment",
+            "bench:armour",
+        ],
     ),
     (
         "life-plus-two-phys-focused-amulet",
@@ -80,7 +87,7 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed:
 
     let mut rng = Rng::new(3 + seed);
     let mut worst: (f64, String) = (0.0, String::new());
-    let mut worst_tv: f64 = 0.0;
+    let mut worst_tv: (f64, String) = (0.0, String::new());
     for walk in 0..12 {
         let mut item = Item::new(kind);
         for _ in 0..walk {
@@ -110,7 +117,9 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed:
                 .map(|s| (exact.get(*s).unwrap_or(&0.0) - seen.get(*s).unwrap_or(&0.0)).abs())
                 .sum::<f64>()
                 / 2.0;
-            worst_tv = worst_tv.max(distance);
+            if distance > worst_tv.0 {
+                worst_tv = (distance, format!("{} on walk {walk}", op.name()));
+            }
             // What the solver uses: the chance each target holds afterwards.
             for t in 0..targets {
                 let p: f64 = exact.iter().filter(|(s, _)| lens.holds(t, s)).map(|(_, p)| p).sum();
@@ -123,10 +132,12 @@ fn agree(game: &Game, file: &str, base: &str, class: &str, extra: &[&str], seed:
         }
     }
     println!(
-        "{file}: {} classes; worst z {:.2} ({}); worst total variation {worst_tv:.3} (mostly sampling noise)",
+        "{file}: {} classes; worst z {:.2} ({}); worst total variation {:.3} ({})",
         lens.classes(),
         worst.0,
-        worst.1
+        worst.1,
+        worst_tv.0,
+        worst_tv.1
     );
     assert!(worst.0 < 4.0, "{file}: target chances disagree: z = {:.2}: {}", worst.0, worst.1);
 }

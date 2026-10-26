@@ -31,6 +31,8 @@ struct Outcome {
     states: usize,
     followed: ponder_plan::craft::Followed,
     start: String,
+    /// Seconds when the recipe was checked, the best plan solved, and followed.
+    times: Vec<f64>,
 }
 
 fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String> {
@@ -112,14 +114,28 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, String>
     let clock = std::time::Instant::now();
     let guided = solve(&Following::new(&craft, &recipe), &[(1.0, Position::Fresh)], limit).map_err(|e| format!("recipe: {e:?}"))?;
     if std::env::var("TRACE").is_ok() {
-        println!("  {} lens classes; recipe solved over {} states in {:.1}s", lens.classes(), guided.states.len(), clock.elapsed().as_secs_f64());
+        for c in 0..lens.classes() {
+            println!("    {c}: {}", lens.describe(c));
+        }
+        println!(
+            "  {} lens classes; recipe solved over {} states in {:.1}s",
+            lens.classes(),
+            guided.states.len(),
+            clock.elapsed().as_secs_f64()
+        );
     }
-    let simulated = recipe.simulate(&craft, &targets, 500, &mut Rng::new(1));
+    let simulated = recipe.simulate(&craft, &targets, 500, 1);
+    if std::env::var("RECIPE_ONLY").is_ok() {
+        return Err(format!("recipe {:.1}c, simulated {:.1} ± {:.1}", guided.cost, simulated.0, simulated.1));
+    }
+    let mut times = vec![clock.elapsed().as_secs_f64()];
     let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| format!("best: {e:?}"))?;
+    times.push(clock.elapsed().as_secs_f64());
     let start = craft.first_buy(&best).map_or("?".into(), |s| s.name.clone());
-    let followed = craft.follow(&best, 500, &mut Rng::new(2));
+    let followed = craft.follow(&best, 500, 1_000_000);
+    times.push(clock.elapsed().as_secs_f64());
     let (guide_cost, best_cost) = (guided.cost, best.cost);
-    Ok(Outcome { guide: guide_cost, best: best_cost, simulated, states: best.states.len(), followed, start })
+    Ok(Outcome { guide: guide_cost, best: best_cost, simulated, states: best.states.len(), followed, start, times })
 }
 
 #[test]
@@ -141,12 +157,14 @@ fn guides_cost_no_less_than_ponder() {
                 active += 1;
                 println!(
                     "{name:42} guide {:>9.1}c  ponder {:>9.1}c  simulated {:>9.1}c ± {:.1}  ({} states, starts from {})",
-                    o.guide,
-                    o.best,
-                    o.simulated.0,
-                    o.simulated.1,
-                    o.states,
-                    o.start
+                    o.guide, o.best, o.simulated.0, o.simulated.1, o.states, o.start
+                );
+                println!(
+                    "{:42} recipe {:.1}s, best plan {:.1}s, following {:.1}s",
+                    "",
+                    o.times[0],
+                    o.times[1] - o.times[0],
+                    o.times[2] - o.times[1]
                 );
                 let f = &o.followed;
                 println!("{:42} ponder's policy on real items {:.1}c ± {:.1}, lost {}; uses {:?}", "", f.mean, f.error, f.lost, f.uses);

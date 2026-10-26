@@ -7,7 +7,8 @@ use super::{Bias, Cost, Ctx, Operation, Pick, Pool, Sides, Step, View};
 use crate::game::{BaseId, Game, Influences, Kind, ModId};
 use crate::goal::Rarity;
 
-const RESONATORS: [&str; 4] = ["primitive-chaotic-resonator", "potent-chaotic-resonator", "powerful-chaotic-resonator", "prime-chaotic-resonator"];
+const RESONATORS: [&str; 4] =
+    ["primitive-chaotic-resonator", "potent-chaotic-resonator", "powerful-chaotic-resonator", "prime-chaotic-resonator"];
 
 pub struct Fossils {
     name: String,

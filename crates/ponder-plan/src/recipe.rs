@@ -10,8 +10,10 @@
 //! abandons the attempt instead: to the `else` step, or to the first step (buying afresh)
 //! without one. The recipe ends when the item meets the goal.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+use rayon::prelude::*;
 
 use ponder_rules::game::Game;
 use ponder_rules::guide::Guide;
@@ -145,31 +147,35 @@ impl Recipe {
 
     /// Mean cost of following the recipe on real items, and its standard error. The item the
     /// recipe starts from is bought, not given.
-    pub fn simulate(&self, craft: &Craft, targets: &[Target], runs: usize, rng: &mut Rng) -> (f64, f64) {
+    /// Mean cost and standard error over `runs` runs, run `r` seeded with `seed + r`.
+    pub fn simulate(&self, craft: &Craft, targets: &[Target], runs: usize, seed: u64) -> (f64, f64) {
         let game: &Game = craft.ctx.game;
         let holds = |t: usize, item: &Item| targets[t].holds(game, item);
-        let mut costs = Vec::with_capacity(runs);
-        for _ in 0..runs {
-            let mut item = craft.starts[self.start].item.clone();
-            let mut cost = craft.starts[self.start].price;
-            let mut i = self.forward(0, |t| holds(t, &item));
-            let mut k = 0;
-            let mut guard = 0;
-            while !holds(self.goal, &item) && i < self.steps.len() && guard < 1_000_000 {
-                let mut abandoned = false;
-                for &a in &self.steps[i].ops {
-                    let (applied, c) = self.apply(craft, a, &mut item, rng);
-                    cost += c;
-                    abandoned = applied == Applied::Abandon;
-                    if abandoned {
-                        break;
+        let costs: Vec<f64> = (0..runs as u64)
+            .into_par_iter()
+            .map(|r| {
+                let rng = &mut Rng::new(seed + r);
+                let mut item = craft.starts[self.start].item.clone();
+                let mut cost = craft.starts[self.start].price;
+                let mut i = self.forward(0, |t| holds(t, &item));
+                let mut k = 0;
+                let mut guard = 0;
+                while !holds(self.goal, &item) && i < self.steps.len() && guard < 1_000_000 {
+                    let mut abandoned = false;
+                    for &a in &self.steps[i].ops {
+                        let (applied, c) = self.apply(craft, a, &mut item, rng);
+                        cost += c;
+                        abandoned = applied == Applied::Abandon;
+                        if abandoned {
+                            break;
+                        }
                     }
+                    (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
+                    guard += 1;
                 }
-                (i, k) = if abandoned { (self.abandon(i), 0) } else { self.after(i, k, |t| holds(t, &item)) };
-                guard += 1;
-            }
-            costs.push(cost);
-        }
+                cost
+            })
+            .collect();
         let mean = costs.iter().sum::<f64>() / runs as f64;
         let var = costs.iter().map(|c| (c - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
         (mean, (var / runs as f64).sqrt())
@@ -189,11 +195,13 @@ fn is_lock(craft: &Craft, a: Action) -> bool {
 }
 
 /// The recipe over lens states, for exact evaluation by the solver.
+type Outcomes = Vec<(f64, State)>;
+
 pub struct Following<'a> {
     pub craft: &'a Craft<'a>,
     pub recipe: &'a Recipe,
     /// Item outcomes, computed once: a recipe reaches one item state at many positions.
-    cache: RefCell<HashMap<(State, usize), Vec<(f64, State)>>>,
+    cache: Mutex<HashMap<(State, usize), Outcomes>>,
 }
 
 /// Before the first purchase, at (step, operation within the step, failed attempts, item), or
@@ -207,16 +215,16 @@ pub enum Position {
 
 impl<'a> Following<'a> {
     pub fn new(craft: &'a Craft<'a>, recipe: &'a Recipe) -> Self {
-        Following { craft, recipe, cache: RefCell::default() }
+        Following { craft, recipe, cache: Mutex::default() }
     }
 
-    fn outcomes_of(&self, s: &State, a: usize) -> Vec<(f64, State)> {
+    fn outcomes_of(&self, s: &State, a: usize) -> Outcomes {
         let key = (s.clone(), a);
-        if let Some(out) = self.cache.borrow().get(&key) {
+        if let Some(out) = self.cache.lock().unwrap().get(&key) {
             return out.clone();
         }
         let out = self.craft.outcomes_of(s, a);
-        self.cache.borrow_mut().insert(key, out.clone());
+        self.cache.lock().unwrap().insert(key, out.clone());
         out
     }
 

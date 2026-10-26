@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::game::{Game, GroupId, Influences, Kind, ModId, Side, TagId};
 use crate::goal::{Influence, Rarity, Source};
 use crate::item::Item;
-use crate::ops::{Ctx, Operation, Pick, Pool, Sides, Step, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight};
+use crate::ops::{
+    Ctx, Operation, Pick, Pool, Sides, Step, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
+};
 use crate::target::{Target, matches};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -33,8 +35,6 @@ pub struct State {
 enum Origin {
     /// Natural, or needing this influence on the item.
     Natural(Option<Influence>),
-    Fossil,
-    Unveiled,
     Fixed,
 }
 
@@ -42,9 +42,9 @@ enum Origin {
 struct Class {
     side: Side,
     origin: Origin,
-    /// Distinct mod groups (for the average-weight estimate) and mods (for unveil offers).
+    /// Distinct mod groups (for the average-weight estimate) and veiled mods (for unveil offers).
     groups: usize,
-    mods: usize,
+    veiled: usize,
     tracked: bool,
     crafted: bool,
     veil: bool,
@@ -65,8 +65,8 @@ pub struct Lens<'g> {
     classes: Vec<Class>,
     class_of: HashMap<ModId, usize>,
     read_tags: Vec<TagId>,
-    /// Class weights per draw pool, and for unveil offers.
-    pools: Vec<(Pool, Vec<f64>)>,
+    /// Class weights per draw (pool and tag filter), and for unveil offers.
+    pools: Vec<((Pool, TagFilter), Vec<f64>)>,
     unveil: Vec<f64>,
     targets: Vec<(Target, usize)>,
     /// Class of the prefix lock and suffix lock metamods; of any metamod; of the attack and
@@ -133,29 +133,28 @@ impl<'g> Lens<'g> {
             .filter(|(m, _)| forced.contains(m))
             .collect();
         let mut read: BTreeSet<TagId> = BTreeSet::new();
+        // Tagged draws need their tag's mods apart: a mod present blocks its group, and the
+        // average-group estimate cannot see which part of a mixed class the group held.
         read.extend(picks.iter().filter_map(|p| p.tag.map(|t| t.0)));
         read.extend(filters.iter().filter_map(|f| f.map(|t| t.0)));
         read.extend(bans.iter().map(|b| b.1));
-        for p in &picks {
-            if let Pool::Natural(Some(b)) = &p.pool {
-                read.extend(b.tags.iter().map(|t| t.0));
-            }
-        }
         let read_tags: Vec<TagId> = read.into_iter().collect();
         assert!(read_tags.len() <= 32, "at most 32 read tags per lens");
         let tag_bits =
             |m: ModId| read_tags.iter().enumerate().filter(|(_, t)| game.def(m).tags.contains(t)).fold(0u32, |b, (i, _)| b | 1 << i);
-        let rank_of = |m: ModId| -> u8 {
-            prefs.iter().filter_map(|p| p.iter().position(|list| list.contains(&m))).min().map_or(0, |r| r as u8 + 1)
-        };
-        let mut pools: Vec<Pool> = Vec::new();
+        let rank_of =
+            |m: ModId| -> u8 { prefs.iter().filter_map(|p| p.iter().position(|list| list.contains(&m))).min().map_or(0, |r| r as u8 + 1) };
+        let mut pools: Vec<(Pool, TagFilter)> = Vec::new();
         for p in &picks {
-            if !pools.contains(&p.pool) {
-                pools.push(p.pool.clone());
+            if !pools.contains(&(p.pool.clone(), p.tag)) {
+                pools.push((p.pool.clone(), p.tag));
             }
         }
-        let added: BTreeSet<ModId> =
-            pools.iter().filter_map(|p| if let Pool::Natural(Some(b)) = p { Some(b.added.iter().copied()) } else { None }).flatten().collect();
+        let added: BTreeSet<ModId> = pools
+            .iter()
+            .filter_map(|p| if let (Pool::Natural(Some(b)), _) = p { Some(b.added.iter().copied()) } else { None })
+            .flatten()
+            .collect();
 
         let pool = game.pool(kind);
         let rolls: Vec<(ModId, f64)> = pool
@@ -183,12 +182,9 @@ impl<'g> Lens<'g> {
         for &(m, _) in &rolls {
             let def = game.def(m);
             let group = def.groups.iter().copied().find(|g| tracked_groups.contains(g));
-            let origin = match def.source {
-                Source::Fossil => Origin::Fossil,
-                Source::Veiled => Origin::Unveiled,
-                _ => Origin::Natural(def.influence.filter(|_| def.source == Source::Influence)),
-            };
-            let rank = if origin == Origin::Unveiled { rank_of(m) } else { 0 };
+            // Fossil and veiled mods differ from natural ones only in their weights.
+            let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
+            let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
             keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank)).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
@@ -211,7 +207,7 @@ impl<'g> Lens<'g> {
                 side,
                 origin,
                 groups: groups.len().max(1),
-                mods: mods.len(),
+                veiled: mods.iter().filter(|m| game.def(**m).source == Source::Veiled).count(),
                 tracked: group.is_some() || fixed.is_some(),
                 crafted: fixed.is_some_and(|m| game.def(m).source == Source::Crafted),
                 veil: fixed.is_some_and(|m| game.veils.contains(&m)),
@@ -227,8 +223,13 @@ impl<'g> Lens<'g> {
         }
         for (i, c) in classes.iter_mut().enumerate() {
             if c.tracked {
-                let mut conflicts: BTreeSet<usize> =
-                    members[i].iter().flat_map(|m| game.def(*m).groups.iter()).filter_map(|g| group_classes.get(g)).flatten().copied().collect();
+                let mut conflicts: BTreeSet<usize> = members[i]
+                    .iter()
+                    .flat_map(|m| game.def(*m).groups.iter())
+                    .filter_map(|g| group_classes.get(g))
+                    .flatten()
+                    .copied()
+                    .collect();
                 conflicts.insert(i);
                 c.conflicts = conflicts.into_iter().collect();
             }
@@ -237,19 +238,17 @@ impl<'g> Lens<'g> {
         let class_weights = |f: &dyn Fn(ModId, f64) -> f64| -> Vec<f64> {
             members.iter().map(|ms| ms.iter().map(|m| weight_of.get(m).map_or(0.0, |w| f(*m, *w))).sum()).collect()
         };
-        let pools = pools.into_iter().map(|p| {
-            let w = class_weights(&|m, w| pool_weight(game.def(m), m, w, &p));
-            (p, w)
+        let pools = pools.into_iter().map(|(p, tag)| {
+            let passes = |m: ModId| tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want);
+            let w = class_weights(&|m, w| if passes(m) { pool_weight(game.def(m), m, w, &p) } else { 0.0 });
+            ((p, tag), w)
         });
         let pools = pools.collect();
         let unveil = class_weights(&|m, w| unveil_weight(game, game.def(m), m, w));
         let class_for = |key: Option<&ModId>| key.and_then(|m| class_of.get(m).copied());
         let lock = [class_for(game.metamods.first()), class_for(game.metamods.get(1))];
         let metamods = game.metamods.iter().filter_map(|m| class_of.get(m).copied()).collect();
-        let bans = bans
-            .iter()
-            .filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?)))
-            .collect();
+        let bans = bans.iter().filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?))).collect();
         let targets = targets.into_iter().zip(offsets).collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
         Lens { game, kind, class_name, classes, class_of, read_tags, pools, unveil, targets, lock, metamods, bans }
@@ -257,6 +256,12 @@ impl<'g> Lens<'g> {
 
     pub fn classes(&self) -> usize {
         self.classes.len()
+    }
+
+    /// One class for diagnostics: its fields and a few of its mods.
+    pub fn describe(&self, c: usize) -> String {
+        let mods: Vec<&str> = self.class_of.iter().filter(|(_, k)| **k == c).map(|(m, _)| self.game.def(*m).key.as_str()).take(3).collect();
+        format!("{:?} {mods:?}", self.classes[c])
     }
 
     /// The state of a real item of this lens's base.
@@ -417,7 +422,8 @@ impl<'g> Lens<'g> {
                 emit(1.0, s, total);
             }
             Step::Fracture => {
-                let options: Vec<usize> = (0..n).filter(|&c| s.counts[c] > 0 && !self.classes[c].crafted && !self.classes[c].veil).collect();
+                let options: Vec<usize> =
+                    (0..n).filter(|&c| s.counts[c] > 0 && !self.classes[c].crafted && !self.classes[c].veil).collect();
                 let all: f64 = options.iter().map(|&c| s.counts[c] as f64).sum();
                 if all == 0.0 {
                     return emit(1.0, s, total);
@@ -459,7 +465,10 @@ impl<'g> Lens<'g> {
         (0..self.classes.len())
             .filter(|&c| {
                 let class = &self.classes[c];
-                s.counts[c] > 0 && allowed[class.side as usize] && locked != Some(class.side) && bit.is_none_or(|(b, want)| (class.tags & b != 0) == want)
+                s.counts[c] > 0
+                    && allowed[class.side as usize]
+                    && locked != Some(class.side)
+                    && bit.is_none_or(|(b, want)| (class.tags & b != 0) == want)
             })
             .map(|c| (c, s.counts[c]))
             .collect()
@@ -511,10 +520,9 @@ impl<'g> Lens<'g> {
     /// Classes a draw can land in, with their available weight.
     fn options(&self, s: &State, pick: &Pick) -> Vec<(usize, f64)> {
         let v = self.view(s);
-        let weights = &self.pools.iter().find(|(p, _)| *p == pick.pool).expect("pool read by an operation").1;
+        let weights = &self.pools.iter().find(|((p, t), _)| *p == pick.pool && *t == pick.tag).expect("pool read by an operation").1;
         let allowed = resolve(pick.sides, s.eldritch);
         let open = Side::BOTH.map(|x| allowed[x as usize] && v.open(x) > 0);
-        let filter = pick.tag.map(|(t, want)| (self.tag_bit(t), want));
         let banned = self.bans.iter().filter(|(c, _)| v.present(*c)).fold(0u32, |b, (_, bit)| b | bit);
         (0..self.classes.len())
             .filter_map(|c| {
@@ -525,9 +533,6 @@ impl<'g> Lens<'g> {
                 if let Origin::Natural(Some(i)) = class.origin
                     && s.influences & 1 << i as u8 == 0
                 {
-                    return None;
-                }
-                if filter.is_some_and(|(b, want)| (class.tags & b != 0) != want) {
                     return None;
                 }
                 let w = self.available(s, c, weights[c]);
@@ -544,7 +549,7 @@ impl<'g> Lens<'g> {
         s.counts[veil] -= 1;
         let offers: Vec<(usize, f64, f64)> = (0..n)
             .filter(|&c| self.classes[c].side == side && self.unveil[c] > 0.0)
-            .map(|c| (c, self.available(&s, c, self.unveil[c]), self.unveil[c] / self.classes[c].mods as f64))
+            .map(|c| (c, self.available(&s, c, self.unveil[c]), self.unveil[c] / self.classes[c].veiled as f64))
             .filter(|o| o.1 > 0.0)
             .collect();
         if offers.is_empty() {
