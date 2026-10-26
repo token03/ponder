@@ -253,8 +253,12 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
         }
         debug_assert!(ranked.iter().all(|r| *r), "pruning leaves every live state a way out");
     }
+    // The last policy evaluated, so values and choices agree even if an improvement fails to
+    // evaluate (at a huge first `w`, rounding can pick an improper one).
+    let mut kept = chosen.clone();
     for _ in 0..100 {
         let Some(v) = evaluate(states, &local, edges, &chosen, affine) else { break };
+        kept = chosen.clone();
         for (i, &s) in states.iter().enumerate() {
             affine[s] = v[i];
             values[s] = v[i].at(w);
@@ -274,7 +278,7 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
         chosen = improved;
     }
     for (i, &s) in states.iter().enumerate() {
-        choice[s] = chosen[i];
+        choice[s] = kept[i];
     }
 }
 
