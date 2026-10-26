@@ -1,0 +1,118 @@
+sheet = "ama-328-holy-relic-trigger-sword"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oajpqaz/"
+scope = "Non-influenced thrusting sword. No minimum attack-speed tier is inferred; the complete affix finish is part of the predicate."
+base = "Jewelled Foil"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+  { text = "+# to Level of Socketed Gems", source = "natural" },
+  { text = "Trigger a Socketed Spell when you Use a Skill, with a # second Cooldown / Spells Triggered this way have #% more Cost", source = "crafted" },
+  { text = "Hits can't be Evaded", source = "crafted" },
+]
+
+[stages.pair]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+]
+
+[stages.isolated_5]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.isolated_4]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.isolated_3]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.isolated_2]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.blocked]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+  { text = "Can have up to # Crafted Modifiers", source = "crafted" },
+  { text = "Cannot roll Attack Modifiers", source = "crafted" },
+]
+max_prefix = 1
+open_suffix = 0
+
+[stages.gems]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "essence" },
+  { text = "#% increased Attack Speed" },
+  { text = "+# to Level of Socketed Gems", source = "natural" },
+]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-fear"]
+until = "pair"
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_5"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_4"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_3"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_2"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:multimod", "bench:cannot-roll-attack"]
+until = "blocked"
+max = 1
+else = 1
+
+[[steps]]
+do = ["exalted"]
+until = "gems"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:multimod", "bench:trigger-on-skill-use", "bench:hits-cannot-be-evaded"]
+until = "goal"
+max = 1
+else = 1

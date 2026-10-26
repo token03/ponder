@@ -1,0 +1,25 @@
+sheet = "ama-327-minion-physical-speed-jewel-fractured"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnrhvlx/"
+scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. The alternate T1-fracture route from the same answer. Abyss-jewel affixes require the abyss_jewel domain."
+base = "Ghastly Eye Jewel"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "Minions deal # to # additional Physical Damage", fractured = true, tier = 1 },
+  { text = "Minions have #% increased Attack Speed / Minions have #% increased Cast Speed" },
+]
+
+[stages.fractured_base]
+mods = [
+  { text = "Minions deal # to # additional Physical Damage", fractured = true, tier = 1 },
+]
+rarity = "rare"
+price = 0.0
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["harvest:reforge-speed"]
+until = "goal"

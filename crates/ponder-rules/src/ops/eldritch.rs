@@ -88,7 +88,7 @@ impl Operation for Orb {
 
     fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
         let Some(side) = item.eldritch() else { return false };
-        let locked = item.locked() == Some(side);
+        let locked = item.locked()[side as usize];
         match self {
             Orb::Chaos => item.rarity() == Rarity::Rare && !locked,
             Orb::Exalted => item.rarity() == Rarity::Rare && item.open(side) > 0,

@@ -110,8 +110,10 @@ impl Target {
         item.quality = self.quality;
         let pool = game.pool(kind);
         for need in &self.needs {
-            let rolls =
-                |m: &ModId| matches!(game.def(*m).source, Source::Crafted | Source::Essence) || pool.mods.iter().any(|(id, _)| id == m);
+            let rolls = |m: &ModId| {
+                matches!(game.def(*m).source, Source::Crafted | Source::Essence | Source::Legacy | Source::Elevated)
+                    || pool.mods.iter().any(|(id, _)| id == m)
+            };
             let mut ok: Vec<ModId> = need.ok.iter().copied().filter(rolls).collect();
             ok.sort_by_key(|m| (game.def(*m).level, m.0));
             for _ in 0..need.count {

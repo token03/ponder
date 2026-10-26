@@ -13,8 +13,8 @@
 //! exactly, merging equal states after every step. Unveil offers are drawn by class, removing a
 //! class's average mod weight per offer (exact for single-mod classes).
 
-use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::FxHashMap as HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use crate::game::{Game, GroupId, Influences, Kind, ModId, Side, TagId};
@@ -511,10 +511,10 @@ impl<'g> Lens<'g> {
             Step::Clear { sides, respect_lock } => {
                 let v = self.view(&s);
                 let allowed = resolve(*sides, s.eldritch);
-                let locked = if *respect_lock { v.locked() } else { None };
+                let locked = if *respect_lock { v.locked() } else { [false; 2] };
                 for c in 0..n {
                     let side = self.classes[c].side;
-                    if allowed[side as usize] && locked != Some(side) {
+                    if allowed[side as usize] && !locked[side as usize] {
                         s.counts[c] = 0;
                     }
                 }
@@ -648,14 +648,14 @@ impl<'g> Lens<'g> {
     fn removable(&self, s: &State, sides: Sides, tag: TagFilter, respect_lock: bool) -> Vec<(usize, u8)> {
         let v = self.view(s);
         let allowed = resolve(sides, s.eldritch);
-        let locked = if respect_lock { v.locked() } else { None };
+        let locked = if respect_lock { v.locked() } else { [false; 2] };
         let bit = tag.map(|(t, want)| (self.tag_bit(t), want));
         (0..self.classes.len())
             .filter(|&c| {
                 let class = &self.classes[c];
                 s.counts[c] > 0
                     && allowed[class.side as usize]
-                    && locked != Some(class.side)
+                    && !locked[class.side as usize]
                     && bit.is_none_or(|(b, want)| (class.tags & b != 0) == want)
             })
             .map(|c| (c, s.counts[c]))
@@ -968,12 +968,8 @@ impl View for StateView<'_> {
         let Some(&c) = self.lens.class_of.get(&m) else { return false };
         self.lens.classes[c].conflicts.iter().any(|&o| self.state.counts[o + n] > 0)
     }
-    fn locked(&self) -> Option<Side> {
-        match self.lens.lock {
-            [Some(c), _] if self.present(c) => Some(Side::Prefix),
-            [_, Some(c)] if self.present(c) => Some(Side::Suffix),
-            _ => None,
-        }
+    fn locked(&self) -> [bool; 2] {
+        self.lens.lock.map(|c| c.is_some_and(|c| self.present(c)))
     }
     fn has_metamod(&self) -> bool {
         self.lens.metamods.iter().any(|&c| self.present(c))

@@ -1,0 +1,164 @@
+sheet = "ama-328-minion-life-recovery-shield"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oae5981/"
+scope = "The terminal predicate is the three natural modifiers. Both affix locks and a 2P/3S protected state are required before the targeted reforge; unspecified finishing crafts are omitted."
+base = "Fossilised Spirit Shield"
+ilvl = 86
+influences = ["shaper"]
+
+[goal]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+  { text = "+# to Level of all Minion Skill Gems", source = "natural" },
+]
+max_mods = 3
+
+[stages.a_solo]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.b_solo]
+mods = [
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.main_combined]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+
+[stages.main_rare]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "rare"
+
+[stages.main_5]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.main_4]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.main_3]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.main_2]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.protected]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+  { text = "Can have up to # Crafted Modifiers", source = "crafted" },
+  { text = "Prefixes Cannot Be Changed", source = "crafted" },
+  { text = "Suffixes Cannot Be Changed", source = "crafted" },
+]
+open_prefix = 1
+open_suffix = 0
+
+[stages.natural]
+mods = [
+  { text = "Minions deal #% increased Damage", source = "natural" },
+  { text = "Recover #% of Life when you Block", source = "influence" },
+  { text = "+# to Level of all Minion Skill Gems", source = "natural" },
+]
+
+[[steps]]
+do = ["buy:base"]
+item = "a"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "a"
+until = "a_solo"
+
+[[steps]]
+do = ["buy:base"]
+item = "b"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "b"
+until = "b_solo"
+
+[[steps]]
+do = ["recombinator:a+b"]
+until = "main_combined"
+max = 1
+else = 1
+
+[[steps]]
+do = ["regal"]
+until = "main_rare"
+max = 1
+note = "A magic mixed-side result needs an explicit Regal before annulling to a two-mod rare."
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_5"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_4"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_3"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_2"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"]
+until = "protected"
+max = 1
+else = 1
+
+[[steps]]
+do = ["harvest:reforge-minion"]
+until = "natural"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 1

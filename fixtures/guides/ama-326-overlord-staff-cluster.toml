@@ -1,0 +1,19 @@
+sheet = "ama-326-overlord-staff-cluster"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1lgu3b7/comment/myzpiul/"
+scope = "Eight passives and mace/staff-damage small passives are fixture choices. Martial Prowess is optional and excluded from the terminal predicate. Cluster notables require the affliction_jewel domain."
+base = "Large Cluster Jewel"
+ilvl = 86
+base_tags = ["affliction_mace_and_staff_damage"]
+
+[goal]
+mods = [
+  { text = "# Added Passive Skill is Overlord" },
+  { text = "# Added Passive Skill is Fuel the Fight" },
+]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["harvest:reforge-attack"]
+until = "goal"

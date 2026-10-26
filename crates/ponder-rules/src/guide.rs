@@ -14,6 +14,10 @@ use crate::goal::{Goal, Influence};
 pub struct Guide {
     /// Workbook tab the recipe comes from.
     pub sheet: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub base_tags: Vec<String>,
     /// What the recipe leaves out (catalysts, enchants, ...), in words.
     #[serde(default)]
     pub scope: Option<String>,

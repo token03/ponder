@@ -1,0 +1,27 @@
+sheet = "ama-327-cold-three-notable-cluster"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnyvk5l/"
+scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. Eight passives and cold-damage small passives are fixture choices. Cluster notables require the affliction_jewel domain and the additional base tag."
+base = "Large Cluster Jewel"
+ilvl = 86
+base_tags = ["affliction_cold_damage"]
+
+[goal]
+mods = [
+  { text = "# Added Passive Skill is Doryani's Lesson", fractured = true },
+  { text = "# Added Passive Skill is Blanketed Snow" },
+  { text = "# Added Passive Skill is Prismatic Heart" },
+]
+
+[stages.fractured_base]
+mods = [
+  { text = "# Added Passive Skill is Doryani's Lesson", fractured = true },
+]
+rarity = "rare"
+price = 0.0
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["fossil:dense+prismatic+pristine"]
+until = "goal"

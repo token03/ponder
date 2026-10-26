@@ -1,0 +1,26 @@
+sheet = "ama-328-rf-max-fire-jewel"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oae1vel/"
+scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. The +2 maximum-fire roll is a supplied-base condition; scalar rolls within a mod are not modelled. Ordinary-jewel affixes require the misc domain."
+base = "Crimson Jewel"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+#% to maximum Fire Resistance", source = "natural", fractured = true },
+  { text = "#% increased maximum Life" },
+  { text = "+#% to Fire Damage over Time Multiplier" },
+]
+
+[stages.fractured_base]
+mods = [
+  { text = "+#% to maximum Fire Resistance", source = "natural", fractured = true },
+]
+rarity = "rare"
+price = 0.0
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["harvest:reforge-fire"]
+until = "goal"

@@ -1,0 +1,133 @@
+sheet = "ama-328-budget-mana-rf-sceptre"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oaeq46w/"
+scope = "A representative sceptre and any natural mana/DoT tiers. Regal/annul explicitly normalises a mixed-side magic output to the rare two-mod stage needed for the stated Multimod finish."
+base = "Opal Sceptre"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "+#% to Fire Damage over Time Multiplier", source = "crafted" },
+  { text = "#% increased Spell Damage", source = "crafted" },
+]
+
+[stages.a_solo]
+mods = [
+  { text = "+# to maximum Mana" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.b_solo]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.main_combined]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+
+[stages.main_rare]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+
+[stages.main_5]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.main_4]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.main_3]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.main_2]
+mods = [
+  { text = "+# to maximum Mana" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 2
+
+[[steps]]
+do = ["buy:base"]
+item = "a"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "a"
+until = "a_solo"
+
+[[steps]]
+do = ["buy:base"]
+item = "b"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "b"
+until = "b_solo"
+
+[[steps]]
+do = ["recombinator:a+b"]
+until = "main_combined"
+max = 1
+else = 1
+
+[[steps]]
+do = ["regal"]
+until = "main_rare"
+max = 1
+note = "A magic mixed-side result needs an explicit Regal before annulling to a two-mod rare."
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_5"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_4"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_3"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_2"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:multimod", "bench:fire-damage-over-time-multiplier", "bench:spell-damage"]
+until = "goal"
+max = 1
+else = 1

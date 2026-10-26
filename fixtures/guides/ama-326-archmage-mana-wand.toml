@@ -1,0 +1,70 @@
+sheet = "ama-326-archmage-mana-wand"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1lgu3b7/comment/mz4g4r2/"
+scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. T3-or-better mana/cast speed follow the answer. Cast speed is isolated as the sole suffix before veiling. The unspecified final double-damage bench variant is excluded."
+base = "Prophecy Wand"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
+  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "+# to maximum Mana", tier = 3 },
+  { text = "#% increased Cast Speed", tier = 3 },
+  { text = "#% chance to deal Double Damage", source = "veiled" },
+]
+max_mods = 5
+
+[stages.fractured_base]
+mods = [
+  { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
+]
+rarity = "rare"
+price = 0.0
+
+[stages.prefixes]
+mods = [
+  { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
+  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "+# to maximum Mana", tier = 3 },
+]
+open_suffix = 1
+
+[stages.cast]
+mods = [
+  { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
+  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "+# to maximum Mana", tier = 3 },
+  { text = "#% increased Cast Speed", tier = 3 },
+]
+open_suffix = 2
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["essence:deafening-woe"]
+until = "prefixes"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "harvest:reforge-caster"]
+until = "cast"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-exalted", "bench:damage-per-power-charge", "unveil:double-damage", "bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 5
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "scouring"]
+until = "prefixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 3

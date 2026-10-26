@@ -77,8 +77,17 @@ const NAMES: [(&str, &[&str]); 31] = [
 ];
 
 /// More bench names that need no table: one template each.
-const MORE: [(&str, &str); 3] = [
+const MORE: [(&str, &str); 12] = [
     ("spell-damage", "#% increased Spell Damage"),
+    ("mana", "+# to maximum Mana"),
+    ("mana-cost-non-channelling", "Non-Channelling Skills have -# to Total Mana Cost"),
+    ("mana-cost-channelling", "Channelling Skills have # to Total Mana Cost"),
+    ("hits-cannot-be-evaded", "Hits can't be Evaded"),
+    ("attack-speed", "#% increased Attack Speed"),
+    ("elemental-damage-with-attacks", "#% increased Elemental Damage with Attack Skills"),
+    ("fire-damage-over-time-multiplier", "+#% to Fire Damage over Time Multiplier"),
+    ("increased-damage-over-time", "#% increased Damage over Time"),
+    ("damage-per-power-charge", "#% increased Damage per Power Charge"),
     ("trigger-on-focus", "Trigger Socketed Spells when you Focus, with a # second Cooldown"),
     (
         "trigger-on-skill-use",

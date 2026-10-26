@@ -40,9 +40,11 @@ struct Outcome {
     times: Vec<f64>,
 }
 
+#[derive(Debug)]
 enum CheckError {
     Inactive(String),
     Solve(String, ponder_solve::Error),
+    Recipe(String),
 }
 
 impl From<String> for CheckError {
@@ -57,7 +59,10 @@ impl From<&str> for CheckError {
     }
 }
 
-fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckError> {
+fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result<Option<Outcome>, CheckError> {
+    if !guide.base_tags.is_empty() {
+        return Err("additional base tags are not modelled".into());
+    }
     let assumptions = Assumptions::default();
     let ctx = Ctx { game, assumptions: &assumptions };
     let base = game.base(&guide.base).ok_or("unknown base")?;
@@ -191,6 +196,21 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
         let given_up = guided.given_up.iter().cloned().collect();
         let simulated = recipe.simulate(&guide_craft, &local_targets, &given_up, 500, 1);
         println!("  {item} recipe on real items: {:.1}c ± {:.1}", simulated.mean, simulated.error);
+        if !best_plan {
+            if simulated.items.len() != 500 || (simulated.mean - guided.cost).abs() > 4.0 * simulated.error + 0.05 * guided.cost {
+                return Err(CheckError::Recipe(format!(
+                    "{item}: simulated {:.1} ± {:.1} vs {:.1} exact ({} finished)",
+                    simulated.mean,
+                    simulated.error,
+                    guided.cost,
+                    simulated.items.len()
+                )));
+            }
+            if !last {
+                products[item.as_str()][0].fill(guided.cost, simulated.items);
+            }
+            continue;
+        }
         if std::env::var("RECIPE_ONLY").is_ok() && last {
             return Err(format!("recipe {:.1}c, simulated {:.1} ± {:.1}", guided.cost, simulated.mean, simulated.error).into());
         }
@@ -258,7 +278,7 @@ fn check(game: &Game, market: &Market, guide: &Guide) -> Result<Outcome, CheckEr
             report("", &done);
         }
     }
-    Ok(outcome.unwrap())
+    Ok(outcome)
 }
 
 /// Where the states of a solved craft come from: per rarity and affix count, and how many the
@@ -384,8 +404,8 @@ fn guides_cost_no_less_than_ponder() {
         }
         let clock = std::time::Instant::now();
         let guide: Guide = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        match check(&game, &market, &guide) {
-            Ok(o) => {
+        match check(&game, &market, &guide, true) {
+            Ok(Some(o)) => {
                 active += 1;
                 report(&name, &o);
                 let f = &o.followed;
@@ -402,15 +422,40 @@ fn guides_cost_no_less_than_ponder() {
                     failures.push(format!("{name}: simulated {:.1} ± {:.1} vs exact {:.1}", o.simulated.0, o.simulated.1, o.guide));
                 }
             }
+            Ok(None) => unreachable!(),
             Err(CheckError::Inactive(why)) => println!("{name:42} inactive: {why}"),
             Err(CheckError::Solve(stage, why)) => {
                 let why = format!("{name}: {stage}: {why:?}");
                 println!("{why}");
                 failures.push(why);
             }
+            Err(CheckError::Recipe(why)) => failures.push(format!("{name}: {why}")),
         }
         println!("{:42} {:.1}s", "", clock.elapsed().as_secs_f64());
     }
     println!("{active} active guides");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn ama_recipes_match_real_items() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let market = Market::load(&root().join("fixtures/prices.json.gz")).unwrap();
+    let mut files: Vec<_> = std::fs::read_dir(root().join("fixtures/guides")).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    let mut checked = 0;
+    for path in files {
+        let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        if !name.starts_with("ama-") || std::env::var("GUIDE").is_ok_and(|g| !name.contains(&g)) {
+            continue;
+        }
+        let guide: Guide = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        match check(&game, &market, &guide, false) {
+            Ok(None) => checked += 1,
+            Ok(Some(_)) => unreachable!(),
+            Err(CheckError::Inactive(why)) => println!("{name}: inactive: {why}"),
+            Err(error) => panic!("{name}: {error:?}"),
+        }
+    }
+    println!("{checked} AMA recipe references checked against real-item sampling");
 }

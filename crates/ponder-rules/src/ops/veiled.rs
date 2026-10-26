@@ -67,7 +67,10 @@ impl Operation for Orb {
 }
 
 /// What a guide keeps from an unveil, as mod templates in preference order.
-const KEEPS: [(&str, &[&str]); 12] = [
+const KEEPS: [(&str, &[&str]); 15] = [
+    ("life", &["+# to maximum Life / Regenerate # Mana per second"]),
+    ("fire-damage", &["#% increased Fire Damage / #% chance to Ignite"]),
+    ("double-damage", &["#% chance to deal Double Damage"]),
     (
         "area-of-effect",
         &["#% increased Area of Effect / +# to Level of Socketed AoE Gems", "#% increased Area Damage / #% increased Area of Effect"],

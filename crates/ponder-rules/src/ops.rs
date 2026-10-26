@@ -192,8 +192,8 @@ pub trait View {
     fn fits(&self, m: ModId) -> bool;
     /// Does a mod no reset removes (fractured) share a group with `m`?
     fn fixed_blocks(&self, m: ModId) -> bool;
-    /// The side a "Cannot Be Changed" metamod protects.
-    fn locked(&self) -> Option<Side>;
+    /// The sides "Cannot Be Changed" metamods protect.
+    fn locked(&self) -> [bool; 2];
     /// Any bench metamod on the item.
     fn has_metamod(&self) -> bool;
     fn influenced(&self) -> bool;
@@ -284,10 +284,10 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
         match step {
             Step::Clear { sides, respect_lock } => {
                 let allowed = resolve(*sides, item.eldritch);
-                let locked = if *respect_lock { item.locked(game) } else { None };
+                let locked = if *respect_lock { item.locked(game) } else { [false; 2] };
                 item.affixes.retain(|a| {
                     let side = game.def(a.id).side;
-                    a.fractured || !allowed[side as usize] || locked == Some(side)
+                    a.fractured || !allowed[side as usize] || locked[side as usize]
                 });
             }
             Step::Rarity(r) => item.rarity = *r,
@@ -370,12 +370,12 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
 /// Indices of mods a removal may take.
 fn removable(game: &Game, item: &Item, sides: Sides, tag: TagFilter, respect_lock: bool, except: Option<usize>) -> Vec<usize> {
     let allowed = resolve(sides, item.eldritch);
-    let locked = if respect_lock { item.locked(game) } else { None };
+    let locked = if respect_lock { item.locked(game) } else { [false; 2] };
     (0..item.affixes.len())
         .filter(|&i| {
             let a = item.affixes[i];
             let def = game.def(a.id);
-            Some(i) != except && !a.fractured && allowed[def.side as usize] && locked != Some(def.side) && tag_ok(def, tag)
+            Some(i) != except && !a.fractured && allowed[def.side as usize] && !locked[def.side as usize] && tag_ok(def, tag)
         })
         .collect()
 }
@@ -552,7 +552,7 @@ impl View for (&Game, &Item) {
         let groups = &self.0.def(m).groups;
         self.1.affixes.iter().any(|a| a.fractured && self.0.def(a.id).groups.iter().any(|g| groups.contains(g)))
     }
-    fn locked(&self) -> Option<Side> {
+    fn locked(&self) -> [bool; 2] {
         self.1.locked(self.0)
     }
     fn has_metamod(&self) -> bool {

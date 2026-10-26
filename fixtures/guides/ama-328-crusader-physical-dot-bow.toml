@@ -1,0 +1,120 @@
+sheet = "ama-328-crusader-physical-dot-bow"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oaf49c4/"
+scope = "The representative finish crafts physical damage and attack speed; Tempering and quality are outside the affix predicate."
+base = "Citadel Bow"
+ilvl = 86
+influences = ["crusader"]
+
+[goal]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Physical Damage / #% increased Projectile Speed", source = "influence" },
+  { text = "#% increased Physical Damage", source = "crafted" },
+  { text = "#% increased Attack Speed", source = "crafted" },
+]
+
+[stages.pair]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+
+[stages.isolated_5]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.isolated_4]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.isolated_3]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.isolated_2]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.protected]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "Can have up to # Crafted Modifiers", source = "crafted" },
+  { text = "Prefixes Cannot Be Changed", source = "crafted" },
+  { text = "Suffixes Cannot Be Changed", source = "crafted" },
+]
+open_prefix = 1
+open_suffix = 0
+
+[stages.prefixes]
+mods = [
+  { text = "Adds # to # Physical Damage", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Physical Damage / #% increased Projectile Speed", source = "influence" },
+]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-contempt"]
+until = "pair"
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_5"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_4"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_3"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+until = "isolated_2"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"]
+until = "protected"
+max = 1
+else = 2
+
+[[steps]]
+do = ["harvest:reforge-speed"]
+until = "prefixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:multimod", "bench:physical-damage", "bench:attack-speed"]
+until = "goal"
+max = 1
+else = 2

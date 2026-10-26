@@ -1,0 +1,50 @@
+sheet = "ama-329-redeemer-cold-ring-prefixes"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1vc1e72/comment/p0yz4er/"
+scope = "The terminal target is the two Redeemer prefixes; no suffix finish or tier is invented."
+base = "Cryonic Ring"
+ilvl = 86
+influences = ["redeemer"]
+
+[goal]
+mods = [
+  { text = "Adds # to # Cold Damage against Chilled or Frozen Enemies", source = "influence" },
+  { text = "# to # Added Cold Damage per Frenzy Charge", source = "influence" },
+]
+
+[stages.a_solo]
+mods = [
+  { text = "Adds # to # Cold Damage against Chilled or Frozen Enemies", source = "influence" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.b_solo]
+mods = [
+  { text = "# to # Added Cold Damage per Frenzy Charge", source = "influence" },
+]
+rarity = "magic"
+max_mods = 1
+
+[[steps]]
+do = ["buy:base"]
+item = "a"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "a"
+until = "a_solo"
+
+[[steps]]
+do = ["buy:base"]
+item = "b"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "b"
+until = "b_solo"
+
+[[steps]]
+do = ["recombinator:a+b"]
+until = "goal"
+max = 1
+else = 1

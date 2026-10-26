@@ -1,0 +1,18 @@
+sheet = "ama-327-minion-physical-speed-jewel"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnrhvlx/"
+scope = "Any tier of the two requested affixes is accepted. Abyss-jewel affixes require the abyss_jewel domain."
+base = "Ghastly Eye Jewel"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "Minions deal # to # additional Physical Damage" },
+  { text = "Minions have #% increased Attack Speed / Minions have #% increased Cast Speed" },
+]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["fossil:corroded+jagged+shuddering"]
+until = "goal"

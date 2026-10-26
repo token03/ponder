@@ -1,8 +1,8 @@
 # Crafting reference recipes from Wuslwiz's AMAs
 
-Reviewed 2026-10-26 against the 46 sheet recipes in [fixtures/guides](../fixtures/guides). These **19 supplemental references** replace the earlier mixed 60-entry research catalogue. They cover the [3.29][ama329], [3.28][ama328], [3.27][ama327] and [3.26][ama326] AMAs, retaining ordinary crafting methods that add a distinct target, mod pool or operation sequence beyond the sheets.
+Reviewed 2026-10-26 against the 46 sheet recipes in [fixtures/guides](../fixtures/guides). These **19 supplemental references** replace the earlier mixed 60-entry research catalogue and now have **20 TOML equivalents** in the guide fixtures, including the Ghastly Eye fracture alternative. They cover the [3.29][ama329], [3.28][ama328], [3.27][ama327] and [3.26][ama326] AMAs, retaining ordinary crafting methods that add a distinct target, mod pool or operation sequence beyond the sheets.
 
-These are human recipe references for future tests, not new executable TOML fixtures or simulator-validated costs. Each source links to the answer and its request. Missing bases, tiers and item levels remain fixture choices rather than invented source facts. Historical prices, profit claims and estimated attempt counts are omitted.
+Each reference links to its TOML fixture and to the original answer and request. The fixtures choose representative bases and item level 86 where the answer leaves those open; unspecified tiers remain unconstrained. Historical source prices, profit claims and attempt estimates are not test inputs. Supplied fractured starting bases have an explicit zero price, so those fixtures measure subsequent crafting rather than a guessed market acquisition cost. Five jewel/cluster fixtures are validated against raw pinned data while their affix domains remain unsupported by the simulator. The Horror ring additionally awaits Glyphic's corrupted-essence effect.
 
 ## Conventions
 
@@ -17,7 +17,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 01. RF maximum-fire-resistance jewel
 
-**Reference:** `ama-328-rf-max-fire-jewel` · [3.28 request and answer][rf-jewel]
+**Reference:** `ama-328-rf-max-fire-jewel` · [3.28 request and answer][rf-jewel] · [TOML](../fixtures/guides/ama-328-rf-max-fire-jewel.toml)
 
 - **Start and target:** Ordinary jewel with fractured +2% maximum fire resistance; add increased maximum life and fire damage over time multiplier.
 - **Recipe:** Buy the fractured jewel, or obtain the maximum-resistance roll, Harvest-swap it to fire and fracture it. On the fractured base, repeat Harvest reforge fire until both remaining targets appear. An Exalt on a spare prefix is optional and outside the target.
@@ -27,7 +27,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 02. Physical-minion Ghastly Eye Jewel
 
-**Reference:** `ama-327-minion-physical-speed-jewel` · [3.27 request and answer][ghastly]
+**Reference:** `ama-327-minion-physical-speed-jewel` · [3.27 request and answer][ghastly] · [TOML](../fixtures/guides/ama-327-minion-physical-speed-jewel.toml) · [fractured alternative](../fixtures/guides/ama-327-minion-physical-speed-jewel-fractured.toml)
 
 - **Start and target:** Ghastly Eye Jewel; flat physical damage added to minion attacks and minion attack speed.
 - **Recipe A:** Repeat Corroded + Jagged + Shuddering in a three-socket resonator until both modifiers appear.
@@ -37,7 +37,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 03. Doryani's Lesson cold cluster
 
-**Reference:** `ama-327-cold-three-notable-cluster` · [3.27 request and answer][cold-cluster]
+**Reference:** `ama-327-cold-three-notable-cluster` · [3.27 request and answer][cold-cluster] · [TOML](../fixtures/guides/ama-327-cold-three-notable-cluster.toml)
 
 - **Start and target:** Large cold-damage cluster with fractured Doryani's Lesson; add Blanketed Snow and Prismatic Heart.
 - **Recipe:** Obtain the fractured notable, then repeat Dense + Prismatic + Pristine in a three-socket resonator until all three notables are present.
@@ -47,7 +47,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 04. Overlord staff cluster
 
-**Reference:** `ama-326-overlord-staff-cluster` · [3.26 request and answer][overlord]
+**Reference:** `ama-326-overlord-staff-cluster` · [3.26 request and answer][overlord] · [TOML](../fixtures/guides/ama-326-overlord-staff-cluster.toml)
 
 - **Start and target:** Mace/staff large cluster; Overlord and Fuel the Fight. Martial Prowess is the request's optional third notable.
 - **Recipe:** Repeat Harvest reforge attack until the chosen notable combination appears. Use separate acceptance predicates for the two-notable and three-notable versions.
@@ -59,7 +59,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 05. Fractured Despair, DoT multiplier and life ring
 
-**Reference:** `ama-329-despair-dot-ring` · [3.29 request and answer][despair-ring]
+**Reference:** `ama-329-despair-dot-ring` · [3.29 request and answer][despair-ring] · [TOML](../fixtures/guides/ama-329-despair-dot-ring.toml)
 
 - **Start and target:** Non-influenced Delve ring with fractured Despair on hit; essence DoT multiplier, an elemental resistance, life and a crafted mana-cost prefix.
 - **Recipe:** Use the DoT-multiplier essence until a satisfactory resistance appears with an open prefix. With the curse, multiplier and resistance filling suffixes, apply Matron/lock and Harvest reforge life. Repeat the lock/reforge stage until acceptable life and a spare prefix; craft mana cost.
@@ -69,7 +69,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 06. Dual-Redeemer cold prefixes on a Cryonic Ring
 
-**Reference:** `ama-329-redeemer-cold-ring-prefixes` · [3.29 request and answer][cryonic-ring]
+**Reference:** `ama-329-redeemer-cold-ring-prefixes` · [3.29 request and answer][cryonic-ring] · [TOML](../fixtures/guides/ama-329-redeemer-cold-ring-prefixes.toml)
 
 - **Start and target:** Redeemer Cryonic Rings; added cold damage against chilled/frozen enemies and added cold damage per frenzy charge on one output.
 - **Recipe:** Prepare one donor with each wanted prefix isolated. Recombine `1P + 1P → 2P`, rebuilding or recycling donors until both survive on an eligible output.
@@ -79,7 +79,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 07. Dexterity/resistance ring with unveiled life
 
-**Reference:** `ama-327-dex-resist-veiled-life-ring` · [3.27 request and answer][dex-ring]
+**Reference:** `ama-327-dex-resist-veiled-life-ring` · [3.27 request and answer][dex-ring] · [TOML](../fixtures/guides/ama-327-dex-resist-veiled-life-ring.toml)
 
 - **Start and target:** Ordinary ring, with Unset suggested in the request; dexterity, elemental resistance, chaos resistance and unveiled life.
 - **Recipe:** Dexterity essence until the elemental resistance, with a free suffix and prefix. Bench Suffixes Cannot Be Changed, then reforge chaos. Once suffixes are complete, Matron/lock, Veiled Chaos, block mana if there is room and unveil life. Choose a compatible final prefix craft.
@@ -88,7 +88,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 08. Intelligence/strength/cast-speed ring with ES
 
-**Reference:** `ama-326-attributes-cast-speed-es-ring` · [3.26 request and answer][attribute-ring]
+**Reference:** `ama-326-attributes-cast-speed-es-ring` · [3.26 request and answer][attribute-ring] · [TOML](../fixtures/guides/ama-326-attributes-cast-speed-es-ring.toml)
 
 - **Start and target:** Ordinary three-suffix ring; intelligence, strength, cast speed, energy shield and crafted channelled-skill mana cost.
 - **Recipe:** Intelligence essence until satisfactory strength. Lock suffixes and reforge caster for cast speed. Lock suffixes and Scour unwanted prefixes; reapply the lock and Harvest augment defence for ES. Repeat prefix clearing and the augment if the ES tier is too low. Craft channelled mana cost.
@@ -98,17 +98,17 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 09. Strength/intelligence/Hunter-attributes belt
 
-**Reference:** `ama-327-hunter-attribute-belt` · [3.27 answer][attribute-belt]
+**Reference:** `ama-327-hunter-attribute-belt` · [3.27 answer][attribute-belt] · [TOML](../fixtures/guides/ama-327-hunter-attribute-belt.toml)
 
 - **Start and target:** Non-influenced, non-fractured belt; intelligence, T1 strength, Hunter increased attributes, unveiled life and crafted elemental damage with attacks.
 - **Recipe:** Intelligence essence until T1 strength, exactly two filled prefixes, one open prefix and one open suffix. Hunter Exalt, aiming for increased attributes. With the successful suffix set full, Matron/lock, Veiled Chaos, block mana when possible, unveil life, then craft elemental damage with attacks.
 - **Retry:** A wrong Hunter suffix is a failed target; use another base rather than repeat the same pre-influence slam on it. Failed veils need a legal protected-prefix recovery or another attempt/base.
 - **Adds beyond the sheets:** A belt target and an influence slam directed to a suffix by occupied slots. There are no belt fixtures in the sheet set.
-- **Fixture choices:** The item image supplies no recoverable belt base or exact percentage-attributes tier. Pin those before testing; do not claim the influence slam guarantees the desired modifier.
+- **Fixture choices:** The item image supplies no recoverable belt base or exact percentage-attributes tier. The TOML chooses Leather Belt and accepts any attributes tier; do not claim the influence slam guarantees the desired modifier.
 
 ### 10. Horror frenzy-cold ring with attributes
 
-**Reference:** `ama-327-horror-frenzy-cold-ring` · [3.27 request and answer][horror-ring]
+**Reference:** `ama-327-horror-frenzy-cold-ring` · [3.27 request and answer][horror-ring] · [TOML](../fixtures/guides/ama-327-horror-frenzy-cold-ring.toml)
 
 - **Start and target:** Purchased synthesised ring; Horror's cold damage per frenzy prefix, strength, intelligence, chaos resistance and unveiled life. Creating the implicit is outside this recipe.
 - **Recipe:** Fundamental + Glyphic + Sanctified in a three-socket resonator until the wanted essence prefix and attributes appear. With a prefix and suffix available, lock suffixes and augment chaos. Reapply the suffix lock, Veiled Exalt, block mana where possible and unveil life. Select a compatible final craft.
@@ -119,7 +119,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 11. Holy Relic trigger sword with +1 socketed gems
 
-**Reference:** `ama-328-holy-relic-trigger-sword` · [3.28 request and answer][holy-relic]
+**Reference:** `ama-328-holy-relic-trigger-sword` · [3.28 request and answer][holy-relic] · [TOML](../fixtures/guides/ama-328-holy-relic-trigger-sword.toml)
 
 - **Start and target:** Non-influenced thrusting sword; essence minion damage, natural attack speed, +1 socketed gems, crafted trigger and Hits Cannot Be Evaded.
 - **Recipe:** Fear essence until acceptable attack speed. Annul or split down to a rare retaining just those two affixes. Craft Multimod plus Cannot Roll Attack Modifiers, filling all three suffix slots. Exalt for +1 socketed gems. Remove crafts, then Multimod trigger and Hits Cannot Be Evaded.
@@ -129,9 +129,9 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 12. Crusader physical-DoT Citadel Bow
 
-**Reference:** `ama-328-crusader-physical-dot-bow` · [3.28 request and answer][physical-bow]
+**Reference:** `ama-328-crusader-physical-dot-bow` · [3.28 request and answer][physical-bow] · [TOML](../fixtures/guides/ama-328-crusader-physical-dot-bow.toml)
 
-- **Start and target:** High-level Crusader Citadel Bow; Contempt flat physical, generic attack DoT multiplier, Crusader physical/projectile-speed hybrid, crafted physical scaling and a chosen crafted suffix.
+- **Start and target:** High-level Crusader Citadel Bow; Contempt flat physical, generic DoT multiplier, Crusader physical/projectile-speed hybrid, crafted physical scaling and a chosen crafted suffix.
 - **Recipe:** Contempt essence until DoT multiplier, then annul to exactly that prefix and suffix on a rare. Craft Multimod, Prefixes Cannot Be Changed and Suffixes Cannot Be Changed. Harvest reforge speed into the only open prefix. Remove crafts; Multimod increased physical damage and either attack speed or physical DoT multiplier.
 - **Retry:** Failed isolation returns to essences. Reaching the protected slot arrangement is mandatory; do not apply this as an unrestricted reforge.
 - **Adds beyond the sheets:** A physical DoT bow and simultaneous prefix/suffix protection. Existing bow sheets target elemental prefixes.
@@ -139,7 +139,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 13. Hunter double-DoT quiver
 
-**Reference:** `ama-328-hunter-double-dot-quiver` · [3.28 request and answer][hunter-quiver]
+**Reference:** `ama-328-hunter-double-dot-quiver` · [3.28 request and answer][hunter-quiver] · [TOML](../fixtures/guides/ama-328-hunter-double-dot-quiver.toml)
 
 - **Start and target:** Hunter Vile Quiver; chaos DoT multiplier with attack skills and generic DoT multiplier with attack skills, plus crafted attack speed. Prefix quality can be a separate stricter target.
 - **Recipe:** Alteration-roll each suffix as a solo mod on separate Hunter donors. Recombine until both survive on a two-mod rare. Craft Cannot Roll Attack Modifiers and Exalt prefixes. If unacceptable, lock suffixes/Scour, restore the attack blocker and repeat. Fill prefixes, remove the blocker and craft attack speed.
@@ -149,7 +149,7 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 14. Torment quiver with a final Hunter slam
 
-**Reference:** `ama-326-torment-hunter-fire-dot-quiver` · [3.26 request and answer][torment-quiver]
+**Reference:** `ama-326-torment-hunter-fire-dot-quiver` · [3.26 request and answer][torment-quiver] · [TOML](../fixtures/guides/ama-326-torment-hunter-fire-dot-quiver.toml)
 
 - **Start and target:** Initially non-influenced quiver; Torment flat lightning, generic attack DoT multiplier, life, bow damage, crafted attack speed and Hunter fire DoT multiplier.
 - **Recipe:** Torment essence until the generic multiplier; annul to those two mods. Craft Multimod plus Cannot Roll Attack Modifiers and Exalt twice for prefixes. Remove crafts, craft attack speed, then Hunter Exalt for the desired fire-DoT suffix.
@@ -159,30 +159,30 @@ These are human recipe references for future tests, not new executable TOML fixt
 
 ### 15. Budget mana-RF sceptre
 
-**Reference:** `ama-328-budget-mana-rf-sceptre` · [3.28 request and answer][mana-rf]
+**Reference:** `ama-328-budget-mana-rf-sceptre` · [3.28 request and answer][mana-rf] · [TOML](../fixtures/guides/ama-328-budget-mana-rf-sceptre.toml)
 
 - **Start and target:** Sceptre; natural mana prefix, natural generic DoT multiplier suffix, crafted fire DoT multiplier and crafted spell damage.
 - **Recipe:** Roll solo mana on one magic donor and solo DoT multiplier on another. Recombine until both survive, then obtain the rare item state and room needed to Multimod fire DoT multiplier plus spell damage.
 - **Retry:** Rebuild or recycle donors after failed combinations. A magic one-prefix/one-suffix result cannot be treated as already having rare-item crafting capacity.
 - **Adds beyond the sheets:** A budget mixed-side recombination followed by crafted completion, with a different target from the +2 spell weapons. It is the author's explicit cheaper alternative to the requested four-natural-mod weapon.
-- **Fixture choices:** The source does not specify sceptre base, mana/multiplier tiers or a separate rarity-conversion sequence. Keep the desired rare donor-product stage explicit when encoding that transition.
+- **Fixture choices:** The source does not specify sceptre base, mana/multiplier tiers or a rarity-conversion sequence. The TOML chooses Opal Sceptre with any tiers and explicitly pays for Regal/annul normalisation when the mixed-side product is magic.
 
 ### 16. Fire-DoT sceptre with three completed suffixes
 
-**Reference:** `ama-327-fire-dot-spell-crit-sceptre` · [3.27 answer][fire-sceptre]
+**Reference:** `ama-327-fire-dot-spell-crit-sceptre` · [3.27 answer][fire-sceptre] · [TOML](../fixtures/guides/ama-327-fire-dot-spell-crit-sceptre.toml)
 
 - **Start and target:** Sceptre; generic DoT multiplier, fire DoT multiplier and essence spell-critical chance suffixes, unveiled increased fire damage and crafted increased DoT damage.
 - **Recipe:** Shrieking spell-critical essence until generic DoT multiplier for one pair. Recombine a separate spell-critical donor with isolated high fire DoT multiplier for the second pair. Combine the overlapping pairs until all three suffixes survive. Matron/lock, Veiled Chaos, block physical damage before unveiling, seek increased fire damage and craft DoT damage.
 - **Retry:** Failed suffix combinations return to the relevant donor pairs. Failed prefix unveils repeat the protected veil stage only when cleanup is legal; otherwise restart.
 - **Adds beyond the sheets:** A three-suffix recombination ladder followed by a rare prefix unveil. The budget mana sceptre instead stops at one natural prefix and one natural suffix.
-- **Fixture choices:** Base and exact suffix tiers are not recoverable from the request image. The answer identifies the affixes and method, but does not justify a particular T1 acceptance predicate.
+- **Fixture choices:** Base and exact suffix tiers are not recoverable from the request image. The TOML chooses Opal Sceptre with any suffix tiers; the answer does not justify a T1 predicate.
 
 ### 17. Archmage spell-damage/mana wand
 
-**Reference:** `ama-326-archmage-mana-wand` · [3.26 answer][archmage]
+**Reference:** `ama-326-archmage-mana-wand` · [3.26 answer][archmage] · [TOML](../fixtures/guides/ama-326-archmage-mana-wand.toml)
 
 - **Start and target:** Wand with fractured spell-damage/mana hybrid; Woe spell damage, T3-or-better mana and cast speed, and unveiled double damage.
-- **Recipe:** Woe essence until acceptable mana. Open a suffix if needed, risking a restart. Lock prefixes and reforge caster until acceptable cast speed. Relock prefixes and Veiled Exalt, aiming to retain cast speed. Block damage-per-charge before unveiling, then seek double damage.
+- **Recipe:** Woe essence until acceptable mana. Open a suffix if needed, risking a restart. Lock prefixes and reforge caster until acceptable cast speed as the sole suffix. Relock prefixes and Veiled Exalt, aiming to retain cast speed. Block damage-per-charge before unveiling, then seek double damage.
 - **Retry:** Losing an ordinary prefix returns to essences. Losing cast speed or missing the unveil returns to protected suffix cleanup and the caster stage; a legal lock is required.
 - **Adds beyond the sheets:** A fractured hybrid prefix, three completed caster prefixes and a suffix-add/remove risk. Existing caster wands focus on +2 gem levels.
 - **Scope:** The source recommends T3-or-better mana/cast speed as the practical target. Stop the reference predicate at unveiled double damage. Its final “craft double damage” instruction does not name the variant, so do not invent a second compatible double-damage requirement.
@@ -193,7 +193,7 @@ For the next two recipes, the common protected setup starts with **one natural p
 
 ### 18. +1 chaos, block and ES recovery on block
 
-**Reference:** `ama-328-chaos-block-es-recovery-shield` · [3.28 request and answer][chaos-shield]
+**Reference:** `ama-328-chaos-block-es-recovery-shield` · [3.28 request and answer][chaos-shield] · [TOML](../fixtures/guides/ama-328-chaos-block-es-recovery-shield.toml)
 
 - **Start and target:** Shaper intelligence shield; T1 increased block prefix, ES recovery on block suffix and +1 chaos spell gems prefix.
 - **Recipe:** Alteration-roll recovery and block on separate eligible Shaper donors. Recombine into the two-mod rare. Apply the protected 2P/3S arrangement above, then Harvest reforge chaos. Remove crafts and choose compatible Multimod finishing affixes.
@@ -203,7 +203,7 @@ For the next two recipes, the common protected setup starts with **one natural p
 
 ### 19. +1 minions, minion damage and life recovery on block
 
-**Reference:** `ama-328-minion-life-recovery-shield` · [3.28 request and answer][minion-shield]
+**Reference:** `ama-328-minion-life-recovery-shield` · [3.28 request and answer][minion-shield] · [TOML](../fixtures/guides/ama-328-minion-life-recovery-shield.toml)
 
 - **Start and target:** Shaper minion-capable spirit shield; natural minion-damage prefix, life recovery on block suffix and +1 all minion gems prefix.
 - **Recipe:** Roll/isolate the recovery suffix and minion-damage prefix on separate donors. Recombine into the two-mod rare. Apply the protected 2P/3S arrangement, then Harvest reforge minion. Remove crafts and select compatible finishing crafts.
@@ -220,13 +220,25 @@ The comparison was against the existing 46 TOML sheet recipes, not just item nam
 - **Insufficient answers removed:** Image-only targets, vague “recombine and pray” advice, unanswered requests, unexpanded redirects to a spreadsheet, and disputed or corrected guarantees without a clear final recipe. The three-T1-minion-stat Bone Ring request, for example, has no concrete author-supplied method worth promoting here.
 - **No silent upgrades:** The Cryonic reference ends at two prefixes; the Hunter quiver uses the suffix the answer actually supplies; the Archmage reference leaves the ambiguous last bench variant unconstrained. None claims a complete original six-affix screenshot target from incomplete text.
 
-## Turning references into tests
+## Validation and running the tests
 
-The first useful additions are 01–04 for entirely new jewel/cluster pools, 11 for a narrowly blocked sword Exalt, and 12/18/19 for simultaneous affix locks during targeted reforges. The belt and two quiver routes add influence-slam cases absent from the sheet goals.
+All 66 guides pass static validation, including source links, mod templates, base eligibility, tiers, operations, purchased-stage prices and donor dependencies. The AMA/reference correspondence is tested too. All 14 currently supported AMA recipe fixtures pass exact recipe evaluation against 500 real-item samples per thread; six remain explicitly inactive (five for affix domains/base tags and the Horror ring for Glyphic).
+
+Run one recipe at a time with the existing caps:
+
+```sh
+(ulimit -v 8000000; GUIDE=ama-328-crusader-physical-dot-bow LIMIT=200000 \
+  RAYON_NUM_THREADS=4 timeout 120 cargo test --release -p ponder-plan \
+  --test guides ama_recipes_match_real_items -- --nocapture)
+```
+
+The separate `guides_cost_no_less_than_ponder` test also searches for a cheaper plan. That optimization is a stronger, more expensive check: the dexterity ring hit the 200,000-state cap and the fire-DoT sceptre reached the 120-second cap. Those limits were not raised. Recipe agreement does not imply those best-plan searches finish.
+
+The protected-reforge regression checks both lock preservation and the forced tagged result for the bow and both shields, in enumeration and sampled items.
 
 Keep source predicates separate from implementation status. The pinned raw data includes ordinary-jewel mods in the `misc` domain, abyss-jewel mods in `abyss_jewel`, and cluster notables in `affliction_jewel`; the current rules loader does not yet import those domains. Those recipes remain valuable references, but cannot be called passing fixtures merely because the source mods exist in the compressed data.
 
-For an executable fixture, choose the unresolved base/level/tiers, spell out purchased starting states, compile the exact mod templates and origins against the pinned snapshot, encode failure transitions, and compare recipe enumeration with real-item sampling. A partial request becomes a test only for its explicitly stated terminal subgoal. No solver, prices or existing sheet fixtures were changed for this curation.
+When tightening a fixture, resolve any new base/level/tier requirements, preserve its purchased-start cost boundary, recompile templates and origins against the pinned snapshot, and rerun exact-versus-sampled recipe checks. A partial request becomes a test only for its explicitly stated terminal subgoal. The original 46 sheet fixtures and price snapshot are unchanged. Supplied-item witness construction now permits bought legacy/elevated affixes, and the operation catalogue names the bench/unveil choices required by these recipes. Additional cluster base tags are recorded explicitly and remain outside solver support. The new protected-reforge regression also fixes simultaneous affix locks in the shared rules: both sides remain protected rather than whichever lock was found first.
 
 [ama329]: https://www.reddit.com/r/PathOfExileBuilds/comments/1vc1e72/ama_crafting_ama_for_329_curse_of_the_allflame/
 [ama328]: https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/ama_crafting_ama_for_328_mirage_everything_you/

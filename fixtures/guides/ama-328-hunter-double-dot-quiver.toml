@@ -1,0 +1,147 @@
+sheet = "ama-328-hunter-double-dot-quiver"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oaeuckp/"
+scope = "The core target is the two supplied DoT suffixes plus crafted attack speed. Random prefix quality is not a guaranteed target."
+base = "Vile Arrow Quiver"
+ilvl = 86
+influences = ["hunter"]
+
+[goal]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+  { text = "#% increased Attack Speed", source = "crafted" },
+]
+
+[stages.a_solo]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.b_solo]
+mods = [
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.main_combined]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+
+[stages.main_rare]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "rare"
+
+[stages.main_5]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.main_4]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.main_3]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.main_2]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.full_prefixes]
+mods = [
+  { text = "+#% to Chaos Damage over Time Multiplier with Attack Skills", source = "influence" },
+  { text = "+#% to Damage over Time Multiplier with Attack Skills" },
+]
+max_suffix = 3
+open_prefix = 0
+
+[[steps]]
+do = ["buy:base"]
+item = "a"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "a"
+until = "a_solo"
+
+[[steps]]
+do = ["buy:base"]
+item = "b"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "b"
+until = "b_solo"
+
+[[steps]]
+do = ["recombinator:a+b"]
+until = "main_combined"
+max = 1
+else = 1
+
+[[steps]]
+do = ["regal"]
+until = "main_rare"
+max = 1
+note = "A magic mixed-side result needs an explicit Regal before annulling to a two-mod rare."
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_5"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_4"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_3"
+max = 1
+else = 1
+
+[[steps]]
+do = ["annulment"]
+until = "main_2"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:cannot-roll-attack", "exalted", "exalted", "exalted"]
+until = "full_prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:attack-speed"]
+until = "goal"
+max = 1
+else = 1

@@ -50,13 +50,9 @@ impl Item {
         self.affixes.iter().any(|a| game.def(a.id).groups.iter().any(|g| groups.contains(g)))
     }
 
-    /// The side a "Cannot Be Changed" metamod protects.
-    pub fn locked(&self, game: &Game) -> Option<Side> {
-        self.affixes.iter().find_map(|a| match game.metamods.iter().position(|m| *m == a.id) {
-            Some(0) => Some(Side::Prefix),
-            Some(1) => Some(Side::Suffix),
-            _ => None,
-        })
+    /// The sides "Cannot Be Changed" metamods protect.
+    pub fn locked(&self, game: &Game) -> [bool; 2] {
+        Side::BOTH.map(|side| game.metamods.get(side as usize).is_some_and(|m| self.affixes.iter().any(|a| a.id == *m)))
     }
 
     pub fn crafted(&self) -> usize {

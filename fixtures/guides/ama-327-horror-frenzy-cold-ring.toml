@@ -1,0 +1,51 @@
+sheet = "ama-327-horror-frenzy-cold-ring"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnxr9qu/"
+scope = "A purchased synthesised Opal Ring is the source prerequisite; synthesis implicits are outside this affix-only predicate. Strength and intelligence tiers are unspecified."
+base = "Opal Ring"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "+# to Intelligence" },
+  { text = "+#% to Chaos Resistance" },
+  { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
+]
+
+[stages.attributes]
+mods = [
+  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "+# to Intelligence" },
+]
+open_prefix = 1
+open_suffix = 1
+
+[stages.chaos]
+mods = [
+  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "+# to Intelligence" },
+  { text = "+#% to Chaos Resistance" },
+]
+open_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["fossil:fundamental+glyphic+sanctified"]
+until = "attributes"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:augment-chaos"]
+until = "chaos"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-exalted", "bench:mana", "unveil:life", "bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 2

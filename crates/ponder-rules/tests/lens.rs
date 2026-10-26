@@ -297,6 +297,55 @@ fn recombination_cache_tracks_keep_count_weights() {
 }
 
 #[test]
+fn both_locks_preserve_the_ama_tagged_reforge_setup() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let assumptions = Assumptions::default();
+    let ctx = Ctx { game: &game, assumptions: &assumptions };
+    for (name, start, finish, tag) in [
+        ("ama-328-crusader-physical-dot-bow", "isolated_2", "prefixes", "speed"),
+        ("ama-328-chaos-block-es-recovery-shield", "main_2", "natural", "chaos"),
+        ("ama-328-minion-life-recovery-shield", "main_2", "natural", "minion"),
+    ] {
+        let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join(format!("fixtures/guides/{name}.toml"))).unwrap()).unwrap();
+        let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: guide.ilvl.unwrap(), influences: Influences::of(&guide.influences) };
+        let class = &game.bases[kind.base.0 as usize].class;
+        let mut item = Target::compile(&game, &guide.target(start).unwrap()).unwrap().witness(&game, kind).unwrap();
+        let mut keep = guide.target("protected").unwrap();
+        keep.open_prefix = 0;
+        let targets = vec![Target::compile(&game, &guide.target(finish).unwrap()).unwrap(), Target::compile(&game, &keep).unwrap()];
+        let mut rng = Rng::new(42);
+        let locks: Vec<_> = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"]
+            .iter()
+            .map(|name| parse(&game, class, name, &[]).unwrap())
+            .collect();
+        for op in &locks {
+            assert!(op.applies(&ctx, &(&game, &item)));
+            run(&ctx, op.steps(), &mut item, &mut rng);
+        }
+        let reforge = parse(&game, class, &format!("harvest:reforge-{tag}"), &[]).unwrap();
+        let annul = parse(&game, class, "annulment", &[]).unwrap();
+        let scour = parse(&game, class, "scouring", &[]).unwrap();
+        let refs: Vec<_> = locks.iter().map(|o| o.as_ref()).chain([reforge.as_ref(), annul.as_ref(), scour.as_ref()]).collect();
+        let lens = Lens::new(&game, kind, targets.clone(), &refs, &[&item]);
+        let state = lens.project(&item);
+        for op in [annul.as_ref(), scour.as_ref()] {
+            assert_eq!(lens.run(&ctx, op.steps(), &state), vec![(1.0, state.clone())], "{name}: {}", op.name());
+            let mut sampled = item.clone();
+            run(&ctx, op.steps(), &mut sampled, &mut rng);
+            assert_eq!(sampled, item, "{name}: {}", op.name());
+        }
+        let outcomes = lens.run(&ctx, reforge.steps(), &state);
+        assert!((outcomes.iter().map(|o| o.0).sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(outcomes.iter().all(|(_, s)| lens.holds(0, s) && lens.holds(1, s)), "{name}");
+        for _ in 0..100 {
+            let mut sampled = item.clone();
+            run(&ctx, reforge.steps(), &mut sampled, &mut rng);
+            assert!(targets.iter().all(|t| t.holds(&game, &sampled)), "{name}");
+        }
+    }
+}
+
+#[test]
 fn permanent_conflicts_are_pruned_only_when_they_cannot_be_removed() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide =

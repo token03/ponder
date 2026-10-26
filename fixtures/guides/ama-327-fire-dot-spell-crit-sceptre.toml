@@ -1,0 +1,249 @@
+sheet = "ama-327-fire-dot-spell-crit-sceptre"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnsbrm6/"
+scope = "Any natural multiplier tiers are accepted. Shrieking Scorn forces a natural spell-critical modifier, not an essence-only origin."
+base = "Opal Sceptre"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "+#% to Fire Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+  { text = "#% increased Fire Damage / #% chance to Ignite", source = "veiled" },
+  { text = "#% increased Damage over Time", source = "crafted" },
+]
+
+[stages.a_pair]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+
+[stages.a_isolated_5]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.a_isolated_4]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.a_isolated_3]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.a_isolated_2]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.b_solo]
+mods = [
+  { text = "+#% to Fire Damage over Time Multiplier" },
+]
+rarity = "magic"
+max_mods = 1
+
+[stages.c_crit]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+
+[stages.c_isolated_5]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 5
+
+[stages.c_isolated_4]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 4
+
+[stages.c_isolated_3]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 3
+
+[stages.c_isolated_2]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 2
+
+[stages.c_isolated_1]
+mods = [
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+rarity = "rare"
+max_mods = 1
+
+[stages.bc_combined]
+mods = [
+  { text = "+#% to Fire Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+
+[stages.suffixes]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "+#% to Fire Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+]
+open_prefix = 1
+
+[stages.unveiled]
+mods = [
+  { text = "+#% to Damage over Time Multiplier" },
+  { text = "+#% to Fire Damage over Time Multiplier" },
+  { text = "#% increased Spell Critical Strike Chance", source = "natural" },
+  { text = "#% increased Fire Damage / #% chance to Ignite", source = "veiled" },
+]
+open_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+item = "a"
+
+[[steps]]
+do = ["essence:shrieking-scorn"]
+item = "a"
+until = "a_pair"
+
+[[steps]]
+do = ["annulment"]
+item = "a"
+until = "a_isolated_5"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+item = "a"
+until = "a_isolated_4"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+item = "a"
+until = "a_isolated_3"
+max = 1
+else = 2
+
+[[steps]]
+do = ["annulment"]
+item = "a"
+until = "a_isolated_2"
+max = 1
+else = 2
+
+[[steps]]
+do = ["buy:base"]
+item = "b"
+
+[[steps]]
+do = ["transmutation", "alteration"]
+item = "b"
+until = "b_solo"
+
+[[steps]]
+do = ["buy:base"]
+item = "c"
+
+[[steps]]
+do = ["essence:shrieking-scorn"]
+item = "c"
+until = "c_crit"
+
+[[steps]]
+do = ["annulment"]
+item = "c"
+until = "c_isolated_5"
+max = 1
+else = 10
+
+[[steps]]
+do = ["annulment"]
+item = "c"
+until = "c_isolated_4"
+max = 1
+else = 10
+
+[[steps]]
+do = ["annulment"]
+item = "c"
+until = "c_isolated_3"
+max = 1
+else = 10
+
+[[steps]]
+do = ["annulment"]
+item = "c"
+until = "c_isolated_2"
+max = 1
+else = 10
+
+[[steps]]
+do = ["annulment"]
+item = "c"
+until = "c_isolated_1"
+max = 1
+else = 10
+
+[[steps]]
+do = ["recombinator:b+c"]
+item = "bc"
+until = "bc_combined"
+max = 1
+else = 7
+
+[[steps]]
+do = ["recombinator:a+bc"]
+until = "suffixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:physical-damage", "unveil:fire-damage", "bench:remove-crafted"]
+until = "unveiled"
+max = 1
+else = 20
+
+[[steps]]
+do = ["bench:increased-damage-over-time"]
+until = "goal"
+max = 1
+else = 20
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "suffixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 18

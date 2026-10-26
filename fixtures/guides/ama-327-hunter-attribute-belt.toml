@@ -1,0 +1,77 @@
+sheet = "ama-327-hunter-attribute-belt"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnxsv6n/"
+scope = "Leather Belt is a representative base. Exact occupied-slot counts direct the Hunter slam to a suffix; the desired influenced modifier is not guaranteed."
+base = "Leather Belt"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength", tier = 1 },
+  { text = "#% increased Attributes", source = "influence" },
+  { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
+  { text = "#% increased Elemental Damage with Attack Skills", source = "crafted" },
+]
+
+[stages.attributes]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength", tier = 1 },
+]
+max_prefix = 2
+max_suffix = 2
+min_mods = 4
+
+[stages.suffixes]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength", tier = 1 },
+  { text = "#% increased Attributes", source = "influence" },
+]
+open_prefix = 1
+
+[stages.life]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength", tier = 1 },
+  { text = "#% increased Attributes", source = "influence" },
+  { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
+]
+open_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-spite"]
+until = "attributes"
+
+[[steps]]
+do = ["influence-exalted:hunter"]
+until = "suffixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:mana", "unveil:life", "bench:remove-crafted"]
+until = "life"
+max = 1
+else = 6
+
+[[steps]]
+do = ["bench:elemental-damage-with-attacks"]
+until = "goal"
+max = 1
+else = 6
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "suffixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 4

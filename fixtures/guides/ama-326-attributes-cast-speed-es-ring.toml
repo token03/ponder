@@ -1,0 +1,78 @@
+sheet = "ama-326-attributes-cast-speed-es-ring"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1lgu3b7/comment/mz1o6ha/"
+scope = "The ordinary three-suffix ring route; the optional Cogwork fourth suffix is excluded. Unspecified tiers are unconstrained."
+base = "Unset Ring"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "#% increased Cast Speed" },
+  { text = "+# to maximum Energy Shield" },
+  { text = "Channelling Skills have # to Total Mana Cost", source = "crafted" },
+]
+
+[stages.attributes]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength" },
+]
+open_prefix = 1
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "#% increased Cast Speed" },
+]
+open_prefix = 1
+
+[stages.clean]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "#% increased Cast Speed" },
+]
+max_prefix = 0
+
+[stages.es]
+mods = [
+  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Strength" },
+  { text = "#% increased Cast Speed" },
+  { text = "+# to maximum Energy Shield" },
+]
+open_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-spite"]
+until = "attributes"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-caster"]
+until = "suffixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "clean"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:augment-defence"]
+until = "es"
+max = 1
+else = 4
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:mana-cost-channelling"]
+until = "goal"
+max = 1
+else = 4

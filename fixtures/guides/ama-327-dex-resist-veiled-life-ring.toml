@@ -1,0 +1,60 @@
+sheet = "ama-327-dex-resist-veiled-life-ring"
+source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnsez4n/"
+scope = "Fire resistance is the chosen elemental resistance. The terminal predicate stops at unveiled life; the optional final prefix craft is omitted. Rings have no Eldritch cleanup."
+base = "Unset Ring"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to Dexterity", source = "essence" },
+  { text = "+#% to Fire Resistance" },
+  { text = "+#% to Chaos Resistance" },
+  { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
+]
+
+[stages.two_suffixes]
+mods = [
+  { text = "+# to Dexterity", source = "essence" },
+  { text = "+#% to Fire Resistance" },
+]
+open_prefix = 1
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to Dexterity", source = "essence" },
+  { text = "+#% to Fire Resistance" },
+  { text = "+#% to Chaos Resistance" },
+]
+open_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-sorrow"]
+until = "two_suffixes"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-chaos"]
+until = "suffixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:mana", "unveil:life", "bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 5
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "scouring"]
+until = "suffixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:remove-crafted"]
+until = "goal"
+max = 1
+else = 4

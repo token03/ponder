@@ -21,7 +21,7 @@ impl Fossils {
     /// abyssal socket) apply only where the item class can spawn them.
     pub fn new(game: &Game, arg: &str, class: &str) -> Option<Fossils> {
         let names: Vec<&str> = arg.split('+').collect();
-        if names.is_empty() || names.len() > RESONATORS.len() {
+        if names.is_empty() || names.len() > RESONATORS.len() || names.iter().any(|n| n.eq_ignore_ascii_case("glyphic")) {
             return None;
         }
         let mut tags: Vec<(crate::game::TagId, f64, f64)> = Vec::new();
