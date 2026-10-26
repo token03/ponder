@@ -9,7 +9,7 @@ use ponder_rules::game::{Game, Influences, Kind, Side};
 use ponder_rules::goal::{Rarity, Source};
 use ponder_rules::item::{Affix, Item};
 use ponder_rules::ops::currency::Currency;
-use ponder_rules::ops::{Ctx, Operation, eligible};
+use ponder_rules::ops::{Ctx, Operation, eligible, run};
 use ponder_rules::rng::Rng;
 
 fn game() -> &'static Game {
@@ -43,10 +43,14 @@ fn check(game: &Game, item: &Item, fractured: &[Affix]) -> Result<(), String> {
         }
         if !a.fractured && !a.crafted {
             let pool = game.pool(item.kind);
+            if def.source == Source::Essence {
+                continue;
+            }
             if !matches!(def.source, Source::Natural | Source::Influence) || !pool.mods.iter().any(|(m, _)| *m == a.id) {
                 return Err(format!("{} cannot roll here", def.key));
             }
-            if def.level > item.kind.ilvl as u32 {
+            let forced = game.essences.iter().any(|e| e.mods.values().any(|m| m.as_deref() == Some(def.key.as_str())));
+            if def.level > item.kind.ilvl as u32 && !forced {
                 return Err(format!("{} above item level", def.key));
             }
         }
@@ -58,6 +62,15 @@ fn check(game: &Game, item: &Item, fractured: &[Affix]) -> Result<(), String> {
         return Err("normal item with mods".into());
     }
     Ok(())
+}
+
+/// Every implemented operation that exists for this item class.
+fn operations(game: &Game, class: &str) -> Vec<Box<dyn Operation>> {
+    let mut names: Vec<String> = Currency::ALL.iter().map(|c| c.name()).collect();
+    names.extend(["essence:deafening-woe", "essence:deafening-anger", "essence:deafening-envy"].map(String::from));
+    names.extend(["prefixes-cannot-be-changed", "suffixes-cannot-be-changed", "multimod", "remove-crafted"].map(|b| format!("bench:{b}")));
+    names.extend(["critical", "life", "fire", "defence", "caster"].map(|h| format!("harvest:reforge-{h}")));
+    names.iter().filter_map(|n| ponder_rules::ops::parse(game, class, n)).collect()
 }
 
 #[test]
@@ -73,15 +86,17 @@ fn random_walks_obey_the_rules() {
             if walk % 2 == 1 {
                 // Start from a rare with one fractured mod.
                 item.rarity = Rarity::Rare;
-                let pool = eligible(&ctx, &item, None);
+                let pool = eligible(&ctx, &item, None, None);
                 let a = Affix { id: pool[walk % pool.len()].0, crafted: false, fractured: true };
                 item.affixes.push(a);
                 fractured.push(a);
             }
             for step in 0..40 {
-                let usable: Vec<Currency> = Currency::ALL.into_iter().filter(|c| c.applies(&ctx, &item)).collect();
+                let class = &game.bases[kind.base.0 as usize].class;
+                let ops = operations(game, class);
+                let usable: Vec<&dyn Operation> = ops.iter().map(|o| o.as_ref()).filter(|o| o.applies(&ctx, &(game, &item))).collect();
                 let op = usable[(rng.next_u64() % usable.len() as u64) as usize];
-                op.apply(&ctx, &mut item, &mut rng);
+                run(&ctx, op.steps(), &mut item, &mut rng);
                 if let Err(e) = check(game, &item, &fractured) {
                     panic!(
                         "{} ilvl {} walk {walk} step {step} after {}: {e}\n{item:?}",
@@ -103,11 +118,11 @@ fn chaos_mod_counts_follow_the_assumption() {
     let kind = Kind { base: game.base("Titan Gauntlets").unwrap(), ilvl: 86, influences: Influences::default() };
     let mut item = Item::new(kind);
     let mut rng = Rng::new(11);
-    Currency::Alchemy.apply(&ctx, &mut item, &mut rng);
+    run(&ctx, Currency::Alchemy.steps(), &mut item, &mut rng);
     let mut counts = [0usize; 7];
     let n = 20_000;
     for _ in 0..n {
-        Currency::Chaos.apply(&ctx, &mut item, &mut rng);
+        run(&ctx, Currency::Chaos.steps(), &mut item, &mut rng);
         counts[item.affixes.len()] += 1;
     }
     let total: f64 = assumptions.rare_mods.iter().map(|e| e.1).sum();

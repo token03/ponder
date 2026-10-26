@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::game::{BaseId, Game, Influences, Kind, ModId, Side};
 use crate::goal::{Goal, Rarity, Source};
-use crate::item::{Affix, Item};
+use crate::item::Item;
 
 /// One compiled `ModReq`: `count` distinct affixes from `ok`.
 #[derive(Clone, Debug)]
@@ -76,35 +76,43 @@ impl Target {
     }
 
     pub fn holds(&self, game: &Game, item: &Item) -> bool {
-        let n = item.affixes.len();
+        let count = Side::BOTH.map(|s| item.count(game, s));
+        let open = Side::BOTH.map(|s| item.open(game, s));
         self.base.is_none_or(|b| b == item.kind.base)
             && item.kind.ilvl >= self.ilvl
             && item.quality >= self.quality
             && item.kind.influences.0 & self.influences.0 == self.influences.0
-            && self.rarity.is_none_or(|r| r == item.rarity)
+            && self.shape(item.rarity, count, open)
+            && matches(&self.needs, item.affixes.len(), &|need, i| {
+                let (need, a) = (&self.needs[need], &item.affixes[i]);
+                need.ok.contains(&a.id) && (!need.fractured || a.fractured)
+            })
+    }
+
+    /// The rarity and affix-count conditions.
+    pub fn shape(&self, rarity: Rarity, count: [usize; 2], open: [usize; 2]) -> bool {
+        let n = count[0] + count[1];
+        self.rarity.is_none_or(|r| r == rarity)
             && self.max_mods.is_none_or(|m| n <= m as usize)
             && n >= self.min_mods as usize
-            && Side::BOTH.iter().all(|&s| {
-                item.open(game, s) >= self.open[s as usize] as usize
-                    && self.max_side[s as usize].is_none_or(|m| item.count(game, s) <= m as usize)
-            })
-            && assign(&self.needs, &item.affixes, &mut vec![false; n])
+            && (0..2).all(|s| open[s] >= self.open[s] as usize && self.max_side[s].is_none_or(|m| count[s] <= m as usize))
     }
 }
 
-/// Can every need take its count of distinct, unused affixes? Backtracking: items have at most
-/// six affixes.
-fn assign(needs: &[Need], affixes: &[Affix], used: &mut Vec<bool>) -> bool {
-    let Some((need, rest)) = needs.split_first() else { return true };
-    fn take(need: &Need, left: u8, from: usize, rest: &[Need], affixes: &[Affix], used: &mut Vec<bool>) -> bool {
-        if left == 0 {
-            return assign(rest, affixes, used);
+/// Can every need take its count of distinct affixes, where `fits(need, affix)` says whether an
+/// affix serves a need? Backtracking: items have at most six affixes.
+pub fn matches(needs: &[Need], affixes: usize, fits: &impl Fn(usize, usize) -> bool) -> bool {
+    fn go(needs: &[Need], at: usize, left: u8, from: usize, used: &mut [bool], fits: &impl Fn(usize, usize) -> bool) -> bool {
+        if at == needs.len() {
+            return true;
         }
-        for i in from..affixes.len() {
-            let a = &affixes[i];
-            if !used[i] && need.ok.contains(&a.id) && (!need.fractured || a.fractured) {
+        if left == 0 {
+            return at + 1 == needs.len() || go(needs, at + 1, needs[at + 1].count, 0, used, fits);
+        }
+        for i in from..used.len() {
+            if !used[i] && fits(at, i) {
                 used[i] = true;
-                if take(need, left - 1, i + 1, rest, affixes, used) {
+                if go(needs, at, left - 1, i + 1, used, fits) {
                     return true;
                 }
                 used[i] = false;
@@ -112,5 +120,5 @@ fn assign(needs: &[Need], affixes: &[Affix], used: &mut Vec<bool>) -> bool {
         }
         false
     }
-    take(need, need.count, 0, rest, affixes, used)
+    needs.is_empty() || go(needs, 0, needs[0].count, 0, &mut vec![false; affixes], fits)
 }

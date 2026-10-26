@@ -125,38 +125,49 @@ game data ─► rules (Item, Operation, mechanics/*) ─► planner (goals, sub
                      simulator ◄──────── recipe rendering ◄───┘
 ```
 
-**Rules layer.** `Item`, mods and the operation contract. One file per mechanic family. Sketch:
+**Rules layer** (`ponder-rules`). Items, goals and the operation contract, one module per
+mechanic family under `ops/`:
 
 ```rust
 trait Operation {
-    fn applies(&self, item: &Item) -> bool;
-    fn cost(&self, market: &Market) -> Cost;               // currency + seconds
-    fn sample(&self, item: &Item, rng: &mut Rng) -> Outcome; // required: ground truth
-    fn exact(&self, item: &Item) -> Option<Dist<Outcome>>;   // optional fast path
-    fn reads(&self) -> Reads;                                // facts it depends on
+    fn name(&self) -> String;
+    fn applies(&self, ctx: &Ctx, item: &dyn View) -> bool; // real items and solver states alike
+    fn steps(&self) -> &[Step];                             // what it does, as data
+    fn cost(&self) -> Cost;                                 // price ids + seconds
 }
-enum Outcome { Item(Item), Choose(Vec<Item>) }   // Choose: unveil, Awakener preview
+enum Step { Clear, Rarity, Settle, RollCount, Force, Draw, Fill, Remove, RemoveCrafted }
 ```
 
-Operations on two items (recombinator, Awakener) use the same shape with a pair as input.
-A mechanic may also contribute **subgoal generators**: the intermediates it makes useful (a
-recombinator suggests "only these mods on this side"; fracturing suggests "4-mod item with X").
+A mechanic is a composition of primitive steps. `ops::run` samples them on real items (the
+simulator); `Lens::run` computes their exact distribution on solver states. A mechanic is
+therefore written once, and a new mechanic needs no solver change. Only a new primitive does,
+and it gets both interpretations plus the agreement test. The **lens** derives the state from
+the goals and operations (SPEC §5.3).
+
+Still to come in the same shape: observation steps (unveil, Awakener preview: draw offers,
+then choose), operations on two items (recombinator, Awakener), and **subgoal generators**:
+the intermediates a mechanic makes useful (a recombinator suggests "only these mods on this
+side"; fracturing suggests "4-mod item with X").
 
 **Planner.** An AND/OR graph over subgoals. OR: alternative methods for one subgoal (buy, craft,
 join). AND: a join needs both inputs. Subgoals are shared across every goal in a run, so a
 thousand goals on the same base reuse the same intermediate solves. This is where donor bases,
 starting points and recombinators live.
 
-**Solver.** For one method ("from states in S, reach subgoal P by repeating operations"), it
-finds the cheapest policy over the derived states: a stochastic shortest-path problem. Start with
-plain policy iteration over reachable states. Any focused search (iLAO\* and friends) is a later
-swap behind the same interface, adopted only if it wins on the full workload.
+**Solver** (`ponder-solve`, no PoE types). For one method ("from states in S, reach subgoal P
+by repeating operations"), it finds the cheapest policy over the derived states: a stochastic
+shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
+goal, and solves strongly connected components from the goal backwards with exact policy
+evaluation inside each. Any focused search (iLAO\* and friends) is a later swap behind the same
+`Model` trait, adopted only if it wins on the full workload.
 
-**Simulator.** Runs a plan on real items for validation and recipe rendering.
+**Simulator.** Runs a plan (ponder's policy or a guide recipe) on real items for validation and
+recipe rendering.
 
-Proposed crates: `ponder-game` (data, parsing), `ponder-rules` (items, operations, simulator),
-`ponder-solve` (generic, no PoE types), `ponder` (planner, market, reports), `ponder-net`,
-`ponder-cli`, `ponder-app`.
+Crates: `ponder-rules` (items, goals, operations, lens, simulator), `ponder-solve`,
+`ponder-plan` (market, craft models, recipes; grows into the planner), plus `ponder-net`,
+`ponder-cli` and `ponder-app`. `ponder-core`, `ponder-game` and `ponder` are the previous
+implementation, deleted as their responsibilities move.
 
 ## 7. Performance targets
 

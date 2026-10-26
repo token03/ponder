@@ -36,5 +36,3 @@ until = "goal"
 max = 1
 else = 2
 
-[[steps]]
-do = ["catalyst:sinistral"]

@@ -84,6 +84,8 @@ pub struct Game {
     base_ids: HashMap<String, BaseId>,
     /// Lowercased template -> every mod with it.
     templates: HashMap<String, Vec<ModId>>,
+    /// Bench metamods: [prefixes locked, suffixes locked, no attack, no caster, multimod].
+    pub metamods: Vec<ModId>,
     pub essences: Vec<data::Essence>,
     pub fossils: Vec<data::Fossil>,
     pools: Mutex<HashMap<Kind, Arc<Pool>>>,
@@ -100,6 +102,7 @@ impl Game {
             mod_ids: HashMap::new(),
             base_ids: HashMap::new(),
             templates: HashMap::new(),
+            metamods: Vec::new(),
             essences: repoe.essences.into_values().collect(),
             fossils: repoe.fossils.into_values().collect(),
             pools: Mutex::default(),
@@ -138,6 +141,7 @@ impl Game {
             game.mods.push(def);
         }
         game.groups = group_ids.into_keys().collect();
+        game.metamods = METAMODS.iter().filter_map(|k| game.mod_id(k)).collect();
         for b in repoe.bases.values() {
             if b.release_state != "released" || b.name.is_empty() || game.base_ids.contains_key(&b.name) {
                 continue;
@@ -235,6 +239,15 @@ impl Game {
         levels.iter().position(|&l| l == self.def(m).level).map(|p| p as u8 + 1)
     }
 }
+
+/// Bench metamod keys, in `Game::metamods` order.
+pub const METAMODS: [&str; 5] = [
+    "StrMasterItemGenerationCannotChangePrefixes",
+    "DexMasterItemGenerationCannotChangeSuffixes",
+    "IntMasterItemGenerationCannotRollAttackAffixes",
+    "StrDexMasterItemGenerationCannotRollCasterAffixes",
+    "StrIntMasterItemGenerationCanHaveMultipleCraftedMods",
+];
 
 /// How a RePoE mod enters items, or `None` for mods the rules never place.
 fn source_of(key: &str, m: &data::Mod) -> Option<Source> {

@@ -1,0 +1,9 @@
+[package]
+name = "ponder-solve"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Stochastic shortest paths over enumerated states. Knows nothing about Path of Exile."
+
+[dependencies]
