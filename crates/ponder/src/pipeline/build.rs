@@ -245,7 +245,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, m: &ItemMatch, table: &Prices, le
     }
     est.problem = Some(gp.problem);
     if est.error.is_none() && opts.solve {
-        super::routes::price_routes(cx, db, std::slice::from_mut(&mut est), table, league, Some(1), None);
+        super::solving::price_routes(cx, db, std::slice::from_mut(&mut est), table, league, Some(1), None);
     }
     Ok(est)
 }

@@ -365,8 +365,8 @@ fn fossil_weight_profiles_are_shared_across_prices_and_keep_pool_identities_sepa
         Mod::new("junk", Side::Prefix, 1.0, &["junk"], false, "junk", &[]),
     ];
     let rows = vec![
-        FossilRow { name: "a".into(), pid: "a".into(), mult: vec![4.0, 1.0] },
-        FossilRow { name: "b".into(), pid: "b".into(), mult: vec![1.0, 4.0] },
+        FossilRow { name: "a".into(), pid: "a".into(), effects: vec![4.0.into(), 1.0.into()] },
+        FossilRow { name: "b".into(), pid: "b".into(), effects: vec![1.0.into(), 4.0.into()] },
     ];
     let wanted = BTreeSet::from(["wanted".into()]);
     let opts = FossilOpts { mods_per_side: 1.0, max_fossils: 1, keep: 1 };
@@ -392,6 +392,25 @@ fn fossil_weight_profiles_are_shared_across_prices_and_keep_pool_identities_sepa
     let wanted = BTreeSet::from(["wanted".into()]);
     let (actions, _) = fossil_combos_with(&rows, &pool, &[&wanted], &repriced, &FREE, opts);
     assert!(actions.is_empty());
+}
+
+#[test]
+fn fossil_effects_follow_craft_of_exile_additive_boosts_and_multiplicative_reductions() {
+    setup();
+    let pool = vec![
+        Mod::new("physical attack", Side::Prefix, 100.0, &["p"], false, "", &["physical", "attack"]),
+        Mod::new("attack caster", Side::Prefix, 100.0, &["c"], false, "", &["attack", "caster"]),
+        Mod::new("all three", Side::Prefix, 100.0, &["a"], false, "", &["physical", "attack", "caster"]),
+    ];
+    let rows = actions::fossil_rows(&pool);
+    let effect = |ids: &[&str], modifier| {
+        actions::fossil_multiplier(ids.iter().map(|id| rows.iter().find(|row| row.pid == *id).unwrap().effects[modifier]))
+    };
+    assert_eq!(effect(&["jagged-fossil", "serrated-fossil"], 0), 20.0);
+    assert!((effect(&["aetheric-fossil"], 1) - 1.5).abs() < 1e-12);
+    assert!((effect(&["jagged-fossil", "serrated-fossil", "aetheric-fossil"], 2) - 0.675).abs() < 1e-12);
+    assert_eq!(effect(&["jagged-fossil", "metallic-fossil"], 0), 0.0);
+    assert_eq!(effect(&["jagged-fossil"], 1), 1.0);
 }
 
 #[test]

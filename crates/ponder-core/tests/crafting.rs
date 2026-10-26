@@ -350,6 +350,18 @@ fn bench_blocking_precedes_the_offer_and_respects_slots_and_existing_groups() {
     let conflict = State { status: [MISSING, BLOCKED, 0, 0, 0, 0, 0, 0], ..pending };
     assert!(p.outcomes(&conflict, &action(ActionKind::RevealUnveil(1))).is_empty());
     assert!(p.outcomes(&blocked[0].1, &action(ActionKind::RevealUnveil(1))).is_empty());
+    let locked = pending.with_meta(META_LOCK_SUFFIXES);
+    assert!(p.outcomes(&locked, &action(ActionKind::RevealUnveil(1))).is_empty());
+    let removed = p.outcomes(&locked, &action(ActionKind::RemoveCrafted));
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].1, pending);
+    assert!(!p.outcomes(&removed[0].1, &action(ActionKind::RevealUnveil(1))).is_empty());
+    assert!(!p.done(&State::acquisition()));
+    assert!(!p.done(&State::recovery()));
+    for state in [State::acquisition(), State::recovery()] {
+        assert_eq!(serde_json::from_str::<State>(&serde_json::to_string(&state).unwrap()).unwrap(), state);
+        assert!(p.outcomes(&state, &action(ActionKind::RemoveCrafted)).is_empty());
+    }
 }
 
 #[test]

@@ -13,6 +13,38 @@ fn state(id: u8) -> State {
     State::new(NORMAL, &[id], &[])
 }
 
+struct FinishingChoices {
+    actions: [Decision; 2],
+}
+
+impl Model for FinishingChoices {
+    fn origin(&self) -> State {
+        state(0)
+    }
+    fn is_goal(&self, state: &State) -> bool {
+        *state == self::state(1)
+    }
+    fn actions(&self) -> &[Decision] {
+        &self.actions
+    }
+    fn dominant_action(&self, _state: &State) -> Option<usize> {
+        Some(0)
+    }
+    fn outcomes(&self, _state: &State, _action: usize, buffer: &mut TransitionBuffer) -> TransitionResult {
+        buffer.clear();
+        buffer.push(1.0, (1.0, 1.0), state(1));
+        TransitionResult::Buffered
+    }
+}
+
+#[test]
+fn search_dominance_does_not_change_which_policies_can_be_evaluated() {
+    let mut model = FinishingChoices { actions: [Decision { id: 0, cost: 0.0 }, Decision { id: 1, cost: 7.0 }] };
+    assert_eq!(search::solve(&mut model, Options::default()).unwrap().cost, 0.0);
+    let policy = StateMap::from_iter([(state(0), 1)]);
+    assert_eq!(search::evaluate(&model, &policy, Options::default()).unwrap(), 7.0);
+}
+
 impl Model for RetryModel {
     fn origin(&self) -> State {
         state(0)
@@ -22,6 +54,11 @@ impl Model for RetryModel {
     }
     fn actions(&self) -> &[Decision] {
         &self.actions
+    }
+
+    fn measurements(&self, _state: &State, action: usize) -> Option<[f64; 4]> {
+        let cost = self.actions.iter().find(|decision| decision.id == action)?.cost;
+        Some([cost, cost, 1.0, 1.0 / 3600.0])
     }
 
     fn outcomes(&self, s: &State, action: usize, buffer: &mut TransitionBuffer) -> TransitionResult {
@@ -70,6 +107,12 @@ fn search_handles_retries_and_dead_ends_without_a_crafting_catalogue() {
     assert!(!solution.approximate);
     assert_eq!(solution.policy, vec![10]);
     assert_eq!(solution.states, vec![state(0)]);
+    let risk = solution.risk.unwrap();
+    assert!((risk.currency.mean - 2.0).abs() < 1e-10);
+    assert!((risk.currency.variance - 2.0).abs() < 1e-10);
+    assert!((risk.operations.variance - 2.0).abs() < 1e-10);
+    assert!((risk.hours.variance - 2.0 / 3600.0f64.powi(2)).abs() < 1e-16);
+    assert!((risk.currency.exceedance_bound(4.0).unwrap() - 1.0 / 3.0).abs() < 1e-10);
     let policy = solution.states.iter().copied().zip(solution.policy).collect();
     assert_eq!(search::evaluate(&model, &policy, Options::default()).unwrap(), 2.0);
 }

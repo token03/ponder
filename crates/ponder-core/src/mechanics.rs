@@ -215,6 +215,9 @@ impl<'p> Mechanics<'p> {
 
     /// Apply `act` to `item` and its metamod; the new rarity.
     pub(crate) fn apply(&mut self, act: &PreparedEffect, rarity: u8, item: &mut Vec<u16>, meta: &mut u8) -> u8 {
+        if !act.kind.available_observation(self.pending_side.is_some(), !self.offers.is_empty()) {
+            return rarity;
+        }
         match act.kind {
             Effect::Roll(r) => {
                 self.roll(r, act, item, 0);

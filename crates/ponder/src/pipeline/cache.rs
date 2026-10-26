@@ -5,11 +5,11 @@ use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use indexmap::IndexMap;
-use ponder_core::{JUNK_SLOTS, MAX_TARGETS, Plan, Prices, Problem, SelfFracture, Settings, SolveError, State};
+use ponder_core::{JUNK_SLOTS, MAX_TARGETS, Plan, Prices, Problem, SelfFracture, Settings, SolveError, State, StateKind};
 use serde::{Deserialize, Serialize};
 
 /// Bump when the solver's answers (or this file format) change, to drop cached plans.
-pub const PLAN_VERSION: u32 = 18;
+pub const PLAN_VERSION: u32 = 22;
 
 /// `float(f"{x:.{sig}g}")`: `x` to `sig` significant figures.
 pub fn round_sig(x: f64, sig: usize) -> f64 {
@@ -147,19 +147,21 @@ impl PlanCache {
     }
 }
 
-type CacheState = (u8, [u8; MAX_TARGETS], [u8; JUNK_SLOTS], u8, u8, u32);
+type CacheState = (StateKind, u8, [u8; MAX_TARGETS], [u8; JUNK_SLOTS], u8, u8, u32);
 type CacheRow = (CacheState, usize, f64, f64);
 
 fn pack_state(s: State) -> CacheState {
-    (s.rarity, s.status, s.junk, s.meta, s.veiled, s.unveil)
+    (s.kind, s.rarity, s.status, s.junk, s.meta, s.veiled, s.unveil)
 }
 
-fn unpack_state((rarity, status, junk, meta, veiled, unveil): CacheState) -> State {
-    State { rarity, status, junk, meta, veiled, unveil }
+fn unpack_state((kind, rarity, status, junk, meta, veiled, unveil): CacheState) -> State {
+    State { kind, rarity, status, junk, meta, veiled, unveil }
 }
 
 #[derive(Serialize, Deserialize)]
 struct CachedPlan {
+    search_work: ponder_core::search::Work,
+    risk: Option<ponder_core::PolicyRisk>,
     initial: Vec<(f64, CacheState)>,
     recovery: Vec<(f64, CacheState)>,
     restarts: f64,
@@ -194,6 +196,8 @@ fn encode(plan: &Plan) -> Option<Vec<u8>> {
         })
         .collect::<Option<Vec<_>>>()?;
     let cached = CachedPlan {
+        search_work: plan.search_work,
+        risk: plan.risk,
         initial: plan.initial.iter().map(|&(p, s)| (p, pack_state(s))).collect(),
         recovery: plan.recovery.iter().map(|&(p, s)| (p, pack_state(s))).collect(),
         restarts: plan.restarts,
@@ -224,6 +228,8 @@ fn decode(raw: &[u8]) -> Option<Plan> {
     }
     let n = cached.rows.len();
     let mut plan = Plan {
+        search_work: cached.search_work,
+        risk: cached.risk,
         initial: cached.initial.into_iter().map(|(p, s)| (p, unpack_state(s))).collect(),
         recovery: cached.recovery.into_iter().map(|(p, s)| (p, unpack_state(s))).collect(),
         restarts: cached.restarts,
@@ -275,6 +281,7 @@ mod tests {
         let t = State::new(2, &[], &[]).with_meta(3);
         let u = State::new(1, &[0, 1], &[]);
         let mut plan = Plan { cost: 12.5, hours: 0.25, states: 9, unpriced: vec!["x".into()], approximate: true, ..Plan::default() };
+        plan.risk = Some(ponder_core::PolicyRisk { currency: ponder_core::Moments { mean: 12.5, variance: 7.0 }, ..Default::default() });
         plan.usage.insert("chaos".into(), 3.5);
         plan.initial = vec![(0.25, s), (0.75, t)];
         plan.recovery = vec![(1.0, s)];
@@ -311,6 +318,7 @@ mod tests {
         let back = cache.get("abc").expect("saved");
         assert_eq!((back.cost, back.hours, back.states, &back.unpriced, &back.usage), (12.5, 0.25, 9, &plan.unpriced, &plan.usage));
         assert!(back.approximate);
+        assert_eq!(back.risk, plan.risk);
         assert!(std::sync::Arc::ptr_eq(&back.policy[&s], &back.policy[&u]));
         assert_eq!(back.restart_values, plan.restart_values);
         assert_eq!(back.sell_states, plan.sell_states);

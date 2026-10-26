@@ -14,7 +14,7 @@ use super::build::{ClusterOpts, GearOpts, add_fractures, build_gear, estimate_cl
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
 use super::pivots::add_pivots;
-use super::routes::price_routes;
+use super::solving::price_routes;
 use super::solving::solve_estimates;
 use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
 use crate::demand::{self, Archetype};

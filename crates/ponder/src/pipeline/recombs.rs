@@ -87,7 +87,7 @@ fn recomb_route(cx: &Context, db: &ModDB, e: &Estimate, table: &Prices, league: 
         planner.bound_padded();
         let finishing = Finishing::new(e);
         let solved = finishing.cheapest(&planner, &planner.best_by_set());
-        let optimistic = finishing.cheapest(&planner, &planner.optimistic_by_set());
+        let optimistic = planner.optimistic_by_set().values().filter_map(|step| step.cost).reduce(f64::min);
         let incumbent = [e.cheapest().map(|c| c - e.bench_cost()), solved].into_iter().flatten().reduce(f64::min);
         let worth_it = optimistic.is_some_and(|lower| incumbent.is_none_or(|best| lower < best));
         if worth_it {
@@ -111,8 +111,6 @@ impl<'a> Finishing<'a> {
         Finishing { problem: e.problem.as_ref().expect("a gear problem"), plans }
     }
 
-    /// The cheapest tree plus finish over every set; a set no plan finishes counts as free to
-    /// finish, so with optimistic trees this stays a lower bound.
     fn cheapest(&self, planner: &Planner, by_set: &BTreeMap<BTreeSet<String>, Arc<Step>>) -> Option<f64> {
         by_set
             .iter()
@@ -121,7 +119,7 @@ impl<'a> Finishing<'a> {
                 let finish = if self.problem.done(&state) {
                     0.0
                 } else {
-                    self.plans.iter().filter_map(|p| p.to_finish(self.problem, &state)).reduce(f64::min).unwrap_or(0.0)
+                    self.plans.iter().filter_map(|p| p.to_finish(self.problem, &state)).reduce(f64::min)?
                 };
                 Some(step.cost? + finish)
             })

@@ -792,6 +792,7 @@ fn the_json_keys() {
         "currency",
         "clicking_hours",
         "currency_chaos",
+        "finishing_policy_risk",
         "recipe",
         "recipe_stages",
         "selected_route",

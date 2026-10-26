@@ -5,7 +5,20 @@ type OfferGroup = (Vec<String>, OfferWeights);
 type OfferClass = (usize, OfferWeights);
 
 impl Problem {
-    pub(super) fn pending_side(s: &State) -> Option<Side> {
+    pub(crate) fn choose_unveil(&self, state: &State, class: u8) -> Option<State> {
+        if class >= UNVEIL_CLASSES || state.unveil & (1 << class) == 0 {
+            return None;
+        }
+        let mut next = State { unveil: 0, veiled: class + 1, ..*state };
+        if class < UNVEIL_TARGET_CLASSES {
+            next.status[class as usize / 2] = 1 + class % 2;
+        } else {
+            next.junk[class as usize - UNVEIL_TARGET_CLASSES as usize] += 1;
+        }
+        Some(next)
+    }
+
+    pub(crate) fn pending_side(s: &State) -> Option<Side> {
         match s.veiled {
             VEILED_PREFIX => Some(Side::Prefix),
             VEILED_SUFFIX => Some(Side::Suffix),

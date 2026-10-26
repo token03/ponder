@@ -61,6 +61,18 @@ pub enum Effect {
     FinishBench,
 }
 
+impl Effect {
+    pub(crate) fn available_observation(self, pending: bool, offers: bool) -> bool {
+        if offers {
+            matches!(self, Self::Unveil(_))
+        } else if pending {
+            matches!(self, Self::RevealUnveil(_) | Self::Unmeta)
+        } else {
+            !matches!(self, Self::Unveil(_) | Self::RevealUnveil(_))
+        }
+    }
+}
+
 impl ActionKind {
     pub fn effect(self) -> Effect {
         use ActionKind::*;

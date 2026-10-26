@@ -13,35 +13,69 @@ pub const FOSSIL_COMBOS_KEPT: usize = 10; // combo profiles handed to the solver
 
 /// Single fossils (with a Primitive Resonator) that change this pool's weights.
 pub fn fossils(pool: &[Mod]) -> (Vec<Action>, Profiles) {
-    let (mut acts, mut profiles) = (Vec::new(), Profiles::new());
-    for fossil in loaded(data::fossils()).values() {
-        let Some(mult) = usable_fossil(fossil) else {
-            continue;
-        };
-        let weights: Vec<f64> =
-            pool.iter().map(|m| m.tags.iter().filter_map(|t| mult.get(t.as_str())).fold(m.weight, |w, x| w * x)).collect();
-        if pool.iter().zip(&weights).all(|(m, w)| (w - m.weight).abs() < 1e-9) {
-            continue; // changes nothing here
-        }
-        let name = fossil.name.replace(" Fossil", "").to_lowercase();
-        let profile = format!("fossil:{name}");
-        profiles.insert(profile.clone(), pool.iter().zip(weights).map(|(m, w)| (m.id.clone(), w)).collect::<BTreeMap<_, _>>().into());
-        acts.push(
-            act(&format!("{name} fossil"), ActionKind::RerollRare, &[(&slug(&fossil.name), 1.0), (RESONATOR, 1.0)], &[NORMAL, RARE])
+    let mut actions = Vec::new();
+    let mut profiles = Profiles::new();
+    for row in fossil_rows(pool) {
+        let profile = format!("fossil:{}", row.name);
+        profiles.insert(
+            profile.clone(),
+            pool.iter()
+                .zip(&row.effects)
+                .map(|(modifier, effect)| (modifier.id.clone(), modifier.weight * effect.multiplier()))
+                .collect::<BTreeMap<_, _>>()
+                .into(),
+        );
+        actions.push(
+            act(&format!("{} fossil", row.name), ActionKind::RerollRare, &[(&row.pid, 1.0), (RESONATOR, 1.0)], &[NORMAL, RARE])
                 .with_profile(&profile),
         );
     }
-    (acts, profiles)
+    (actions, profiles)
 }
 
 /// The weight multiplier per tag of a plain fossil (no added or forced mods, no tricks), if it has any.
-fn usable_fossil(f: &data::Fossil) -> Option<HashMap<&str, f64>> {
+fn usable_fossil(f: &data::Fossil) -> Option<HashMap<&str, FossilEffect>> {
     if f.name.is_empty() || !f.added_mods.is_empty() || !f.forced_mods.is_empty() || f.mirrors || f.rolls_lucky || f.changes_quality {
         return None;
     }
-    let mult: HashMap<&str, f64> =
-        f.positive_mod_weights.iter().chain(&f.negative_mod_weights).map(|w| (w.tag.as_str(), w.weight / 100.0)).collect();
-    (!mult.is_empty()).then_some(mult)
+    let mut effects: HashMap<&str, FossilEffect> = HashMap::new();
+    for weight in f.positive_mod_weights.iter().chain(&f.negative_mod_weights) {
+        let effect = effects.entry(weight.tag.as_str()).or_default();
+        *effect = effect.combine(FossilEffect::from(weight.weight / 100.0));
+    }
+    (!effects.is_empty()).then_some(effects)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FossilEffect {
+    more: f64,
+    less: f64,
+}
+
+impl Default for FossilEffect {
+    fn default() -> Self {
+        Self { more: 0.0, less: 1.0 }
+    }
+}
+
+impl From<f64> for FossilEffect {
+    fn from(factor: f64) -> Self {
+        if factor > 1.0 { Self { more: factor, less: 1.0 } } else { Self { more: 0.0, less: factor } }
+    }
+}
+
+impl FossilEffect {
+    fn combine(self, other: Self) -> Self {
+        Self { more: self.more + other.more, less: self.less * other.less }
+    }
+
+    fn multiplier(self) -> f64 {
+        self.more.max(1.0) * self.less
+    }
+}
+
+pub fn fossil_multiplier(effects: impl IntoIterator<Item = FossilEffect>) -> f64 {
+    effects.into_iter().fold(FossilEffect::default(), FossilEffect::combine).multiplier()
 }
 
 /// A weight-changing fossil: its name, price id, and per-mod weight multiplier.
@@ -49,24 +83,25 @@ fn usable_fossil(f: &data::Fossil) -> Option<HashMap<&str, f64>> {
 pub struct FossilRow {
     pub name: String,
     pub pid: String,
-    pub mult: Vec<f64>,
+    pub effects: Vec<FossilEffect>,
 }
 
 /// (name, price id, per-mod weight multiplier) for every weight-changing fossil.
 ///
-/// A mod's multiplier is the product over its tags of the fossil's modifiers
-/// for them; fossils in one resonator multiply together.
 pub fn fossil_rows(pool: &[Mod]) -> Vec<FossilRow> {
     let mut rows = Vec::new();
     for fossil in loaded(data::fossils()).values() {
         let Some(mult) = usable_fossil(fossil) else {
             continue;
         };
-        let row: Vec<f64> = pool.iter().map(|m| m.tags.iter().filter_map(|t| mult.get(t.as_str())).fold(1.0, |p, x| p * x)).collect();
-        if row.iter().all(|x| (x - 1.0).abs() <= 1e-8 + 1e-5) {
+        let row: Vec<_> = pool
+            .iter()
+            .map(|m| m.tags.iter().filter_map(|t| mult.get(t.as_str())).copied().fold(FossilEffect::default(), FossilEffect::combine))
+            .collect();
+        if row.iter().all(|effect| effect.multiplier() == 1.0) {
             continue; // np.allclose(row, 1.0): changes nothing here
         }
-        rows.push(FossilRow { name: fossil.name.replace(" Fossil", "").to_lowercase(), pid: slug(&fossil.name), mult: row });
+        rows.push(FossilRow { name: fossil.name.replace(" Fossil", "").to_lowercase(), pid: slug(&fossil.name), effects: row });
     }
     rows
 }
@@ -110,8 +145,9 @@ fn combination_weights(rows: &[FossilRow], pool: &[Mod], base: &[f64], is_suffix
         key.update(&[u8::from(suffix)]);
     }
     for row in rows {
-        for &weight in &row.mult {
-            key.update(&weight.to_bits().to_le_bytes());
+        for effect in &row.effects {
+            key.update(&effect.more.to_bits().to_le_bytes());
+            key.update(&effect.less.to_bits().to_le_bytes());
         }
     }
     CACHE.get_or_init(key.finalize(), || {
@@ -123,13 +159,7 @@ fn combination_weights(rows: &[FossilRow], pool: &[Mod], base: &[f64], is_suffix
                 let weights: Vec<f64> = base
                     .iter()
                     .enumerate()
-                    .map(|(j, weight)| {
-                        let mut mult = rows[idx[0]].mult[j];
-                        for &r in &idx[1..k] {
-                            mult *= rows[r].mult[j];
-                        }
-                        weight * mult
-                    })
+                    .map(|(j, weight)| weight * fossil_multiplier(idx[..k].iter().map(|&r| rows[r].effects[j])))
                     .collect();
                 let mut totals = [0.0; 2];
                 for (weight, &suffix) in weights.iter().zip(is_suffix) {

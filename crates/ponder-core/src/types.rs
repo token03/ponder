@@ -160,8 +160,18 @@ pub fn meta_tag(meta: u8) -> Option<usize> {
 ///
 /// `junk` slots: prefix notable, prefix other, suffix notable, suffix other, prefix
 /// filler, suffix filler (filler: wanted, but any will do). Unused status entries are 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateKind {
+    #[default]
+    Item,
+    Acquisition,
+    Recovery,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct State {
+    pub kind: StateKind,
     pub rarity: u8,
     pub status: [u8; MAX_TARGETS],
     pub junk: [u8; JUNK_SLOTS],
@@ -174,7 +184,7 @@ impl State {
     pub fn new(rarity: u8, status: &[u8], junk: &[u8]) -> State {
         assert!(status.len() <= MAX_TARGETS, "at most {MAX_TARGETS} targets");
         assert!(junk.len() <= JUNK_SLOTS, "at most {JUNK_SLOTS} junk slots");
-        let mut s = State { rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS], meta: 0, veiled: 0, unveil: 0 };
+        let mut s = State { kind: StateKind::Item, rarity, status: [0; MAX_TARGETS], junk: [0; JUNK_SLOTS], meta: 0, veiled: 0, unveil: 0 };
         s.status[..status.len()].copy_from_slice(status);
         s.junk[..junk.len()].copy_from_slice(junk); // short junk is padded with zeros
         s
@@ -183,6 +193,14 @@ impl State {
     pub fn with_meta(mut self, meta: u8) -> State {
         self.meta = meta;
         self
+    }
+
+    pub fn acquisition() -> Self {
+        Self { kind: StateKind::Acquisition, ..Self::new(NORMAL, &[], &[]) }
+    }
+
+    pub fn recovery() -> Self {
+        Self { kind: StateKind::Recovery, ..Self::new(NORMAL, &[], &[]) }
     }
 }
 
@@ -195,6 +213,9 @@ impl Hash for State {
         j[JUNK_SLOTS + 1] = self.meta;
         h.write_u64(u64::from_le_bytes(self.status));
         h.write_u64(u64::from_le_bytes(j));
+        if self.kind != StateKind::Item {
+            self.kind.hash(h);
+        }
         if self.veiled != 0 || self.unveil != 0 {
             h.write_u64(self.veiled as u64 | (self.unveil as u64) << 8);
         }
@@ -211,6 +232,8 @@ fn is_zero_u32(x: &u32) -> bool {
 
 #[derive(Serialize, Deserialize)]
 struct StateRepr {
+    #[serde(default)]
+    kind: StateKind,
     rarity: u8,
     status: Vec<u8>,
     #[serde(default)]
@@ -227,6 +250,7 @@ impl Serialize for State {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         // Trailing status zeros can't be told from missing targets, so all slots are written.
         StateRepr {
+            kind: self.kind,
             rarity: self.rarity,
             status: self.status.to_vec(),
             junk: self.junk.to_vec(),
@@ -250,7 +274,7 @@ impl<'de> Deserialize<'de> for State {
         {
             return Err(serde::de::Error::custom("state has too many targets or junk slots, or an unknown metamod"));
         }
-        Ok(State { veiled: r.veiled, unveil: r.unveil, ..State::new(r.rarity, &r.status, &r.junk).with_meta(r.meta) })
+        Ok(State { kind: r.kind, veiled: r.veiled, unveil: r.unveil, ..State::new(r.rarity, &r.status, &r.junk).with_meta(r.meta) })
     }
 }
 
@@ -274,3 +298,31 @@ pub type WeightProfile = std::sync::Arc<std::collections::BTreeMap<String, f64>>
 
 /// One entry of an outcome distribution: (probability, next state).
 pub type Outcome = (f64, State);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Moments {
+    pub mean: f64,
+    pub variance: f64,
+}
+
+impl Moments {
+    pub fn standard_deviation(self) -> f64 {
+        self.variance.max(0.0).sqrt()
+    }
+
+    pub fn exceedance_bound(self, budget: f64) -> Option<f64> {
+        if !budget.is_finite() || !self.mean.is_finite() || !self.variance.is_finite() || self.variance < 0.0 {
+            return None;
+        }
+        Some(if budget <= self.mean { 1.0 } else { self.variance / (self.variance + (budget - self.mean).powi(2)) })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PolicyRisk {
+    pub objective: Moments,
+    pub currency: Moments,
+    pub operations: Moments,
+    pub hours: Moments,
+    pub approximate: bool,
+}

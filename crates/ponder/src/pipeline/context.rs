@@ -18,7 +18,9 @@ pub type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 /// Chaos an hour of clicking is worth, from `PONDER_CHAOS_PER_HOUR` (default 1500), as Python's
 /// `craft.CHAOS_PER_HOUR`. The one place the library reads that setting.
 pub fn settings_from_env() -> Settings {
-    let per_hour = ponder_net::env::env("PONDER_CHAOS_PER_HOUR").and_then(|v| v.trim().parse::<f64>().ok());
+    let per_hour = ponder_net::env::env("PONDER_CHAOS_PER_HOUR")
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|rate| rate.is_finite() && *rate >= 0.0);
     per_hour.map_or_else(Settings::default, |chaos_per_hour| Settings { chaos_per_hour })
 }
 

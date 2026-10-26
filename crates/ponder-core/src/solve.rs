@@ -11,6 +11,8 @@ use crate::types::*;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Plan {
+    pub search_work: search::Work,
+    pub risk: Option<PolicyRisk>,
     pub initial: Vec<Outcome>,
     pub recovery: Vec<Outcome>,
     pub restarts: f64,
@@ -72,7 +74,8 @@ impl Preservation {
     }
 
     pub fn kept(self, state: &State) -> bool {
-        (0..MAX_TARGETS).all(|i| self.targets & (1 << i) == 0 || state.status[i] == GOOD)
+        state.kind == StateKind::Item
+            && (0..MAX_TARGETS).all(|i| self.targets & (1 << i) == 0 || state.status[i] == GOOD)
             && (0..2).all(|side| state.junk[4 + side] >= self.filler[side])
     }
 }
@@ -310,7 +313,7 @@ fn follow_stage(
     model.set_initial(initial)?;
     indexed.insert(model.origin(), problem.actions.len());
     if model.recovery.is_some() {
-        indexed.insert(State::new(u8::MAX - 1, &[], &[]), problem.actions.len() + 1);
+        indexed.insert(State::recovery(), problem.actions.len() + 1);
         indexed.extend(policy.restarts.keys().map(|state| (*state, problem.actions.len() + 1)));
         indexed.extend(policy.sales.keys().map(|state| (*state, problem.actions.len() + 2)));
     }
@@ -332,7 +335,7 @@ fn make_plan(
         .iter()
         .zip(&solution.policy)
         .zip(&solution.values)
-        .filter(|((state, action), _)| state.rarity <= RARE && **action > problem.actions.len())
+        .filter(|((state, action), _)| state.kind == StateKind::Item && **action > problem.actions.len())
         .map(|((&state, _), &value)| (state, value))
         .collect();
     let sell_states = solution
@@ -368,6 +371,8 @@ fn make_plan(
     }
     let names: Vec<Arc<str>> = problem.actions.iter().map(|a| Arc::from(a.name.as_str())).collect();
     Plan {
+        search_work: solution.work,
+        risk: solution.risk,
         initial,
         recovery: recovery.map(|r| r.initial.to_vec()).unwrap_or_default(),
         restarts,
@@ -420,7 +425,9 @@ pub fn evaluate_with(
 
 struct CraftModel<'p> {
     problem: &'p Problem,
+    measurements: Vec<[f64; 4]>,
     decisions: Vec<Decision>,
+    classes: Vec<Vec<Decision>>,
     prepared: Vec<Option<PreparedAction>>,
     initial: Option<Arc<Distribution>>,
     preserved: Option<Preservation>,
@@ -442,14 +449,52 @@ impl<'p> CraftModel<'p> {
         let decisions = active.into_iter().map(|id| Decision { id, cost: step_cost(&problem.actions[id], prices, settings) }).collect();
         let mut model = CraftModel {
             problem,
+            measurements: problem
+                .actions
+                .iter()
+                .map(|action| {
+                    [step_cost(action, prices, settings), crate::action::action_cost(action, prices), 1.0, action.seconds / 3600.0]
+                })
+                .collect(),
             decisions,
+            classes: Vec::new(),
             prepared: (0..problem.actions.len()).map(|_| None).collect(),
             initial: None,
             preserved,
             recovery: None,
         };
         model.prepare();
+        model.classify();
         model
+    }
+
+    fn class(state: &State) -> Option<usize> {
+        (state.kind == StateKind::Item && state.rarity <= RARE).then(|| {
+            state.rarity as usize * 8
+                + (state.unveil != 0) as usize
+                + 2 * Problem::pending_side(state).is_some() as usize
+                + 4 * (state.meta != 0) as usize
+        })
+    }
+
+    fn classify(&mut self) {
+        let actions = &self.problem.actions;
+        self.classes = (0..64)
+            .map(|class| {
+                let (rarity, offers, pending, meta) = (class / 8, class & 1 != 0, class & 2 != 0, class & 4 != 0);
+                self.decisions
+                    .iter()
+                    .filter(|d| {
+                        let Some(a) = actions.get(d.id) else { return true };
+                        let effect = a.kind.effect();
+                        !(!effect.available_observation(pending, offers)
+                            || !a.from_rarity.contains(&(rarity as u8))
+                            || meta && matches!(effect, crate::Effect::Roll(_)))
+                    })
+                    .copied()
+                    .collect()
+            })
+            .collect();
     }
 
     fn prepare(&mut self) {
@@ -484,19 +529,35 @@ impl<'p> CraftModel<'p> {
                 self.decisions.push(Decision { id: self.problem.actions.len() + 2, cost: sale.cost - sale.proceeds });
             }
         }
+        self.classify();
         Ok(())
     }
 }
 
 impl Model for CraftModel<'_> {
     fn origin(&self) -> State {
-        if self.initial.is_some() { State::new(u8::MAX, &[], &[]) } else { self.problem.origin() }
+        if self.initial.is_some() { State::acquisition() } else { self.problem.origin() }
     }
     fn is_goal(&self, state: &State) -> bool {
-        state.rarity <= RARE && self.problem.done(state)
+        state.kind == StateKind::Item && self.problem.done(state)
     }
     fn actions(&self) -> &[Decision] {
         &self.decisions
+    }
+    fn actions_for(&self, state: &State) -> &[Decision] {
+        Self::class(state).map_or(&self.decisions, |c| &self.classes[c])
+    }
+    fn measurements(&self, _state: &State, action: usize) -> Option<[f64; 4]> {
+        if action == self.problem.actions.len() { Some([0.0; 4]) } else { self.measurements.get(action).copied() }
+    }
+    fn dominant_action(&self, state: &State) -> Option<usize> {
+        if state.unveil == 0 || !self.decisions.iter().all(|decision| decision.cost >= 0.0) {
+            return None;
+        }
+        self.actions_for(state).iter().filter(|decision| decision.cost == 0.0).find_map(|decision| {
+            let ActionKind::Unveil(class) = self.problem.actions.get(decision.id)?.kind else { return None };
+            self.problem.choose_unveil(state, class).filter(|next| self.problem.done(next)).map(|_| decision.id)
+        })
     }
 
     fn outcomes(&self, state: &State, action: usize, buffer: &mut TransitionBuffer) -> TransitionResult {
@@ -513,7 +574,7 @@ impl Model for CraftModel<'_> {
                 TransitionResult::Empty
             };
         }
-        if state.rarity == u8::MAX - 1 {
+        if state.kind == StateKind::Recovery {
             return if action == self.problem.actions.len() + 1 {
                 TransitionResult::Shared(self.recovery.as_ref().expect("recovery action").initial.clone())
             } else {
@@ -521,20 +582,20 @@ impl Model for CraftModel<'_> {
             };
         }
         if action == self.problem.actions.len() + 1 {
-            return if state.rarity <= RARE && state.meta == 0 {
+            return if state.kind == StateKind::Item && state.meta == 0 {
                 TransitionResult::Shared(self.recovery.as_ref().expect("recovery action").initial.clone())
             } else {
                 TransitionResult::Empty
             };
         }
         if action == self.problem.actions.len() {
-            return if state.rarity == u8::MAX {
+            return if state.kind == StateKind::Acquisition {
                 TransitionResult::Shared(self.initial.as_ref().expect("initial distribution").clone())
             } else {
                 TransitionResult::Empty
             };
         }
-        if state.rarity == u8::MAX {
+        if state.kind != StateKind::Item {
             return TransitionResult::Empty;
         }
         let prepared = self.prepared[action].as_ref().expect("active action is prepared");
@@ -567,7 +628,7 @@ impl Model for CraftModel<'_> {
             }
         };
         for ((p, next), range) in out.into_iter().zip(ranges) {
-            outcomes.push((p, if kept(&next) { next } else { State::new(u8::MAX - 1, &[], &[]) }));
+            outcomes.push((p, if kept(&next) { next } else { State::recovery() }));
             bounds.push(range);
         }
         TransitionResult::Buffered

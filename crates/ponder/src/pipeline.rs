@@ -23,7 +23,6 @@ mod pivots;
 mod protected;
 mod recombs;
 mod resale;
-mod routes;
 mod run;
 mod solving;
 mod types;
@@ -39,10 +38,9 @@ pub use pivots::{
 };
 pub use protected::{ProtectedRecipe, add_protected_routes};
 pub use recombs::{add_recombs, add_recombs_in_league, price_donor_routes};
-pub use routes::price_routes;
 pub use resale::{ResaleQuote, SaleThreshold};
 pub use run::{LadderOpts, RunOpts, build_name, current_league, expand_sources, ladder, load_build, run};
-pub use solving::{Solvable, SolveSlot, slots_of, solve_all, solve_estimates, solve_one, solve_slots};
+pub use solving::{Solvable, SolveSlot, price_routes, slots_of, solve_all, solve_estimates, solve_one, solve_slots};
 pub use types::{
     BuildInfo, CraftRoute, Estimate, Fracture, JEWELLERY, Key, LadderReport, ProductRef, RecombInfo, Report, Search, Shared, Slot,
     cmp_ladder, cmp_priority, priority,

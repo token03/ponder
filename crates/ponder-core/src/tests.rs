@@ -150,14 +150,17 @@ fn harvest_and_fossil_match_simulation() {
 fn policy_beats_alt_spam() {
     let p = toy();
     let plan = solved(&p, &prices());
-    let policy = plan.policy.keys().map(|s| (*s, ["transmute", "alt", "scour+transmute"][s.rarity as usize].into())).collect();
+    let coverage = solve_with(&p, &prices(), &FREE, SolveOptions { algorithm: search::Algorithm::Eager, ..Default::default() }).unwrap();
+    let policy = coverage.policy.keys().map(|s| (*s, ["transmute", "alt", "scour+transmute"][s.rarity as usize].into())).collect();
     let alt_only = Plan { policy, ..Plan::default() };
     assert!(plan.cost < simulated(&p, &alt_only, &prices(), 2000, 0));
 }
 
 #[test]
 fn magic_with_one_target_augments() {
-    let p = toy();
+    let mut spec = toy().to_spec();
+    spec.begin = Some(st(MAGIC, &[GOOD, MISSING], &[]));
+    let p = spec.compile();
     let plan = solved(&p, &prices());
     assert_eq!(plan.policy[&st(MAGIC, &[GOOD, MISSING], &[])].as_ref(), "aug");
 }
@@ -230,7 +233,7 @@ fn a_metamod_takes_a_slot_and_must_come_off() {
     assert!(p.outcomes(&s, &scour).is_empty()); // only on a locked item
     let mut prices = prices();
     prices.insert("divine".into(), 0.5);
-    let mut plan = solved(&p, &prices);
+    let mut plan = solve_with(&p, &prices, &FREE, SolveOptions { algorithm: search::Algorithm::Eager, ..Default::default() }).unwrap();
     force(&p, &mut plan, "lock prefixes", |s| s.status[1] == MISSING && s.junk[3] != 0 && s.meta == 0);
     force(&p, &mut plan, "scour", |s| s.meta == META_LOCK_PREFIXES && s.junk[3] != 0);
     assert!(plan.policy.values().any(|a| a.as_ref() == "scour"));
@@ -284,7 +287,7 @@ fn cannot_roll_attack_keeps_attack_mods_off_and_on() {
     assert!(p.annul(&s, None).iter().all(|(_, n)| n.junk[1] == 1));
     let mut prices = gear_prices();
     prices.insert("divine".into(), 1.0);
-    let mut plan = solved(&p, &prices);
+    let mut plan = solve_with(&p, &prices, &FREE, SolveOptions { algorithm: search::Algorithm::Eager, ..Default::default() }).unwrap();
     force(&p, &mut plan, "no attack mods", |s| s.meta == 0 && s.rarity == RARE && s.status[0] == GOOD);
     force(&p, &mut plan, "exalt", |s| s.meta == META_NO_ATTACK && s.status[1] == MISSING);
     force(&p, &mut plan, "annul", |s| s.meta == META_NO_ATTACK && s.status[1] == BLOCKED);
@@ -369,7 +372,7 @@ fn a_locked_reforge_keeps_its_side_and_can_fill_it() {
     assert!(p.outcomes(&st(RARE, &[GOOD, GOOD], &[0, 0, 0, 1, 0, 1]), &chaos).iter().any(|(_, n)| n.status[0] != GOOD));
     let mut prices = gear_prices();
     prices.insert("divine".into(), 1.0);
-    let mut plan = solved(&p, &prices);
+    let mut plan = solve_with(&p, &prices, &FREE, SolveOptions { algorithm: search::Algorithm::Eager, ..Default::default() }).unwrap();
     force(&p, &mut plan, "lock prefixes", |s| s.meta == 0 && s.status[..2] == [GOOD, GOOD]);
     force(&p, &mut plan, "chaos", |s| s.meta == META_LOCK_PREFIXES);
     let exact = evaluate(&p, &plan.policy, &prices, &FREE).unwrap();

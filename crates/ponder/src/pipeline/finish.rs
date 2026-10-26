@@ -83,6 +83,7 @@ impl Finish {
             "have": self.have,
             "state": match (&self.problem, &self.state) { (Some(p), Some(s)) => Some(craft::describe(p, s)), _ => None },
             "craft_cost": self.craft_cost,
+            "policy_risk": self.plan.as_ref().and_then(|plan| plan.risk),
             "price": self.price,
             "total": self.total(),
             "saves": self.saves(),
@@ -175,7 +176,8 @@ pub fn finish(cx: &Context, db: &ModDB, est: &Estimate, m: &ItemMatch, table: &P
         plan = None;
     }
     for t in &problem.targets {
-        let can_roll = problem.pool.iter().any(|m| t.good.contains(&m.id)) || problem.actions.iter().any(|a| a.forced.as_ref().is_some_and(|id| t.good.contains(id)));
+        let can_roll = problem.pool.iter().any(|m| t.good.contains(&m.id))
+            || problem.actions.iter().any(|a| a.forced.as_ref().is_some_and(|id| t.good.contains(id)));
         if !can_roll && !on.iter().any(|x| t.good.contains(&x.id)) {
             f.error = Some(format!("item level {ilvl} can't roll {}", t.name));
             return f;
@@ -224,7 +226,8 @@ fn fixed_problem<'a>(est: &'a Estimate, fixed: &BTreeSet<String>, on: &[craft::M
     }
     let p = est.problem.as_ref()?;
     let already: BTreeSet<&String> = p.fixed.iter().map(|m| &m.id).collect();
-    let extra: Vec<craft::Mod> = on.iter().filter(|m| fixed.contains(&m.id) && !already.contains(&m.id)).map(|m| craft::Mod { weight: 0.0, ..m.clone() }).collect();
+    let extra: Vec<craft::Mod> =
+        on.iter().filter(|m| fixed.contains(&m.id) && !already.contains(&m.id)).map(|m| craft::Mod { weight: 0.0, ..m.clone() }).collect();
     let targets: Vec<craft::Target> = p.targets.iter().filter(|t| !extra.iter().any(|m| t.good.contains(&m.id))).cloned().collect();
     let blocks = extra.iter().any(|m| targets.iter().any(|t| m.groups.iter().any(|g| t.groups.contains(g)) && !t.good.contains(&m.id)));
     if blocks {
@@ -252,11 +255,7 @@ pub fn finishes(cx: &Context, db: &ModDB, m: &ItemMatch, estimates: &[Estimate],
     let tied = |a: f64, b: f64| (a - b).abs() <= 1e-3;
     found.sort_by(|a, b| {
         let (ka, kb) = (key(&a.1), key(&b.1));
-        if tied(ka, kb) {
-            a.1.total().partial_cmp(&b.1.total()).unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            ka.total_cmp(&kb)
-        }
+        if tied(ka, kb) { a.1.total().partial_cmp(&b.1.total()).unwrap_or(std::cmp::Ordering::Equal) } else { ka.total_cmp(&kb) }
     });
     found.into_iter().take(top).map(|(e, _)| finish(cx, db, e, m, table, true)).collect()
 }
@@ -265,7 +264,15 @@ pub fn finishes(cx: &Context, db: &ModDB, m: &ItemMatch, estimates: &[Estimate],
 ///
 /// One search (plus a fetch per 10 listings); each listing is finished from its own mods, and the
 /// cheapest totals (price + finishing) are kept, best first, in `est.starts`.
-pub fn find_starts(cx: &Context, db: &ModDB, est: &mut Estimate, table: &Prices, league: &str, listings: usize, keep: usize) -> Result<Vec<Finish>> {
+pub fn find_starts(
+    cx: &Context,
+    db: &ModDB,
+    est: &mut Estimate,
+    table: &Prices,
+    league: &str,
+    listings: usize,
+    keep: usize,
+) -> Result<Vec<Finish>> {
     let (Some(problem), true) = (&est.problem, est.kind == "gear" && est.plan.is_some()) else { return Ok(Vec::new()) };
     let mut stats: Vec<Stat> = Vec::new();
     for t in &problem.targets {

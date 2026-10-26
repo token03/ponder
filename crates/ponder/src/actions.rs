@@ -68,7 +68,8 @@ pub use bench::{
 };
 pub use essence::{essence_profiles, essences};
 pub use fossils::{
-    FOSSIL_COMBOS_KEPT, FossilOpts, FossilRow, RESONATOR, RESONATORS, fossil_combos, fossil_combos_with, fossil_rows, fossils,
+    FOSSIL_COMBOS_KEPT, FossilEffect, FossilOpts, FossilRow, RESONATOR, RESONATORS, fossil_combos, fossil_combos_with, fossil_multiplier,
+    fossil_rows, fossils,
 };
 pub use harvest::{HARVEST, HARVEST_ADD_REMOVE, SACRED_LIFEFORCE, harvest, harvest_add_remove};
 
@@ -110,7 +111,7 @@ mod tests {
         let row = |name: &str, pid: &str, f: &dyn Fn(&Mod) -> f64| FossilRow {
             name: name.into(),
             pid: pid.into(),
-            mult: pool.iter().map(f).collect(),
+            effects: pool.iter().map(f).map(FossilEffect::from).collect(),
         };
         let rows = [
             row("hot", "hot-fossil", &|m| {
@@ -141,7 +142,7 @@ mod tests {
         assert_eq!(expensive.0[0].name, "icy fossil");
         prices.insert("hot-fossil".into(), 1.0);
         let mut changed = rows;
-        changed[0].mult[0] = 0.01;
+        changed[0].effects[0] = 0.01.into();
         let suppressed =
             fossil_combos_with(&changed, &pool, &[&x, &y], &prices, &Settings::default(), FossilOpts { keep: 1, ..Default::default() });
         assert_eq!(suppressed.0[0].name, "icy fossil");

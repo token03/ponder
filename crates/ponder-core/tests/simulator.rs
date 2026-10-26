@@ -84,6 +84,32 @@ fn solving_twice_gives_the_same_plan() {
 }
 
 #[test]
+fn focused_search_matches_eager_search_on_crafting_fixtures() {
+    for f in fixtures() {
+        let settings = Settings { chaos_per_hour: f.chaos_per_hour };
+        let eager = solve_with(
+            &f.problem.fresh_transition_cache(),
+            &f.prices,
+            &settings,
+            SolveOptions { algorithm: search::Algorithm::Eager, ..Default::default() },
+        )
+        .unwrap();
+        for algorithm in [search::Algorithm::Ilao, search::Algorithm::CgIlao] {
+            let focused =
+                solve_with(&f.problem.fresh_transition_cache(), &f.prices, &settings, SolveOptions { algorithm, ..Default::default() })
+                    .unwrap_or_else(|error| panic!("{} {algorithm:?}: {error}", f.name));
+            assert!(
+                (focused.cost - eager.cost).abs() <= 1e-7 * eager.cost.abs().max(1.0),
+                "{} {algorithm:?}: focused={} eager={}",
+                f.name,
+                focused.cost,
+                eager.cost
+            );
+        }
+    }
+}
+
+#[test]
 fn backends_agree() {
     for f in fixtures().into_iter().filter(|f| f.name.starts_with("toy") || f.name.starts_with("cluster")) {
         let settings = Settings { chaos_per_hour: f.chaos_per_hour };

@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ponder_core::{self as craft, Plan, Prices, Problem};
+use ponder_game::mods::ModDB;
 use rayon::prelude::*;
 
 use super::cache::plan_key;
@@ -74,8 +75,10 @@ pub fn acquired_continuation(
 /// preparation stage) wait for one solve instead of each running it.
 #[derive(Default)]
 pub struct SharedSolves {
-    cells: std::sync::Mutex<rustc_hash::FxHashMap<String, std::sync::Arc<std::sync::OnceLock<Result<std::sync::Arc<Plan>, String>>>>>,
+    cells: std::sync::Mutex<rustc_hash::FxHashMap<String, SharedPlan>>,
 }
+
+type SharedPlan = std::sync::Arc<std::sync::OnceLock<Result<std::sync::Arc<Plan>, String>>>;
 
 impl SharedSolves {
     /// The plan for `problem` at these prices: from this process, the plan cache, or a fresh solve.
@@ -183,12 +186,19 @@ fn solve_below(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &
     let label = slot.problem.as_ref().map(|p| (p.targets.len(), p.fixed.len()));
     let dump = slot.problem.clone();
     let searched = solve_below_inner(cx, slot, table, lower_bound, ceiling);
-    if std::env::var_os("PONDER_TRACE").is_some() && let Some((targets, fixed)) = label {
+    if std::env::var_os("PONDER_TRACE").is_some()
+        && let Some((targets, fixed)) = label
+    {
         let secs = started.elapsed().as_secs_f64();
         eprintln!("TRACE slot targets={targets} fixed={fixed} searched={searched} secs={secs:.3} pruned={}", lower_bound.is_some());
-        if secs > 4.0 && let Some(p) = dump {
+        if secs > 4.0
+            && let Some(p) = dump
+        {
             let _ = std::fs::create_dir_all("target/craft-cases");
-            let _ = std::fs::write(format!("target/craft-cases/slow-{secs:.1}-{}.json", p.fingerprint()), serde_json::to_vec(&p).unwrap_or_default());
+            let _ = std::fs::write(
+                format!("target/craft-cases/slow-{secs:.1}-{}.json", p.fingerprint()),
+                serde_json::to_vec(&p).unwrap_or_default(),
+            );
         }
     }
     searched
@@ -347,4 +357,27 @@ pub fn solve_slots(cx: &Context, slots: Vec<SolveSlot>, table: &Prices, workers:
         Some(pool) => pool.install(run),
         None => run(),
     }
+}
+
+pub fn price_routes(
+    cx: &Context,
+    db: &ModDB,
+    estimates: &mut [Estimate],
+    table: &Prices,
+    league: &str,
+    workers: Option<usize>,
+    progress: Option<Progress>,
+) {
+    if let Some(p) = progress {
+        p(&format!("pricing {} crafts: direct, fractured, protected, recombined and Awakener routes", estimates.len()));
+    }
+    for_each_largest_first(estimates, workers, |estimate| {
+        let started = std::time::Instant::now();
+        let searched = solve_direct_and_fractures(cx, estimate, table);
+        super::recombs::price_donor_routes(cx, db, estimate, table, league);
+        if searched {
+            report_solved(estimate, started, progress);
+        }
+    });
+    cx.solves.clear();
 }

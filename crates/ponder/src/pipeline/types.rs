@@ -624,6 +624,7 @@ impl Estimate {
             "currency": usage,
             "clicking_hours": self.clicking_hours(),
             "currency_chaos": self.currency_cost(),
+            "finishing_policy_risk": self.selected_finishing().and_then(|(_, plan)| plan.risk),
             "recipe": recipe,
             "recipe_stages": self.recipe_stages(),
             "selected_route": self.cheapest_route().map(|route| match route { CraftRoute::Craft => "craft", CraftRoute::Fracture(_) => "fracture", CraftRoute::Recomb => "recombination", CraftRoute::Awakener => "awakener", CraftRoute::Protected => "protected" }),

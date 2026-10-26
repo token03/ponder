@@ -33,8 +33,14 @@ fn main() {
     }
     if let Some(path) = std::env::args().skip_while(|arg| arg != "--solve-case").nth(1) {
         let p: ponder_core::Problem = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let plan = ponder_core::solve(&p, &table, &cx.settings);
-        println!("{:.3}s {:?}", started.elapsed().as_secs_f64(), plan.map(|p| (p.cost, p.states, p.usage)));
+        let algorithm = match std::env::args().skip_while(|arg| arg != "--algorithm").nth(1).as_deref() {
+            Some("eager") | None => ponder_core::search::Algorithm::Eager,
+            Some("ilao") => ponder_core::search::Algorithm::Ilao,
+            Some("cg") => ponder_core::search::Algorithm::CgIlao,
+            Some(value) => panic!("unknown algorithm {value}"),
+        };
+        let plan = ponder_core::solve_with(&p, &table, &cx.settings, ponder_core::SolveOptions { algorithm, ..Default::default() });
+        println!("{:.3}s {:?}", started.elapsed().as_secs_f64(), plan.map(|p| (p.cost, p.states, p.search_work, p.usage)));
         return;
     }
     if std::env::args().any(|a| a == "--builds") {
@@ -100,6 +106,10 @@ fn main() {
                         "title": estimate.title,
                         "base": estimate.base,
                         "cost": estimate.cheapest(),
+                        "currency_chaos": estimate.currency_cost(),
+                        "clicking_hours": estimate.clicking_hours(),
+                        "finishing_policy_risk": estimate.cheapest_plan().and_then(|(_, plan)| plan.risk),
+                        "usage": estimate.usage().into_iter().take(3).collect::<Vec<_>>(),
                         "route": format!("{:?}", estimate.cheapest_route()),
                         "direct_lower_bound": estimate.craft_lower_bound,
                         "pruned_fractures": estimate.fractures.iter().filter(|fracture| fracture.craft_lower_bound.is_some()).count(),
@@ -118,6 +128,11 @@ fn main() {
                     estimate.targets.join(" + ")
                 );
             }
+        }
+        if let Some(budget) = std::env::args().skip_while(|arg| arg != "--budget-seconds").nth(1) {
+            let budget: f64 = budget.parse().expect("budget must be a number of seconds");
+            assert!(budget.is_finite() && budget > 0.0, "budget must be positive and finite");
+            assert!(started.elapsed().as_secs_f64() <= budget, "startup exceeded the {budget}s budget");
         }
     }
 }
