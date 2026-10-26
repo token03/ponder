@@ -1,0 +1,67 @@
+sheet = "8Link Proj Gloves "
+base = "Fingerless Silk Gloves"
+quality = 28
+influences = ["elder", "shaper"]
+
+[goal]
+mods = [
+  { text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 },
+  { text = "Socketed Spells have +#% to Critical Strike Multiplier", tier = 1 },
+  { text = "#% increased Projectile Speed / Socketed Gems are supported by Level # Faster Projectiles" },
+  { text = "#% increased Projectile Speed", source = "crafted" },
+]
+
+[stages.elder]
+influences = ["elder"]
+
+[stages.casting]
+mods = [{ text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 }]
+open_suffix = 1
+
+[stages.critical]
+mods = [
+  { text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 },
+  { text = "Socketed Spells have +#% to Critical Strike Multiplier", tier = 1 },
+]
+
+[stages.speed]
+mods = [
+  { text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 },
+  { text = "Socketed Spells have +#% to Critical Strike Multiplier", tier = 1 },
+  { text = "#% increased Projectile Speed / Socketed Gems are supported by Level # Faster Projectiles" },
+]
+
+[[steps]]
+item = "elder"
+do = ["buy:base", "influence-exalted:elder"]
+until = "elder"
+
+[[steps]]
+item = "shaper"
+do = ["buy:shaper_donor"]
+
+[[steps]]
+do = ["awakener:elder+shaper"]
+
+[[steps]]
+do = ["essence:horror"]
+until = "casting"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-critical"]
+until = "critical"
+max = 1
+else = 4
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-speed"]
+until = "speed"
+max = 1
+else = 4
+
+[[steps]]
+do = ["bench:projectile-speed"]
+until = "goal"
+
+[stages.shaper_donor]
+influences = ["shaper"]

@@ -1,0 +1,63 @@
+sheet = "Crit MultMSAOE Focused "
+base = "Focused Amulet"
+ilvl = 86
+influences = ["hunter", "elder"]
+
+[goal]
+mods = [
+  { text = "#% increased Movement Speed", source = "influence" },
+  { text = "#% increased Area of Effect", source = "influence" },
+  { text = "+#% to Global Critical Strike Multiplier", source = "essence" },
+]
+
+[stages.hunter_ms]
+base = "Onyx Amulet"
+influences = ["hunter"]
+rarity = "magic"
+mods = [{ text = "#% increased Movement Speed", source = "influence" }]
+
+[stages.elder_aoe]
+influences = ["elder"]
+mods = [{ text = "#% increased Area of Effect", source = "influence" }]
+
+[stages.focused]
+mods = [
+  { text = "#% increased Movement Speed", source = "influence" },
+  { text = "#% increased Area of Effect", source = "influence" },
+]
+max_mods = 2
+
+[stages.astrolabe]
+base = "Astrolabe Amulet"
+mods = [{ text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+max_prefix = 2
+min_mods = 5
+
+[[steps]]
+item = "hunter"
+do = ["buy:base", "alteration"]
+until = "hunter_ms"
+
+[[steps]]
+item = "elder"
+do = ["buy:base", "influence-exalted:elder", "scouring", "transmutation", "imprint", "chaos"]
+until = "elder_aoe"
+
+[[steps]]
+do = ["awakener:hunter+elder", "annulment"]
+until = "focused"
+max = 1
+else = 2
+note = "The Awakener adds one random mod; annul it."
+
+[[steps]]
+item = "astrolabe"
+do = ["buy:astrolabe", "essence:deafening-scorn", "bench:suffixes-cannot-be-changed", "harvest:reforge-influence"]
+until = "astrolabe"
+note = "All other mods influenced but neither Hunter nor Elder."
+
+[[steps]]
+do = ["recombinator:astrolabe+main"]
+until = "goal"
+max = 1
+else = 4

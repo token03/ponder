@@ -1,0 +1,65 @@
+sheet = "0.8 Strike Range Gloves"
+scope = "The foulborn finish is not modelled."
+base = "Spiked Gloves"
+ilvl = 85
+influences = ["warlord", "elder"]
+
+[goal]
+mods = [
+  { text = "+# metres to Melee Strike Range", source = "elevated", count = 2 },
+  { text = "+# to Accuracy Rating", tier = 2 },
+  { text = "+# to maximum Life", tier = 2 },
+]
+
+[stages.strands]
+influences = ["warlord"]
+rarity = "normal"
+
+[stages.range]
+influences = ["warlord"]
+mods = [{ text = "+# metres to Melee Strike Range", source = "influence" }]
+open_suffix = 1
+
+[stages.range_elevated]
+influences = ["warlord"]
+rarity = "magic"
+mods = [{ text = "+# metres to Melee Strike Range", source = "elevated" }]
+max_prefix = 0
+
+[stages.elder_range]
+influences = ["elder"]
+mods = [{ text = "+# metres to Melee Strike Range", source = "elevated" }]
+
+[stages.awakened]
+mods = [{ text = "+# metres to Melee Strike Range", source = "elevated", count = 2 }, { text = "+# to Accuracy Rating", tier = 2 }]
+open_prefix = 1
+
+[[steps]]
+item = "warlord"
+do = ["buy:base", "scouring", "remembrance"]
+until = "strands"
+
+[[steps]]
+item = "warlord"
+do = ["bench:any-mod", "imprint", "regal", "harvest:reforge-attack"]
+until = "range"
+
+[[steps]]
+item = "warlord"
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-caster", "dominance", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "range_elevated"
+max = 1
+else = 2
+
+[[steps]]
+item = "elder"
+do = ["buy:elder_range"]
+note = "Or reforge attack on an elder base and use Dominance."
+
+[[steps]]
+do = ["beast:lock", "awakener:elder+warlord", "chromatic"]
+until = "awakened"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-life"]
+until = "goal"

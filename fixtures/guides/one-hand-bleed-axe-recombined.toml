@@ -1,0 +1,58 @@
+sheet = "1H Bleed Axe"
+scope = "Method 2: alteration bases and recombinators. Tempering is not modelled."
+base = "Runic Hatchet"
+
+[goal]
+mods = [
+  { text = "Adds # to # Physical Damage", tier = 1 },
+  { text = "#% increased Physical Damage", tier = 3 },
+  { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon" },
+  { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
+]
+
+[stages.flat]
+rarity = "magic"
+mods = [{ text = "Adds # to # Physical Damage", tier = 1 }]
+
+[stages.percent]
+rarity = "magic"
+mods = [{ text = "#% increased Physical Damage", tier = 3 }]
+
+[stages.prefixes]
+mods = [{ text = "Adds # to # Physical Damage", tier = 1 }, { text = "#% increased Physical Damage", tier = 3 }]
+open_prefix = 1
+min_mods = 4
+
+[stages.elder]
+influences = ["elder"]
+mods = [
+  { text = "Adds # to # Physical Damage", tier = 1 },
+  { text = "#% increased Physical Damage", tier = 3 },
+  { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon" },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "percent"
+
+[[steps]]
+do = ["bench:any-suffix", "recombinator:a+b", "bench:any-prefix", "exalted"]
+until = "prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["influence-exalted:elder"]
+until = "elder"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-physical"]
+until = "goal"

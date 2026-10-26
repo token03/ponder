@@ -1,0 +1,97 @@
+sheet = "Es Block Shield"
+base = "Titanium Spirit Shield"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 1 },
+  { text = "#% increased Energy Shield", tier = 1 },
+  { text = "#% increased Chance to Block", tier = 1 },
+  { text = "Recover #% of Energy Shield when you Block", source = "influence" },
+]
+
+[stages.flat]
+rarity = "magic"
+mods = [{ text = "+# to maximum Energy Shield", tier = 1 }]
+
+[stages.percent]
+rarity = "magic"
+mods = [{ text = "#% increased Energy Shield", tier = 1 }]
+
+[stages.block]
+rarity = "magic"
+mods = [{ text = "#% increased Chance to Block", tier = 1 }]
+
+[stages.flat_block]
+mods = [{ text = "+# to maximum Energy Shield", tier = 1 }, { text = "#% increased Chance to Block", tier = 1 }]
+
+[stages.flat_percent]
+mods = [{ text = "+# to maximum Energy Shield", tier = 1 }, { text = "#% increased Energy Shield", tier = 1 }]
+
+[stages.prefixes]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 1 },
+  { text = "#% increased Energy Shield", tier = 1 },
+  { text = "#% increased Chance to Block", tier = 1 },
+]
+
+[stages.prefixes_open]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 1 },
+  { text = "#% increased Energy Shield", tier = 1 },
+  { text = "#% increased Chance to Block", tier = 1 },
+]
+open_suffix = 2
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "block"
+
+[[steps]]
+item = "ab"
+do = ["bench:any-suffix", "recombinator:a+b"]
+until = "flat_block"
+max = 1
+else = 1
+
+[[steps]]
+item = "c"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "d"
+do = ["buy:base", "alteration"]
+until = "percent"
+
+[[steps]]
+item = "cd"
+do = ["bench:any-suffix", "recombinator:c+d"]
+until = "flat_percent"
+max = 1
+else = 4
+
+[[steps]]
+do = ["recombinator:ab+cd"]
+until = "prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "scouring"]
+until = "prefixes_open"
+note = "Only when two suffixes are not already open."
+
+[[steps]]
+do = ["influence-exalted:shaper"]
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-defence"]
+until = "goal"
+note = "Reforge defence fills the suffixes 10% of the time; then annul or start over."

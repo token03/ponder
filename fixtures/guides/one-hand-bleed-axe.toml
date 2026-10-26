@@ -1,0 +1,57 @@
+sheet = "1H Bleed Axe"
+scope = "Method 1 (elder influence, essence of contempt). Tempering is not modelled."
+base = "Runic Hatchet"
+influences = ["elder"]
+
+[goal]
+mods = [
+  { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
+  { text = "#% increased Physical Damage", source = "veiled" },
+  { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
+  { text = "+#% to Physical Damage over Time Multiplier", source = "crafted" },
+]
+
+[stages.elder]
+mods = []
+
+[stages.bleed]
+mods = [{ text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 }]
+open_prefix = 1
+open_suffix = 1
+
+[stages.physical]
+mods = [
+  { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
+  { text = "#% increased Physical Damage", source = "veiled" },
+]
+
+[stages.culling]
+mods = [
+  { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
+  { text = "#% increased Physical Damage", source = "veiled" },
+  { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
+]
+
+[[steps]]
+do = ["buy:base", "influence-exalted:elder"]
+until = "elder"
+
+[[steps]]
+do = ["essence:deafening-contempt"]
+until = "bleed"
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "unveil:physical-damage"]
+until = "physical"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-physical"]
+until = "culling"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:accuracy-strength-and-dexterity", "exalted", "bench:physical-damage-over-time-multiplier"]
+until = "goal"

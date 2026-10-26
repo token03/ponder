@@ -1,0 +1,41 @@
+sheet = "Life+2Phys Focused Amulet"
+scope = "Catalyst quality is not modelled."
+base = "Focused Amulet"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to maximum Life", tier = 1 },
+  { text = "+# to Level of all Physical Skill Gems" },
+  { text = "+# to Minimum Frenzy Charges", source = "crafted" },
+]
+
+[stages.life]
+mods = [{ text = "+# to maximum Life", tier = 1 }]
+
+[stages.life_alone]
+mods = [{ text = "+# to maximum Life", tier = 1 }]
+max_mods = 1
+
+[stages.gems]
+mods = [{ text = "+# to maximum Life", tier = 1 }, { text = "+# to Level of all Physical Skill Gems" }]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["harvest:reforge-life"]
+until = "life"
+
+[[steps]]
+do = ["annulment"]
+until = "life_alone"
+note = "Annul until life is the only mod; losing life sends you back to step 2."
+
+[[steps]]
+do = ["bench:cannot-roll-attack", "harvest:add-remove-physical"]
+until = "gems"
+
+[[steps]]
+do = ["bench:minimum-frenzy-charges", "catalyst:fertile"]
+until = "goal"

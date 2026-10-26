@@ -1,0 +1,49 @@
+sheet = "Dex Armour Chaos Gloves"
+base = "Titan Gauntlets"
+quality = 28
+
+[goal]
+mods = [
+  { text = "+# to Dexterity", fractured = true, source = "essence" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+# to maximum Life", tier = 1 },
+]
+
+[stages.dex_four_mods]
+mods = [{ text = "+# to Dexterity", source = "essence" }]
+min_mods = 4
+max_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to Dexterity", fractured = true, source = "essence" }]
+
+[stages.resist]
+mods = [
+  { text = "+# to Dexterity", fractured = true, source = "essence" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+]
+
+[[steps]]
+do = ["buy:base"]
+note = "Or buy a fractured Dexterity base and skip to step 4."
+
+[[steps]]
+do = ["essence:deafening-sorrow"]
+until = "dex_four_mods"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 2
+
+[[steps]]
+do = ["essence:deafening-envy"]
+until = "resist"
+
+[[steps]]
+do = ["eldritch-implicit:lesser-ember", "bench:armour", "exalted", "eldritch-annulment"]
+until = "goal"
+note = "Alternative: suffixes cannot be changed, Harvest reforge life."

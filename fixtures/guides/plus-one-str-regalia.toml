@@ -1,0 +1,48 @@
+sheet = "+1 STR Regalia"
+scope = "Tailoring is not modelled."
+base = "Vaal Regalia"
+ilvl = 86
+quality = 27
+
+[goal]
+mods = [
+  { text = "+# to Level of Socketed Strength Gems", source = "fossil", fractured = true },
+  { text = "+# to maximum Energy Shield" },
+  { text = "#% increased Energy Shield" },
+  { text = "+# to Dexterity and Intelligence", source = "crafted" },
+  { text = "Regenerate # Energy Shield per second while a Rare or Unique Enemy is Nearby", source = "veiled" },
+]
+
+[stages.socketed]
+mods = [{ text = "+# to Level of Socketed Strength Gems", source = "fossil" }]
+min_mods = 4
+max_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to Level of Socketed Strength Gems", source = "fossil", fractured = true }]
+
+[stages.energy_shield]
+mods = [
+  { text = "+# to Level of Socketed Strength Gems", source = "fossil", fractured = true },
+  { text = "+# to maximum Energy Shield" },
+  { text = "#% increased Energy Shield" },
+]
+
+[[steps]]
+do = ["buy:base", "fossil:faceted+fundamental"]
+until = "socketed"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 1
+
+[[steps]]
+do = ["fossil:dense"]
+until = "energy_shield"
+note = "Repeat until the energy shield total is satisfying (1000+)."
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:dexterity-and-intelligence", "unveil:energy-shield-regeneration"]
+until = "goal"

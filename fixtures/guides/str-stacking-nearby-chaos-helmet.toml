@@ -1,0 +1,68 @@
+sheet = "Str StackingNearby -Chaos Armou"
+scope = "The foulborn finish is not modelled."
+base = "Royal Burgonet"
+quality = 29
+influences = ["warlord", "hunter"]
+
+[goal]
+mods = [
+  { text = "Gain Accuracy Rating equal to your Strength / #% increased Critical Strike Chance per # Strength", source = "elevated" },
+  { text = "Nearby Enemies have #% to Chaos Resistance / #% to Chaos Resistance", source = "elevated" },
+  { text = "+# to Strength", tier = 1 },
+  { text = "+# to maximum Life", tier = 1 },
+]
+
+[stages.strands]
+influences = ["warlord"]
+rarity = "normal"
+
+[stages.accuracy]
+influences = ["warlord"]
+mods = [{ text = "Gain Accuracy Rating equal to your Strength", source = "influence" }]
+
+[stages.accuracy_elevated]
+influences = ["warlord"]
+rarity = "magic"
+mods = [{ text = "Gain Accuracy Rating equal to your Strength / #% increased Critical Strike Chance per # Strength", source = "elevated" }]
+max_prefix = 0
+
+[stages.chaos]
+influences = ["hunter"]
+mods = [{ text = "Nearby Enemies have #% to Chaos Resistance / #% to Chaos Resistance", source = "elevated" }]
+
+[stages.awakened]
+mods = [
+  { text = "Gain Accuracy Rating equal to your Strength / #% increased Critical Strike Chance per # Strength", source = "elevated" },
+  { text = "Nearby Enemies have #% to Chaos Resistance / #% to Chaos Resistance", source = "elevated" },
+  { text = "+# to Strength", tier = 1 },
+]
+open_prefix = 1
+
+[[steps]]
+item = "warlord"
+do = ["buy:base", "influence-exalted:warlord", "scouring", "remembrance"]
+until = "strands"
+
+[[steps]]
+item = "warlord"
+do = ["bench:any-mod", "imprint", "regal", "harvest:reforge-attack"]
+until = "accuracy"
+
+[[steps]]
+item = "warlord"
+do = ["dominance", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "accuracy_elevated"
+max = 1
+else = 2
+
+[[steps]]
+item = "hunter"
+do = ["buy:chaos"]
+
+[[steps]]
+do = ["beast:lock", "awakener:hunter+warlord", "chromatic"]
+until = "awakened"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-life"]
+until = "goal"

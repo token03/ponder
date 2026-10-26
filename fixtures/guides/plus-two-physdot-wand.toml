@@ -1,0 +1,47 @@
+sheet = "+2 PhysDot Wand"
+scope = "The Harvest enchant is not modelled."
+base = "Convoking Wand"
+ilvl = 84
+
+[goal]
+mods = [
+  { text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true },
+  { text = "+# to Level of all Spell Skill Gems" },
+  { text = "+# to Level of all Physical Spell Skill Gems" },
+  { text = "Can have up to # Crafted Modifiers", source = "crafted" },
+  { text = "Minions deal #% increased Damage", source = "crafted" },
+  { text = "#% increased Cast Speed", source = "crafted" },
+]
+
+[stages.spell_gems]
+mods = [
+  { text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true },
+  { text = "+# to Level of all Spell Skill Gems" },
+]
+open_prefix = 2
+open_suffix = 1
+
+[stages.physical_gems]
+mods = [
+  { text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true },
+  { text = "+# to Level of all Spell Skill Gems" },
+  { text = "+# to Level of all Physical Spell Skill Gems" },
+]
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["fossil:jagged+metallic+shuddering+corroded"]
+until = "spell_gems"
+
+[[steps]]
+do = ["bench:cannot-roll-attack", "harvest:add-remove-physical"]
+until = "physical_gems"
+
+[[steps]]
+do = ["bench:multimod", "bench:minion-damage", "bench:cast-speed"]
+until = "goal"
+
+[stages.fractured_base]
+mods = [{ text = "+#% to Physical Damage over Time Multiplier", tier = 2, fractured = true }]

@@ -1,0 +1,38 @@
+sheet = "8Link ArchDemon "
+scope = "The optional veiled +2 AoE finish and foulborn life slam are not modelled."
+base = "Archdemon Crown"
+ilvl = 82
+influences = ["elder"]
+
+[goal]
+mods = [
+  { text = "#% increased Burning Damage / Socketed Gems are Supported by Level # Burning Damage" },
+  { text = "#% increased Area Damage / Socketed Gems are Supported by Level # Concentrated Effect" },
+  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "crafted" },
+]
+
+[stages.burning]
+mods = [{ text = "#% increased Burning Damage / Socketed Gems are Supported by Level # Burning Damage" }]
+
+[stages.concentrated]
+mods = [
+  { text = "#% increased Burning Damage / Socketed Gems are Supported by Level # Burning Damage" },
+  { text = "#% increased Area Damage / Socketed Gems are Supported by Level # Concentrated Effect" },
+]
+
+[[steps]]
+do = ["buy:base", "influence-exalted:elder"]
+
+[[steps]]
+do = ["essence:horror"]
+until = "burning"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-influence"]
+until = "concentrated"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:area-of-effect-and-socketed-aoe"]
+until = "goal"

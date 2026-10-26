@@ -1,0 +1,118 @@
+sheet = ".+2 Minion firechaos Armour Glo"
+base = "Titan Gauntlets"
+quality = 28
+
+[goal]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
+  { text = "+# to maximum Life", tier = 1 },
+  { text = "#% of Physical Damage Converted to Fire Damage", source = "crafted" },
+]
+
+[stages.donor_clean]
+base = "Dragonscale Gauntlets"
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+max_suffix = 0
+
+[stages.mana_base]
+base = "Titan Gauntlets"
+mods = [{ text = "+# to maximum Mana", source = "natural" }]
+max_prefix = 1
+min_mods = 4
+
+[stages.transferred]
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+
+[stages.fracture_ready]
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+min_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" }]
+
+[stages.resist]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+]
+
+[stages.resist_open]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+]
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
+]
+
+[stages.life]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
+  { text = "+# to maximum Life", tier = 1 },
+]
+open_prefix = 1
+
+[[steps]]
+item = "donor"
+do = ["buy:donor_clean", "eldritch-implicit:lesser-ichor", "eldritch-annulment", "beast:split"]
+until = "donor_clean"
+
+[[steps]]
+item = "quality"
+do = ["buy:base", "essence:screaming-misery", "eldritch-chaos"]
+until = "mana_base"
+
+[[steps]]
+do = ["recombinator:donor+quality"]
+until = "transferred"
+max = 1
+else = 2
+
+[[steps]]
+do = ["eldritch-exalted"]
+until = "fracture_ready"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 2
+
+[[steps]]
+do = ["essence:deafening-envy"]
+until = "resist"
+
+[[steps]]
+do = ["annulment"]
+until = "resist_open"
+max = 1
+else = 6
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "eldritch-implicit:lesser-ember", "eldritch-exalted", "veiled-chaos", "unveil:fire-and-chaos"]
+until = "suffixes"
+
+[[steps]]
+do = ["bench:armour", "exalted", "eldritch-annulment"]
+until = "life"
+
+[[steps]]
+do = ["bench:convert-fire"]
+until = "goal"

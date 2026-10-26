@@ -1,0 +1,15 @@
+[package]
+name = "ponder-rules"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "PoE crafting rules on real items: game data, goals, operations, simulator. No I/O beyond reading data files."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+flate2 = "1"
+
+[dev-dependencies]
+toml = "0.9"

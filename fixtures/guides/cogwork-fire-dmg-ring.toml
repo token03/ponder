@@ -1,0 +1,65 @@
+sheet = "CogWork Fire dmg Ring"
+base = "Cogwork Ring"
+
+[goal]
+mods = [
+  { text = "+#% to Damage over Time Multiplier", fractured = true },
+  { text = "+#% to Fire Resistance", tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+  { text = "+# to maximum Life" },
+]
+
+[stages.fractured]
+mods = [{ text = "+#% to Damage over Time Multiplier", fractured = true }]
+
+[stages.resist]
+mods = [
+  { text = "+#% to Damage over Time Multiplier", fractured = true },
+  { text = "+#% to Fire Resistance", tier = 1 },
+]
+open_prefix = 1
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+#% to Damage over Time Multiplier", fractured = true },
+  { text = "+#% to Fire Resistance", tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+]
+open_prefix = 1
+
+[stages.clean_prefix]
+mods = [
+  { text = "+#% to Damage over Time Multiplier", fractured = true },
+  { text = "+#% to Fire Resistance", tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+]
+max_prefix = 1
+
+[[steps]]
+do = ["buy:base"]
+note = "Base with damage over time multiplier, made fracture-ready."
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+
+[[steps]]
+do = ["essence:deafening-anger"]
+until = "resist"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-chaos"]
+until = "suffixes"
+max = 1
+else = 3
+
+[[steps]]
+do = ["beast:wild-bristle-matron", "bench:suffixes-cannot-be-changed", "scouring", "beast:wild-bristle-matron"]
+until = "clean_prefix"
+
+[[steps]]
+do = ["harvest:add-life-remove-non-life"]
+until = "goal"
+max = 1
+else = 5

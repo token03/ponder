@@ -1,0 +1,50 @@
+sheet = "ReservationLifeMax Fire Shield"
+scope = "The guide warns %maximum life is not worth chasing; the goal leaves it out."
+base = "Ezomyte Tower Shield"
+quality = 30
+influences = ["hunter"]
+
+[goal]
+mods = [
+  { text = "#% additional Physical Damage Reduction", tier = 2 },
+  { text = "+#% to maximum Fire Resistance", tier = 1 },
+  { text = "Socketed Gems have #% increased Reservation Efficiency", source = "influence" },
+  { text = "+# to maximum Life", tier = 3 },
+]
+
+[stages.strands]
+rarity = "normal"
+
+[stages.reforged]
+mods = [
+  { text = "#% additional Physical Damage Reduction", tier = 2 },
+  { text = "+#% to maximum Fire Resistance", tier = 1 },
+]
+max_prefix = 2
+max_suffix = 2
+
+[stages.reservation]
+mods = [
+  { text = "#% additional Physical Damage Reduction", tier = 2 },
+  { text = "+#% to maximum Fire Resistance", tier = 1 },
+  { text = "Socketed Gems have #% increased Reservation Efficiency", source = "influence" },
+]
+
+[[steps]]
+do = ["buy:base", "scouring", "remembrance", "bench:any-mod", "imprint", "regal"]
+until = "strands"
+note = "Keep at least 50 strands."
+
+[[steps]]
+do = ["harvest:reforge-physical"]
+until = "reforged"
+
+[[steps]]
+do = ["bench:any-prefix", "influence-exalted:hunter"]
+until = "reservation"
+max = 1
+else = 2
+
+[[steps]]
+do = ["beast:wild-bristle-matron", "harvest:reforge-life"]
+until = "goal"

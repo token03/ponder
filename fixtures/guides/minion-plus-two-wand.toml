@@ -1,0 +1,46 @@
+sheet = "Minion +2 Wand"
+base = "Convoking Wand"
+ilvl = 84
+
+[goal]
+mods = [
+  { text = "+# to Level of all Spell Skill Gems" },
+  { text = "+# to Level of all Minion Skill Gems" },
+  { text = "Minions have #% increased Attack Speed / Minions have #% increased Cast Speed", source = "veiled" },
+  { text = "Trigger Socketed Spells when you Focus, with a # second Cooldown", source = "crafted" },
+]
+
+[stages.gems]
+mods = [{ text = "+# to Level of all Spell Skill Gems" }, { text = "+# to Level of all Minion Skill Gems" }]
+open_suffix = 1
+
+[stages.gems_clean]
+mods = [{ text = "+# to Level of all Spell Skill Gems" }, { text = "+# to Level of all Minion Skill Gems" }]
+max_suffix = 0
+
+[stages.unveiled]
+mods = [
+  { text = "+# to Level of all Spell Skill Gems" },
+  { text = "+# to Level of all Minion Skill Gems" },
+  { text = "Minions have #% increased Attack Speed / Minions have #% increased Cast Speed", source = "veiled" },
+]
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["fossil:jagged+metallic+shuddering+corroded"]
+until = "gems"
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "scouring"]
+until = "gems_clean"
+note = "Only needed when the suffixes are not already empty."
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:minion-cast-speed"]
+until = "unveiled"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:trigger-on-focus"]
+until = "goal"

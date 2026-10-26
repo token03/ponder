@@ -1,0 +1,83 @@
+sheet = "Necrotic Dmg Shocked "
+scope = "Preparation of the fractured base; the finishing variants of steps 15-17 are not modelled."
+base = "Necrotic Armour"
+quality = 25
+
+[goal]
+mods = [
+  { text = "Adds # to # Lightning Damage for each Shocked Enemy you've Killed Recently", fractured = true, source = "legacy" },
+]
+
+[stages.donor_clean]
+base = "Grasping Mail"
+rarity = "magic"
+mods = [{ text = "Adds # to # Lightning Damage for each Shocked Enemy you've Killed Recently", source = "legacy" }]
+max_suffix = 0
+max_prefix = 1
+
+[stages.donor_mana]
+base = "Grasping Mail"
+mods = [{ text = "Adds # to # Lightning Damage for each Shocked Enemy you've Killed Recently", source = "legacy" }, { text = "+# to maximum Mana", source = "natural" }]
+max_prefix = 2
+
+[stages.evasion_mana]
+base = "Assassin's Garb"
+ilvl = 86
+mods = [{ text = "+# to maximum Mana", source = "natural" }, { text = "#% increased Evasion Rating" }]
+open_prefix = 1
+
+[stages.evasion_carrier]
+base = "Assassin's Garb"
+ilvl = 86
+rarity = "magic"
+mods = [{ text = "Adds # to # Lightning Damage for each Shocked Enemy you've Killed Recently", source = "legacy" }]
+max_suffix = 0
+
+[stages.armour_only]
+mods = [{ text = "+# to Armour", source = "natural" }]
+max_prefix = 1
+
+[stages.transferred]
+mods = [{ text = "Adds # to # Lightning Damage for each Shocked Enemy you've Killed Recently", source = "legacy" }]
+max_prefix = 1
+min_mods = 4
+
+[[steps]]
+item = "donor"
+do = ["buy:donor_clean", "eldritch-implicit:eater-dominant", "eldritch-annulment", "beast:split", "imprint"]
+until = "donor_clean"
+
+[[steps]]
+item = "donor"
+do = ["regal", "exalted"]
+until = "donor_mana"
+note = "Restore the imprint and repeat when the regal misses."
+
+[[steps]]
+item = "evasion"
+do = ["buy:base", "essence:screaming-misery"]
+until = "evasion_mana"
+
+[[steps]]
+item = "carrier"
+do = ["recombinator:donor+evasion", "eldritch-annulment", "beast:split"]
+until = "evasion_carrier"
+max = 1
+else = 3
+
+[[steps]]
+item = "armour"
+do = ["buy:base", "essence:screaming-dread"]
+until = "armour_only"
+
+[[steps]]
+do = ["recombinator:carrier+armour", "eldritch-implicit:eater-dominant", "eldritch-exalted"]
+until = "transferred"
+max = 1
+else = 5
+
+[[steps]]
+do = ["fracturing"]
+until = "goal"
+max = 1
+else = 5

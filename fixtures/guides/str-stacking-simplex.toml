@@ -1,0 +1,61 @@
+sheet = "STR Stacking Simplex "
+base = "Simplex Amulet"
+influences = ["shaper", "warlord"]
+
+[goal]
+mods = [
+  { text = "#% increased Attributes", source = "influence" },
+  { text = "#% increased Strength", source = "influence" },
+  { text = "#% increased Damage per # Strength" },
+]
+
+[stages.per_strength]
+base = "Onyx Amulet"
+influences = ["warlord"]
+rarity = "magic"
+mods = [{ text = "#% increased Damage per # Strength" }]
+
+[stages.attributes]
+influences = ["shaper"]
+rarity = "magic"
+mods = [{ text = "#% increased Attributes", source = "influence" }]
+max_mods = 1
+
+[stages.awakened]
+mods = [{ text = "#% increased Attributes", source = "influence" }, { text = "#% increased Damage per # Strength" }]
+max_mods = 2
+
+[stages.strength]
+base = "Astrolabe Amulet"
+influences = ["crusader", "redeemer"]
+mods = [{ text = "#% increased Strength", source = "influence" }]
+min_mods = 4
+
+[[steps]]
+item = "warlord"
+do = ["buy:base", "alteration"]
+until = "per_strength"
+
+[[steps]]
+item = "simplex"
+do = ["buy:base", "influence-exalted:shaper", "scouring", "transmutation", "imprint", "chaos"]
+until = "attributes"
+
+[[steps]]
+item = "simplex"
+do = ["awakener:warlord+simplex", "annulment"]
+until = "awakened"
+max = 1
+else = 2
+
+[[steps]]
+item = "astrolabe"
+do = ["buy:base", "alteration", "beast:wild-bristle-matron", "imprint", "regal", "harvest:reforge-influence", "bench:suffixes-cannot-be-changed", "harvest:reforge-minion"]
+until = "strength"
+note = "Increased strength plus two other influenced suffixes that are neither Shaper nor Warlord."
+
+[[steps]]
+do = ["recombinator:simplex+astrolabe"]
+until = "goal"
+max = 1
+else = 4

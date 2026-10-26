@@ -1,0 +1,66 @@
+sheet = ".+1 TotemReserRecover Life Str "
+scope = "The foulborn prefix and crafted block are not modelled."
+base = "Ezomyte Tower Shield"
+influences = ["shaper", "hunter"]
+
+[goal]
+mods = [
+  { text = "Recover #% of Life when you Block", source = "influence" },
+  { text = "Socketed Gems have #% increased Reservation Efficiency", source = "influence" },
+  { text = "+# to Strength" },
+  { text = "+# to maximum number of Summoned Totems", source = "influence" },
+]
+
+[stages.strands]
+influences = ["shaper"]
+rarity = "normal"
+
+[stages.recover]
+influences = ["shaper"]
+mods = [{ text = "Recover #% of Life when you Block", source = "influence" }]
+
+[stages.recover_alone]
+influences = ["shaper"]
+rarity = "magic"
+mods = [{ text = "Recover #% of Life when you Block", source = "influence" }]
+max_prefix = 0
+
+[stages.reservation]
+influences = ["hunter"]
+mods = [{ text = "Socketed Gems have #% increased Reservation Efficiency", source = "influence" }]
+
+[stages.awakened]
+mods = [
+  { text = "Recover #% of Life when you Block", source = "influence" },
+  { text = "Socketed Gems have #% increased Reservation Efficiency", source = "influence" },
+  { text = "+# to Strength" },
+]
+open_prefix = 1
+
+[[steps]]
+item = "shaper"
+do = ["buy:base", "influence-exalted:shaper", "scouring", "remembrance"]
+until = "strands"
+
+[[steps]]
+item = "shaper"
+do = ["bench:any-mod", "imprint", "regal", "harvest:reforge-life"]
+until = "recover"
+
+[[steps]]
+item = "shaper"
+do = ["annulment", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "recover_alone"
+
+[[steps]]
+item = "hunter"
+do = ["buy:reservation"]
+
+[[steps]]
+do = ["beast:lock", "awakener:hunter+shaper", "chromatic"]
+until = "awakened"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-influence"]
+until = "goal"
+note = "One in three gives the totem mod."

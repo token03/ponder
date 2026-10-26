@@ -1,0 +1,38 @@
+sheet = "Cheap High Es Regalia"
+scope = "Method 2: start from a fractured %ES regalia. Tailoring is not modelled."
+base = "Twilight Regalia"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, count = 2 },
+  { text = "+# to Intelligence", tier = 2 },
+  { text = "#% increased Attributes", source = "crafted" },
+]
+
+[stages.fractured_base]
+mods = [{ text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, fractured = true }]
+
+[stages.prefixes]
+mods = [{ text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, count = 2 }]
+
+[stages.int]
+mods = [
+  { text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, count = 2 },
+  { text = "+# to Intelligence", tier = 2 },
+]
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["essence:deafening-woe"]
+until = "prefixes"
+
+[[steps]]
+do = ["eldritch-implicit:lesser-ichor", "bench:resistance", "exalted", "eldritch-annulment"]
+until = "int"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:attributes"]
+until = "goal"

@@ -1,0 +1,54 @@
+sheet = "Chaos Dmg Claw"
+scope = "The Harvest enchant is not modelled."
+base = "Imperial Claw"
+ilvl = 83
+
+[goal]
+mods = [
+  { text = "Adds # to # Chaos Damage", tier = 1 },
+  { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Attack Speed"], tier = 2 },
+  { text = ["#% increased Critical Strike Chance", "+#% to Global Critical Strike Multiplier"], source = "crafted" },
+]
+
+[stages.chaos]
+mods = [{ text = "Adds # to # Chaos Damage", tier = 1 }]
+open_prefix = 1
+open_suffix = 1
+
+[stages.penetration]
+mods = [
+  { text = "Adds # to # Chaos Damage", tier = 1 },
+  { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
+]
+open_suffix = 1
+
+[stages.suffix]
+mods = [
+  { text = "Adds # to # Chaos Damage", tier = 1 },
+  { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Attack Speed"], tier = 2 },
+]
+
+[[steps]]
+do = ["buy:base"]
+note = "An item level 83+ claw with an attack speed or critical multiplier implicit."
+
+[[steps]]
+do = ["essence:deafening-woe"]
+until = "chaos"
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:physical-damage", "unveil:chaos-penetration"]
+until = "penetration"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-critical"]
+until = "suffix"
+note = "Or reforge speed; add/remove avoids filling the item."
+
+[[steps]]
+do = ["bench:critical-strike-chance"]
+until = "goal"

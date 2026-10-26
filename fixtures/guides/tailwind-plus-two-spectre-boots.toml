@@ -1,0 +1,76 @@
+sheet = "Tailwind+2 Spectre Boots"
+scope = "The optional life finishes are not modelled beyond the crafted life."
+base = "Velour Boots"
+quality = 30
+influences = ["elder", "hunter"]
+
+[goal]
+mods = [
+  { text = "+# to Level of all Raise Spectre Gems", source = "elevated" },
+  { text = "You have Tailwind if you have dealt a Critical Strike Recently / #% increased Effect of Tailwind on you", source = "elevated" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "#% increased Movement Speed", source = "veiled" },
+  { text = "+# to maximum Life", source = "crafted" },
+]
+
+[stages.strands]
+influences = ["elder"]
+rarity = "normal"
+
+[stages.spectre]
+influences = ["elder"]
+mods = [{ text = "+# to Level of all Raise Spectre Gems", source = "influence" }]
+min_mods = 2
+max_suffix = 2
+
+[stages.spectre_elevated]
+influences = ["elder"]
+rarity = "magic"
+mods = [{ text = "+# to Level of all Raise Spectre Gems", source = "elevated" }]
+max_suffix = 1
+max_prefix = 0
+
+[stages.tailwind]
+influences = ["hunter"]
+mods = [{ text = "You have Tailwind if you have dealt a Critical Strike Recently / #% increased Effect of Tailwind on you", source = "elevated" }]
+
+[stages.awakened]
+mods = [
+  { text = "+# to Level of all Raise Spectre Gems", source = "elevated" },
+  { text = "You have Tailwind if you have dealt a Critical Strike Recently / #% increased Effect of Tailwind on you", source = "elevated" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+]
+open_prefix = 1
+
+[[steps]]
+item = "spectre"
+do = ["buy:base", "influence-exalted:elder", "scouring", "remembrance"]
+until = "strands"
+note = "Until 60+ strands."
+
+[[steps]]
+item = "spectre"
+do = ["bench:any-mod", "imprint", "regal", "harvest:reforge-minion"]
+until = "spectre"
+note = "Restore the imprint when the regal drops below 55 strands."
+
+[[steps]]
+item = "spectre"
+do = ["dominance", "bench:suffixes-cannot-be-changed", "scouring"]
+until = "spectre_elevated"
+max = 1
+else = 2
+
+[[steps]]
+item = "tailwind"
+do = ["buy:tailwind"]
+note = "Or roll Hunter boots with Harvest reforge fire and use Dominance."
+
+[[steps]]
+do = ["beast:lock", "awakener:tailwind+spectre", "chromatic"]
+until = "awakened"
+note = "Preview the Awakener result under a beast lock; reroll the lock with a chromatic until it shows a T1 resistance and an open prefix."
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "veiled-chaos", "unveil:movement-speed", "bench:life"]
+until = "goal"

@@ -1,0 +1,81 @@
+sheet = "Ele Dmg Wand "
+base = "Prophecy Wand"
+
+[goal]
+mods = [
+  { text = "Adds # to # Cold Damage to Spells", tier = 2 },
+  { text = "Adds # to # Fire Damage to Spells", tier = 2 },
+  { text = "Adds # to # Lightning Damage to Spells", tier = 2 },
+  { text = "+#% to Damage over Time Multiplier", source = "crafted" },
+  { text = ["#% increased Critical Strike Chance / +# to Strength and Intelligence", "#% increased Attack Speed / +# to Dexterity and Intelligence", "+#% to Global Critical Strike Multiplier"], source = "veiled" },
+]
+
+[stages.cold]
+rarity = "magic"
+mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }]
+
+[stages.fire]
+rarity = "magic"
+mods = [{ text = "Adds # to # Fire Damage to Spells", tier = 2 }]
+
+[stages.lightning]
+rarity = "magic"
+mods = [{ text = "Adds # to # Lightning Damage to Spells", tier = 2 }]
+
+[stages.cold_fire]
+mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }, { text = "Adds # to # Fire Damage to Spells", tier = 2 }]
+
+[stages.cold_lightning]
+mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }, { text = "Adds # to # Lightning Damage to Spells", tier = 2 }]
+
+[stages.prefixes]
+mods = [
+  { text = "Adds # to # Cold Damage to Spells", tier = 2 },
+  { text = "Adds # to # Fire Damage to Spells", tier = 2 },
+  { text = "Adds # to # Lightning Damage to Spells", tier = 2 },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "cold"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "fire"
+
+[[steps]]
+item = "ab"
+do = ["bench:any-suffix", "recombinator:a+b"]
+until = "cold_fire"
+max = 1
+else = 1
+
+[[steps]]
+item = "c"
+do = ["buy:base", "alteration"]
+until = "cold"
+
+[[steps]]
+item = "d"
+do = ["buy:base", "alteration"]
+until = "lightning"
+
+[[steps]]
+item = "cd"
+do = ["bench:any-suffix", "recombinator:c+d"]
+until = "cold_lightning"
+max = 1
+else = 4
+
+[[steps]]
+do = ["recombinator:ab+cd"]
+until = "prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:damage-over-time-multiplier", "unveil:critical-or-speed"]
+until = "goal"
+note = "The guide then uses Harvest add/remove or a veiled exalt for the remaining suffix."

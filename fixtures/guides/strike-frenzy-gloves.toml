@@ -1,0 +1,58 @@
+sheet = "StrikeFrenzy Gloves "
+scope = "The optional attack speed and Aspect of the Cat finishes are not modelled."
+base = "Spiked Gloves"
+quality = 25
+influences = ["warlord", "hunter"]
+
+[goal]
+mods = [
+  { text = "+# to Maximum Frenzy Charges / #% chance that if you would gain Frenzy Charges, you instead gain up to your maximum number of Frenzy Charges", source = "elevated" },
+  { text = "Non-Vaal Strike Skills target # additional nearby Enemies", source = "elevated" },
+  { text = "+# to maximum Life", tier = 2 },
+]
+
+[stages.strands]
+influences = ["warlord"]
+rarity = "normal"
+
+[stages.frenzy]
+influences = ["warlord"]
+mods = [{ text = "+# to Maximum Frenzy Charges", source = "influence" }]
+open_prefix = 1
+
+[stages.frenzy_elevated]
+influences = ["warlord"]
+rarity = "magic"
+mods = [{ text = "+# to Maximum Frenzy Charges / #% chance that if you would gain Frenzy Charges, you instead gain up to your maximum number of Frenzy Charges", source = "elevated" }]
+max_suffix = 0
+
+[stages.strike]
+influences = ["hunter"]
+mods = [{ text = "Non-Vaal Strike Skills target # additional nearby Enemies", source = "elevated" }]
+
+[[steps]]
+item = "frenzy"
+do = ["buy:base", "influence-exalted:warlord", "scouring", "remembrance"]
+until = "strands"
+
+[[steps]]
+item = "frenzy"
+do = ["bench:any-mod", "imprint", "regal", "harvest:reforge-caster"]
+until = "frenzy"
+
+[[steps]]
+item = "frenzy"
+do = ["dominance", "bench:prefixes-cannot-be-changed", "scouring"]
+until = "frenzy_elevated"
+max = 1
+else = 2
+
+[[steps]]
+item = "strike"
+do = ["buy:strike", "dominance"]
+until = "strike"
+
+[[steps]]
+do = ["beast:lock", "awakener:strike+frenzy", "chromatic"]
+until = "goal"
+note = "Preview until the result shows T1/T2 life and an open suffix."

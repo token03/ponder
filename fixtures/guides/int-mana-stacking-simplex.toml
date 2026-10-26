@@ -1,0 +1,61 @@
+sheet = "IntMana Stacking Simplex"
+base = "Simplex Amulet"
+influences = ["crusader", "shaper", "elder"]
+
+[goal]
+mods = [
+  { text = "#% increased Intelligence", source = "influence" },
+  { text = "#% increased Attributes", source = "influence" },
+  { text = "#% increased maximum Mana", source = "influence" },
+]
+
+[stages.int]
+influences = ["crusader"]
+rarity = "magic"
+mods = [{ text = "#% increased Intelligence", source = "influence" }]
+max_mods = 1
+
+[stages.attributes]
+base = "Onyx Amulet"
+influences = ["shaper"]
+rarity = "magic"
+mods = [{ text = "#% increased Attributes", source = "influence" }]
+
+[stages.awakened]
+influences = ["crusader", "shaper"]
+mods = [{ text = "#% increased Intelligence", source = "influence" }, { text = "#% increased Attributes", source = "influence" }]
+max_mods = 2
+
+[stages.mana]
+base = "Onyx Amulet"
+influences = ["elder"]
+mods = [{ text = "#% increased maximum Mana", source = "influence" }]
+min_mods = 4
+
+[[steps]]
+item = "simplex"
+do = ["buy:base", "influence-orb:crusader", "scouring", "transmutation", "imprint", "chaos", "annulment"]
+until = "int"
+
+[[steps]]
+item = "shaper"
+do = ["buy:attributes"]
+
+[[steps]]
+item = "simplex"
+do = ["awakener:shaper+simplex", "annulment"]
+until = "awakened"
+max = 1
+else = 1
+
+[[steps]]
+item = "mana"
+do = ["buy:mana", "annulment", "bench:any-suffix", "influence-exalted:elder", "bench:multimod", "bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed", "harvest:reforge-influence"]
+until = "mana"
+note = "Xopec's %mana with elder mods on both sides, matched to a second elder donor."
+
+[[steps]]
+do = ["recombinator:simplex+mana"]
+until = "goal"
+max = 1
+else = 1

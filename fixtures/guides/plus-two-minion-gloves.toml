@@ -1,0 +1,130 @@
+sheet = "+2 Minion Gloves"
+scope = "Moving item level with a recombinator (step 1 variant) is not modelled."
+base = "Velour Gloves"
+ilvl = 85
+quality = 26
+
+[goal]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "+# to maximum Life", tier = 1 },
+  { text = "#% increased Area Damage / #% increased Area of Effect", source = "crafted" },
+]
+
+# Donor: a +2 minion pair on a str/dex base, cleaned to that one mod.
+[stages.donor]
+base = "Dragonscale Gauntlets"
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+
+[stages.donor_clean]
+base = "Dragonscale Gauntlets"
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+max_suffix = 0
+
+# Quality base: natural mana as the only prefix, suffixes full. Mana cannot roll on the donor's
+# base, so the recombinator keeps the minion prefix instead.
+[stages.mana_base]
+mods = [{ text = "+# to maximum Mana", source = "natural" }]
+max_prefix = 1
+min_mods = 4
+
+[stages.transferred]
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+
+[stages.fracture_ready]
+mods = [{ text = "+# to Level of Socketed Minion Gems", source = "legacy" }]
+max_prefix = 1
+min_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" }]
+
+[stages.suppress]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+]
+
+[stages.suppress_open]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+]
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Fire Resistance", tier = 2 },
+]
+
+[stages.life]
+mods = [
+  { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "+# to maximum Life", tier = 1 },
+]
+open_prefix = 1
+
+[[steps]]
+item = "donor"
+do = ["buy:donor", "eldritch-implicit:lesser-ichor", "eldritch-annulment", "beast:split"]
+until = "donor_clean"
+
+[[steps]]
+item = "quality"
+do = ["buy:base", "essence:screaming-misery", "eldritch-chaos"]
+until = "mana_base"
+note = "Cycle essence tiers until the mana mod is a natural one (not \"of the Essence\")."
+
+[[steps]]
+do = ["recombinator:donor+quality"]
+until = "transferred"
+max = 1
+else = 2
+
+[[steps]]
+do = ["eldritch-exalted"]
+until = "fracture_ready"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 2
+note = "A failed fracture still holds the minion prefix: recombine it with a new mana base."
+
+[[steps]]
+do = ["essence:deafening-envy"]
+until = "suppress"
+
+[[steps]]
+do = ["annulment"]
+until = "suppress_open"
+max = 1
+else = 6
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-fire"]
+until = "suffixes"
+max = 1
+else = 6
+
+[[steps]]
+do = ["eldritch-chaos", "eldritch-annulment"]
+until = "life"
+
+[[steps]]
+do = ["bench:area-of-effect"]
+until = "goal"

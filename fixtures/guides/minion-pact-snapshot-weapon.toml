@@ -1,0 +1,29 @@
+sheet = "Minion Pact Snapshot weapon"
+scope = "The Harvest enchant is not modelled."
+base = "Convoking Wand"
+
+[goal]
+mods = [
+  { text = "+# to Level of Socketed Intelligence Gems", source = "fossil" },
+  { text = "+# to Level of Socketed Strength Gems", source = "fossil" },
+  { text = "Can have up to # Crafted Modifiers", source = "crafted" },
+  { text = "+# to Level of Socketed Support Gems", source = "crafted" },
+  { text = ["Minions deal #% increased Damage", "Minions have #% increased maximum Life"], source = "crafted" },
+]
+
+[stages.attributes]
+mods = [{ text = "+# to Level of Socketed Intelligence Gems", source = "fossil" }, { text = "+# to Level of Socketed Strength Gems", source = "fossil" }]
+max_prefix = 0
+open_suffix = 1
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["fossil:aetheric+corroded+faceted+opulent"]
+until = "attributes"
+
+[[steps]]
+do = ["bench:multimod", "bench:socketed-support-gems", "bench:minion-damage-or-life"]
+until = "goal"
+note = "The guide's best-roll variant uses cannot-roll-attack plus exalted and a veiled exalt."

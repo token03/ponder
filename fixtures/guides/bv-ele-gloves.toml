@@ -1,0 +1,73 @@
+sheet = "BV Ele Gloves "
+scope = "Implicits and white sockets are not modelled."
+base = "Phantom Mitts"
+quality = 28
+
+[goal]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+#% to Cold Resistance", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "veiled" },
+  { text = ["#% of Physical Damage Converted to Fire Damage", "#% of Physical Damage Converted to Cold Damage", "#% of Physical Damage Converted to Lightning Damage"], source = "crafted" },
+]
+
+[stages.life_four_mods]
+mods = [{ text = "+# to maximum Life", tier = 1 }]
+min_mods = 4
+max_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to maximum Life", tier = 1, fractured = true }]
+
+[stages.cold]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+#% to Cold Resistance", tier = 1 },
+]
+open_prefix = 1
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+#% to Cold Resistance", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+]
+open_prefix = 1
+
+[stages.unveiled]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+#% to Cold Resistance", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "veiled" },
+]
+
+[[steps]]
+do = ["buy:base", "harvest:reforge-life"]
+until = "life_four_mods"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 1
+
+[[steps]]
+do = ["fossil:aetheric+frigid+hollow+sanctified"]
+until = "cold"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-fire"]
+until = "suffixes"
+max = 1
+else = 3
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:area-of-effect"]
+until = "unveiled"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:convert"]
+until = "goal"

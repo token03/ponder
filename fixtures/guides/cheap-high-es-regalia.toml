@@ -1,0 +1,80 @@
+sheet = "Cheap High Es Regalia"
+base = "Twilight Regalia"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 },
+  { text = "+# to Intelligence", tier = 2 },
+]
+
+[stages.flat]
+rarity = "magic"
+mods = [{ text = "+# to maximum Energy Shield", tier = 2 }]
+
+[stages.percent]
+rarity = "magic"
+mods = [{ text = "#% increased Energy Shield", tier = 2 }]
+
+[stages.hybrid]
+rarity = "magic"
+mods = [{ text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 }]
+
+[stages.flat_percent]
+mods = [{ text = "+# to maximum Energy Shield", tier = 2 }, { text = "#% increased Energy Shield", tier = 2 }]
+
+[stages.flat_hybrid]
+mods = [{ text = "+# to maximum Energy Shield", tier = 2 }, { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 }]
+
+[stages.prefixes]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "percent"
+
+[[steps]]
+item = "ab"
+do = ["bench:any-suffix", "recombinator:a+b"]
+until = "flat_percent"
+max = 1
+else = 1
+
+[[steps]]
+item = "c"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "d"
+do = ["buy:base", "alteration"]
+until = "hybrid"
+
+[[steps]]
+item = "cd"
+do = ["bench:any-suffix", "recombinator:c+d"]
+until = "flat_hybrid"
+max = 1
+else = 4
+
+[[steps]]
+do = ["recombinator:ab+cd"]
+until = "prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["eldritch-implicit:lesser-ichor", "bench:resistance", "exalted", "eldritch-annulment"]
+until = "goal"

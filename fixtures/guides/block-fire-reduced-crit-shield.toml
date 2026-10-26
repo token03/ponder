@@ -1,0 +1,57 @@
+sheet = "BlockFireRedu Crit DmgPerBlock "
+base = "Heat-attuned Tower Shield"
+ilvl = 86
+influences = ["crusader"]
+
+[goal]
+mods = [
+  { text = "#% increased Chance to Block", tier = 1 },
+  { text = "#% Chance to Block Spell Damage", tier = 1 },
+  { text = "You take #% reduced Extra Damage from Critical Strikes", tier = 2 },
+  { text = "+#% to Fire Resistance" },
+]
+
+[stages.block]
+rarity = "magic"
+mods = [{ text = "#% increased Chance to Block", tier = 1 }]
+
+[stages.spell_block]
+rarity = "magic"
+mods = [{ text = "#% Chance to Block Spell Damage", tier = 1 }]
+
+[stages.blocks]
+mods = [{ text = "#% increased Chance to Block", tier = 1 }, { text = "#% Chance to Block Spell Damage", tier = 1 }]
+open_prefix = 1
+open_suffix = 2
+
+[stages.critical]
+mods = [
+  { text = "#% increased Chance to Block", tier = 1 },
+  { text = "#% Chance to Block Spell Damage", tier = 1 },
+  { text = "You take #% reduced Extra Damage from Critical Strikes", tier = 2 },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "block"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "spell_block"
+
+[[steps]]
+do = ["bench:any-mod", "recombinator:a+b", "bench:prefixes-cannot-be-changed", "scouring"]
+until = "blocks"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:reforge-critical"]
+until = "critical"
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:add-remove-fire", "bench:fire-and-chaos-resistance", "influence-exalted:crusader"]
+until = "goal"
+note = "Depending on what add/remove removes, scour back to step 4 or add/remove critical again."

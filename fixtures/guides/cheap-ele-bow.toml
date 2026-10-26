@@ -1,0 +1,81 @@
+sheet = "Cheap Ele Bow"
+base = "Spine Bow"
+ilvl = 82
+
+[goal]
+mods = [
+  { text = "Adds # to # Fire Damage", tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = "Adds # to # Lightning Damage", tier = 2 },
+  { text = ["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"], count = 2 },
+]
+
+[stages.fire]
+rarity = "magic"
+mods = [{ text = "Adds # to # Fire Damage", tier = 2 }]
+
+[stages.cold]
+rarity = "magic"
+mods = [{ text = "Adds # to # Cold Damage", tier = 2 }]
+
+[stages.lightning]
+rarity = "magic"
+mods = [{ text = "Adds # to # Lightning Damage", tier = 2 }]
+
+[stages.fire_cold]
+mods = [{ text = "Adds # to # Fire Damage", tier = 2 }, { text = "Adds # to # Cold Damage", tier = 2 }]
+
+[stages.lightning_cold]
+mods = [{ text = "Adds # to # Lightning Damage", tier = 2 }, { text = "Adds # to # Cold Damage", tier = 2 }]
+
+[stages.prefixes]
+mods = [
+  { text = "Adds # to # Fire Damage", tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = "Adds # to # Lightning Damage", tier = 2 },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "fire"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "cold"
+
+[[steps]]
+item = "ab"
+do = ["bench:any-suffix", "recombinator:a+b"]
+until = "fire_cold"
+max = 1
+else = 1
+
+[[steps]]
+item = "c"
+do = ["buy:base", "alteration"]
+until = "lightning"
+
+[[steps]]
+item = "d"
+do = ["buy:base", "alteration"]
+until = "cold"
+
+[[steps]]
+item = "cd"
+do = ["bench:any-suffix", "recombinator:c+d"]
+until = "lightning_cold"
+max = 1
+else = 4
+
+[[steps]]
+do = ["recombinator:ab+cd"]
+until = "prefixes"
+max = 1
+else = 1
+note = "Both inputs share the cold mod, which raises the odds of keeping three prefixes."
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:speed-or-critical"]
+until = "goal"

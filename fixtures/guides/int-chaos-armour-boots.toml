@@ -1,0 +1,63 @@
+sheet = "IntChaos Armour Boots"
+base = "Titan Greaves"
+ilvl = 86
+quality = 28
+
+[goal]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+# to Intelligence", source = "essence" },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+  { text = "#% increased Movement Speed", tier = 2 },
+]
+
+[stages.fractured_life]
+mods = [{ text = "+# to maximum Life", tier = 1, fractured = true }]
+
+[stages.life_four_mods]
+mods = [{ text = "+# to maximum Life", tier = 1 }]
+min_mods = 4
+max_mods = 4
+
+[stages.resist]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+]
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+]
+
+[[steps]]
+do = ["buy:base"]
+note = "Or buy a fractured T1 life base and skip to step 4."
+
+[[steps]]
+do = ["harvest:reforge-life"]
+until = "life_four_mods"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured_life"
+max = 1
+else = 2
+
+[[steps]]
+do = ["essence:deafening-spite"]
+until = "resist"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-chaos"]
+until = "suffixes"
+max = 1
+else = 4
+
+[[steps]]
+do = ["eldritch-implicit:lesser-ember", "bench:armour", "exalted", "eldritch-annulment"]
+until = "goal"

@@ -1,0 +1,81 @@
+sheet = "Cheap Phys Weapon"
+base = "Vaal Axe"
+ilvl = 83
+
+[goal]
+mods = [
+  { text = "Adds # to # Physical Damage", tier = 3 },
+  { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 3 },
+  { text = "#% increased Physical Damage", tier = 3 },
+  { text = "#% increased Attack Speed" },
+]
+
+[stages.flat]
+rarity = "magic"
+mods = [{ text = "Adds # to # Physical Damage", tier = 3 }]
+
+[stages.hybrid]
+rarity = "magic"
+mods = [{ text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 3 }]
+
+[stages.percent]
+rarity = "magic"
+mods = [{ text = "#% increased Physical Damage", tier = 3 }]
+
+[stages.flat_hybrid]
+mods = [{ text = "Adds # to # Physical Damage", tier = 3 }, { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 3 }]
+
+[stages.flat_percent]
+mods = [{ text = "Adds # to # Physical Damage", tier = 3 }, { text = "#% increased Physical Damage", tier = 3 }]
+
+[stages.prefixes]
+mods = [
+  { text = "Adds # to # Physical Damage", tier = 3 },
+  { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 3 },
+  { text = "#% increased Physical Damage", tier = 3 },
+]
+
+[[steps]]
+item = "a"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "b"
+do = ["buy:base", "alteration"]
+until = "hybrid"
+
+[[steps]]
+item = "ab"
+do = ["bench:any-suffix", "recombinator:a+b"]
+until = "flat_hybrid"
+max = 1
+else = 1
+
+[[steps]]
+item = "c"
+do = ["buy:base", "alteration"]
+until = "flat"
+
+[[steps]]
+item = "d"
+do = ["buy:base", "alteration"]
+until = "percent"
+
+[[steps]]
+item = "cd"
+do = ["bench:any-suffix", "recombinator:c+d"]
+until = "flat_percent"
+max = 1
+else = 4
+
+[[steps]]
+do = ["recombinator:ab+cd"]
+until = "prefixes"
+max = 1
+else = 1
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-speed"]
+until = "goal"
+note = "If it does not fill, slam a Warlord exalted orb."

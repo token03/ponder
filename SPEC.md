@@ -103,12 +103,18 @@ every operation.
 3. **The state is derived, not designed.** The goal plus the active operations decide which
    item facts the solver distinguishes. Operations declare what they read (groups, tags, sides,
    flags); everything else is summarized. No per-mechanic hand-written state fields.
+   Untracked mods count per side; their effect on later draw weights uses the side's average
+   weight. The simulator check (immutable 5) catches the cases where that estimate is too rough,
+   and the fix is to track more facts, not to tune the estimate.
 4. **Exact where cheap, sampled where not.** An operation may provide an exact outcome
    distribution. Otherwise its outcomes are estimated by sampling, and the plan is marked
    estimated.
-5. **Purchases are methods.** Buying a base, a partial item or the finished item competes with
+5. **Recombinator failures lose both inputs (for now).** Guides often reuse a failed output
+   ("if it kept the donor's mods, recombine again"). Salvage is the first refinement after
+   recombinators land; until then their costs are upper bounds on that point.
+6. **Purchases are methods.** Buying a base, a partial item or the finished item competes with
    crafting it on equal terms. A missing market quote means "unknown", never "cheap".
-6. **Selling ends a branch.** Selling an intermediate is a terminal method with negative cost.
+7. **Selling ends a branch.** Selling an intermediate is a terminal method with negative cost.
    No cycle may earn money.
 
 ## 6. Architecture
@@ -172,11 +178,15 @@ part of `cargo test`.
    items and checks §4 on the outputs. A new mechanic gets these for free.
 2. **Exact agrees with sample.** For every operation that provides `exact`, its distribution
    matches sampling within tolerance.
-3. **Guide acceptance.** Every recipe sheet in the guide workbook (42 recipes; the index and
-   reference sheets excluded) is encoded as a case: its goal, its intermediates and its recipe.
-   Each case lists the mechanics it needs and runs once they all exist, so the suite doubles as
-   the progress meter. An active case passes when the guide's recipe is expressible and ponder's
-   best plan costs at most guide + 5% (immutable 6).
+3. **Guide acceptance.** Every recipe sheet in the guide workbook (42 sheets; the index and
+   reference sheets excluded) is encoded in `fixtures/guides/*.toml`, one file per method (46).
+   A guide has a goal, named intermediate stages (goals too), and steps: operations
+   (`mechanic:argument`) on a named item, repeated `until` a stage holds, with `max` attempts and
+   an `else` step to fall back to. `cargo test -p ponder-rules --test guides -- --nocapture`
+   checks every reference against game data and prints how many recipes need each mechanic.
+   A case runs once all its mechanics exist, so the suite doubles as the progress meter. An
+   active case passes when the guide's recipe is expressible and ponder's best plan costs at most
+   guide + 5% (immutable 6).
 4. **Small mechanic tests** only for rules with a non-obvious contract.
 
 No timing assertions, no snapshot tests of internal structures, no tests that pin a particular

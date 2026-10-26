@@ -1,0 +1,96 @@
+sheet = "ChillConvert Gloves"
+base = "Phantom Mitts"
+ilvl = 85
+quality = 28
+
+[goal]
+mods = [
+  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+# to maximum Life", tier = 1 },
+  { text = "#% of Physical Damage Converted to Cold Damage", source = "veiled" },
+  { text = ["#% of Physical Damage Converted to Fire Damage", "#% of Physical Damage Converted to Lightning Damage"], source = "crafted" },
+]
+
+[stages.donor_clean]
+base = "Slink Gloves"
+mods = [{ text = "Curse Enemies with Frostbite on Hit", source = "legacy" }]
+max_suffix = 1
+max_prefix = 0
+
+[stages.quality_ready]
+mods = [{ text = "+# to Strength", source = "natural" }]
+max_suffix = 1
+min_mods = 4
+
+[stages.transferred]
+mods = [{ text = "Curse Enemies with Frostbite on Hit", source = "legacy" }]
+max_suffix = 1
+min_mods = 4
+
+[stages.fractured]
+mods = [{ text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" }]
+
+[stages.suppress]
+mods = [
+  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+]
+
+[stages.life]
+mods = [
+  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+# to maximum Life", tier = 1 },
+]
+max_prefix = 1
+
+[stages.converted]
+mods = [
+  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% chance to Suppress Spell Damage", tier = 1 },
+  { text = "+# to maximum Life", tier = 1 },
+  { text = "#% of Physical Damage Converted to Cold Damage", source = "veiled" },
+]
+
+[[steps]]
+item = "donor"
+do = ["buy:donor_clean", "harvest:change-resist", "beast:split"]
+until = "donor_clean"
+note = "Any of the three temple curse-effect mods works; Harvest changes it to cold."
+
+[[steps]]
+item = "quality"
+do = ["buy:base", "essence:deafening-sorrow", "eldritch-annulment", "eldritch-exalted"]
+until = "quality_ready"
+note = "A natural strength suffix (not \"of the Essence\") with three random prefixes."
+
+[[steps]]
+do = ["recombinator:donor+quality"]
+until = "transferred"
+max = 1
+else = 2
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 2
+
+[[steps]]
+do = ["essence:deafening-envy"]
+until = "suppress"
+
+[[steps]]
+do = ["eldritch-chaos"]
+until = "life"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "veiled-exalted", "bench:remove-crafted", "unveil:convert-cold"]
+until = "converted"
+max = 1
+else = 6
+
+[[steps]]
+do = ["bench:convert"]
+until = "goal"

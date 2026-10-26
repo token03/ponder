@@ -1,0 +1,35 @@
+sheet = "Dagger +2 ExplodeSynthBase"
+scope = "Marked removed in 3.29: synthesis implicits moved to Vaal orbs. Kept as a historical case."
+base = "Sai"
+
+[goal]
+mods = [
+  { text = "+# to Level of all Spell Skill Gems" },
+  { text = "+# to Level of all Physical Spell Skill Gems" },
+  { text = ["#% increased Cast Speed", "#% increased Spell Critical Strike Chance"] },
+]
+
+[stages.spell_gems]
+rarity = "magic"
+mods = [{ text = "+# to Level of all Spell Skill Gems" }]
+max_suffix = 0
+
+[stages.prefixes]
+mods = [{ text = "+# to Level of all Spell Skill Gems" }, { text = "+# to Level of all Physical Spell Skill Gems" }]
+
+[[steps]]
+do = ["buy:base", "scouring", "transmutation", "alteration", "annulment"]
+until = "spell_gems"
+
+[[steps]]
+do = ["imprint", "regal", "annulment"]
+until = "spell_gems"
+note = "Regal for a suffix; annul a regalled prefix; restore the imprint on failure."
+
+[[steps]]
+do = ["bench:multimod", "bench:cannot-roll-attack", "bench:prefixes-cannot-be-changed", "harvest:augment-physical"]
+until = "prefixes"
+
+[[steps]]
+do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:augment-caster"]
+until = "goal"

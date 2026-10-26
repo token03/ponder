@@ -1,0 +1,40 @@
+sheet = "CritManaEs Focused Amulet"
+scope = "Catalyst quality is not modelled."
+base = "Focused Amulet"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "#% increased maximum Energy Shield", source = "essence" },
+  { text = "+# to maximum Mana", tier = 1 },
+  { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
+]
+
+[stages.mana]
+mods = [{ text = "+# to maximum Mana", tier = 1 }]
+
+[stages.mana_two_prefixes]
+mods = [{ text = "+# to maximum Mana", tier = 1 }]
+max_prefix = 2
+
+[[steps]]
+do = ["buy:base"]
+
+[[steps]]
+do = ["essence:deafening-woe"]
+until = "mana"
+
+[[steps]]
+do = ["annulment"]
+until = "mana_two_prefixes"
+max = 1
+else = 2
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-critical"]
+until = "goal"
+max = 1
+else = 2
+
+[[steps]]
+do = ["catalyst:sinistral"]

@@ -1,0 +1,62 @@
+sheet = " RegenConvert Armour Gloves"
+base = "Titan Gauntlets"
+ilvl = 85
+quality = 27
+
+[goal]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "#% increased Life Regeneration rate", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "#% of Physical Damage Converted to Fire Damage", source = "veiled" },
+]
+
+[stages.life_four_mods]
+mods = [{ text = "+# to maximum Life", tier = 1 }]
+min_mods = 4
+max_mods = 4
+
+[stages.fractured]
+mods = [{ text = "+# to maximum Life", tier = 1, fractured = true }]
+
+[stages.regen]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "#% increased Life Regeneration rate", tier = 1 },
+]
+open_suffix = 1
+
+[stages.suffixes]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "#% increased Life Regeneration rate", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+]
+
+[[steps]]
+do = ["buy:base"]
+note = "Or buy a fractured life base and skip to step 4."
+
+[[steps]]
+do = ["harvest:reforge-life"]
+until = "life_four_mods"
+
+[[steps]]
+do = ["fracturing"]
+until = "fractured"
+max = 1
+else = 2
+
+[[steps]]
+do = ["essence:deafening-envy"]
+until = "regen"
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "harvest:reforge-fire"]
+until = "suffixes"
+max = 1
+else = 4
+
+[[steps]]
+do = ["bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:convert-fire"]
+until = "goal"

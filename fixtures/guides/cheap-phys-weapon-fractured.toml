@@ -1,0 +1,32 @@
+sheet = "Cheap Phys Weapon"
+scope = "Method 2: start from a fractured %physical axe."
+base = "Vaal Axe"
+ilvl = 83
+
+[goal]
+mods = [
+  { text = "#% increased Physical Damage", tier = 2, fractured = true },
+  { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 2 },
+  { text = "#% increased Attack Speed" },
+]
+
+[stages.fractured_base]
+mods = [{ text = "#% increased Physical Damage", tier = 2, fractured = true }]
+
+[stages.hybrid]
+mods = [
+  { text = "#% increased Physical Damage", tier = 2, fractured = true },
+  { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 2 },
+]
+open_suffix = 1
+
+[[steps]]
+do = ["buy:fractured_base"]
+
+[[steps]]
+do = ["essence:deafening-contempt"]
+until = "hybrid"
+
+[[steps]]
+do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-speed"]
+until = "goal"

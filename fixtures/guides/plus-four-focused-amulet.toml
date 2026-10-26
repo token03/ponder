@@ -1,0 +1,54 @@
+sheet = "+4 Focused Amulet"
+base = "Focused Amulet"
+ilvl = 86
+
+[goal]
+mods = [
+  { text = "+# to Level of all Skill Gems" },
+  { text = "+# to Level of all Fire Skill Gems" },
+  { text = "+#% to Global Critical Strike Multiplier", source = "essence" },
+]
+
+[stages.multiplier]
+mods = [{ text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+max_mods = 1
+
+[stages.fire_gems]
+mods = [{ text = "+# to Level of all Fire Skill Gems" }, { text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+
+[stages.donor]
+base = "Onyx Amulet"
+mods = [{ text = "+# to Level of all Skill Gems" }]
+open_prefix = 2
+
+[stages.donor_ready]
+base = "Onyx Amulet"
+influences = ["crusader"]
+mods = [{ text = "+# to Level of all Skill Gems" }, { text = "+# to Level of all Fire Skill Gems" }]
+max_suffix = 1
+min_mods = 4
+
+[[steps]]
+do = ["buy:base", "essence:deafening-scorn"]
+until = "multiplier"
+note = "Annul everything but the critical multiplier."
+
+[[steps]]
+do = ["bench:fire-damage-to-attacks", "harvest:add-remove-fire"]
+until = "fire_gems"
+max = 1
+else = 1
+note = "Fire gems are guaranteed; it is 50/50 whether the craft or the multiplier is removed."
+
+[[steps]]
+item = "donor"
+do = ["buy:donor", "bench:multimod", "bench:fire-damage-to-attacks", "harvest:add-remove-fire", "influence-orb:crusader", "bench:remove-crafted", "bench:prefixes-cannot-be-changed", "harvest:reforge-influence"]
+until = "donor_ready"
+note = "Keep suffixes full while adding fire gems, then add one influenced prefix and one influenced suffix."
+
+[[steps]]
+do = ["recombinator:donor+main"]
+until = "goal"
+max = 1
+else = 1
+note = "A miss that kept the donor's mods plus the multiplier can be recombined again."
