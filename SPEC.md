@@ -1,0 +1,219 @@
+# ponder specification
+
+This file is the source of truth for what ponder is and how it is built. If code or another
+document disagrees with it, the spec wins or the spec is changed first. Keep it short and true:
+no benchmark logs, handoffs or paper reviews here.
+
+## 1. Purpose
+
+ponder finds **profitable Path of Exile crafts**.
+
+1. **Price check a craft.** Given any finished item, estimate the expected cost to make it,
+   compared with buying it. This is the core query; everything else builds on it.
+2. **Find profit.** Run that query over thousands of candidate items (from ladder demand,
+   imports or pasted items) and rank them by sale price minus craft cost.
+3. **Explain the recipe.** The cheapest method is a recipe: steps, stop conditions, fallbacks
+   and per-step costs, readable like the crafting guides.
+
+Because the model is a full cost model of the crafting space, it also supports: selling
+intermediates instead of finishing, buying a partial item instead of making it, and finishing an
+item someone already owns.
+
+Reference game version: **PoE 1, 3.29**. PoE 2 is out of scope, but nothing in the solver may
+assume PoE 1.
+
+## 2. Glossary
+
+| Term | Meaning |
+|---|---|
+| **Item** | A concrete item: base, item level, quality, influences, rarity, implicits, and affixes (mod id, side, group, tier, crafted/fractured/veiled flags). |
+| **Goal** | A predicate over items: required mods with minimum tiers, interchangeable groups ("any T2+ elemental resistance"), counts, base and item level constraints, slots kept open for a final craft. |
+| **Operation** | One game action on one or more items: a currency, essence, fossil set, bench craft, Harvest craft, recombination, fracture, purchase. |
+| **State** | What the solver sees: an item reduced to the facts the current goal and operations can tell apart. |
+| **Subgoal** | A goal used as an intermediate, e.g. "velour gloves, 26% quality, +2 minion fractured, nothing else on prefixes". |
+| **Method** | A way to obtain a subgoal: buy it, craft it from another subgoal, join two subgoals (recombinator), or sell it. |
+| **Plan** | The chosen methods for a goal, together with each loop's policy. It renders as a recipe. |
+| **Cold run** | Game data, prices and candidate items are on disk; the plan cache is empty. Network time is excluded. |
+| **Warm run** | Same as cold, but the plan cache was filled by a previous run with identical data, prices, assumptions and code version. |
+
+## 3. Project immutables
+
+These hold for the life of the project. Changing one is a deliberate decision recorded here.
+
+1. **Profit is the objective.** Cost = expected currency spent at market prices + time × the
+   user's chaos-per-hour rate. Profit = sale price − cost. Nothing else enters the objective.
+   Risk measures (variance, budget exceedance) may be reported, never silently optimized.
+2. **New mechanics are modules, not edits.** Adding a crafting mechanic means adding one module
+   that implements the operation contract (§6), plus its data. If adding it requires changing the
+   solver, state layout, or another mechanic, the design is wrong and gets fixed first.
+3. **The solver knows nothing about PoE.** It solves an abstract cost-minimization problem. All
+   game knowledge lives in the rules layer. The complexity of the project belongs in translating
+   mechanics, not in the solver.
+4. **One implementation per rule.** Each mechanic is written once, against real items. Exact
+   distributions, sampling, replay and rendering all use that one implementation. No second
+   "lumped" copy of a mechanic.
+5. **The simulator is the ground truth.** Any faster model (exact enumeration, compressed states,
+   cached kernels) must agree with Monte Carlo of the real-item simulator within tolerance.
+6. **Guides are the oracle.** Every human recipe in the guide suite must be expressible as a
+   plan, and ponder's best plan must cost no more than the guide's plan + 5% under the same
+   prices and assumptions. Beating a guide is fine; losing to one is a bug.
+7. **Assumptions live in one place.** Every number that does not come from game data or market
+   prices is a named entry in the assumptions file (§10). No magic numbers in code. Assumptions
+   are part of every cache key.
+8. **Names never change behavior.** Behavior comes from data (mod ids, groups, tags, weights)
+   and typed operation definitions, never from matching display strings.
+9. **Caches never change meaning.** Cold and warm runs give identical results. Cache keys cover
+   every semantic input.
+10. **Deterministic output.** Same inputs give the same plans: seeded randomness, stable ordering,
+    deterministic tie-breaks.
+11. **Slim codebase.** Replace, don't add alongside. When a new path lands, the old path and its
+    tests are deleted in the same change. No compatibility shims, no dead modes, no "comparison
+    algorithm" kept around without a dated reason to exist.
+
+## 4. Game rules (3.29)
+
+Facts about the game. Each is implemented once in the rules layer and checked automatically for
+every operation.
+
+1. **Affix limits.** Magic: 1 prefix, 1 suffix. Rare: 3 prefixes, 3 suffixes (jewels 2 and 2).
+2. **One mod per group.** An item never carries two mods sharing a mod group.
+3. **Spawning.** A mod can be added only if its spawn tags match the item's base, its level is at
+   or below the item level, its side has room, and its group is absent. Its weight comes from
+   game data, changed only by declared modifiers (fossils, essences, metamods, Harvest, influence).
+4. **Random draws.** Every random addition is a weighted draw without replacement from the
+   eligible pool, re-evaluated after each draw.
+5. **Fractured mods** are never removed or changed. Fracturing needs a rare with at least four
+   mods, on a base that isn't influenced or synthesised.
+6. **Crafted mods** obey the bench limit (one, or three with the multimod metamod). They are
+   removed by "remove crafted mods" or a full reset.
+7. **Metamods** protect exactly what Craft of Exile's table says, operation by operation.
+   Essences and fossils cannot be applied with a metamod present.
+8. **Information order.** You block before the outcome is drawn, then choose after seeing it.
+   Unveils and Awakener previews are an observation followed by a choice, never one combined step.
+
+## 5. Modelling rules
+
+1. **Goals are monotone.** A stronger roll or a better tier of a wanted mod always satisfies
+   the goal.
+2. **Stop conditions are part of the plan.** A loop step carries its condition ("until T1 mana")
+   and its fallback ("else go back to step 2"). Plans are policies, not fixed sequences.
+3. **The state is derived, not designed.** The goal plus the active operations decide which
+   item facts the solver distinguishes. Operations declare what they read (groups, tags, sides,
+   flags); everything else is summarized. No per-mechanic hand-written state fields.
+4. **Exact where cheap, sampled where not.** An operation may provide an exact outcome
+   distribution. Otherwise its outcomes are estimated by sampling, and the plan is marked
+   estimated.
+5. **Purchases are methods.** Buying a base, a partial item or the finished item competes with
+   crafting it on equal terms. A missing market quote means "unknown", never "cheap".
+6. **Selling ends a branch.** Selling an intermediate is a terminal method with negative cost.
+   No cycle may earn money.
+
+## 6. Architecture
+
+```
+game data ─► rules (Item, Operation, mechanics/*) ─► planner (goals, subgoals, methods) ─► solver
+                         ▲                                    │
+                     simulator ◄──────── recipe rendering ◄───┘
+```
+
+**Rules layer.** `Item`, mods and the operation contract. One file per mechanic family. Sketch:
+
+```rust
+trait Operation {
+    fn applies(&self, item: &Item) -> bool;
+    fn cost(&self, market: &Market) -> Cost;               // currency + seconds
+    fn sample(&self, item: &Item, rng: &mut Rng) -> Outcome; // required: ground truth
+    fn exact(&self, item: &Item) -> Option<Dist<Outcome>>;   // optional fast path
+    fn reads(&self) -> Reads;                                // facts it depends on
+}
+enum Outcome { Item(Item), Choose(Vec<Item>) }   // Choose: unveil, Awakener preview
+```
+
+Operations on two items (recombinator, Awakener) use the same shape with a pair as input.
+A mechanic may also contribute **subgoal generators**: the intermediates it makes useful (a
+recombinator suggests "only these mods on this side"; fracturing suggests "4-mod item with X").
+
+**Planner.** An AND/OR graph over subgoals. OR: alternative methods for one subgoal (buy, craft,
+join). AND: a join needs both inputs. Subgoals are shared across every goal in a run, so a
+thousand goals on the same base reuse the same intermediate solves. This is where donor bases,
+starting points and recombinators live.
+
+**Solver.** For one method ("from states in S, reach subgoal P by repeating operations"), it
+finds the cheapest policy over the derived states: a stochastic shortest-path problem. Start with
+plain policy iteration over reachable states. Any focused search (iLAO\* and friends) is a later
+swap behind the same interface, adopted only if it wins on the full workload.
+
+**Simulator.** Runs a plan on real items for validation and recipe rendering.
+
+Proposed crates: `ponder-game` (data, parsing), `ponder-rules` (items, operations, simulator),
+`ponder-solve` (generic, no PoE types), `ponder` (planner, market, reports), `ponder-net`,
+`ponder-cli`, `ponder-app`.
+
+## 7. Performance targets
+
+Measured with a release build on the reference machine, network excluded.
+
+| Workload | Cold | Warm |
+|---|---|---|
+| One goal, price check | < 1 s | < 50 ms |
+| 1,000 goals | < 60 s | < 5 s |
+
+Scaling should follow the number of distinct subgoals, not the number of goals. Benchmarks are a
+separate command that reports time and work counts (states, transitions, subgoals). They are never
+part of `cargo test`.
+
+## 8. Tests
+
+1. **Rule properties.** For every registered operation, a property test generates random legal
+   items and checks §4 on the outputs. A new mechanic gets these for free.
+2. **Exact agrees with sample.** For every operation that provides `exact`, its distribution
+   matches sampling within tolerance.
+3. **Guide acceptance.** Each guide case: the guide's recipe is expressible, and ponder's best plan
+   costs at most guide + 5% (immutable 6).
+4. **Small mechanic tests** only for rules with a non-obvious contract.
+
+No timing assertions, no snapshot tests of internal structures, no tests that pin a particular
+algorithm's work counts.
+
+## 9. Code style
+
+- Types over flags: enums instead of integer codes, newtypes for ids, interned ids
+  (`u16`/`u32`) instead of `String` on hot paths.
+- Pure rules, I/O only at the edges (`ponder-net`, CLI, app).
+- Small public surfaces. A module exposes what its callers need.
+- Comments explain why, not what. Docs stay short and current.
+- New dependencies need a reason.
+- Release builds only for performance claims.
+
+## 10. Assumptions
+
+Loaded from one file. Each entry has a value, a source and a confidence. Changing one invalidates
+caches.
+
+| Name | Value | Source / confidence |
+|---|---|---|
+| Rare mod count (chaos, alchemy, essence, fossil, Harvest) | 4 / 5 / 6 mods = 9 / 3 / 1 | 1,000-chaos sample (674 / 239 / 87), [Reddit 2020](https://lr.us.psf.lt/r/pathofexile/comments/ex2c5o/comment/fg8je7u). Medium. |
+| Rare jewel mod count | 3 / 4 = 3 / 1 | Current code; unverified. Low. |
+| Magic mod count (transmute, alteration) | 1 / 2 = 1 / 1 | Current code; unverified. Low. |
+| Recombinator mods kept per side | by pool size; table in assumptions file | [poewiki](https://www.poewiki.net/wiki/Recombinator) / Butsicles. Medium; unmeasured above 6. |
+| Recombinator dust cost | priced, not zero | Guide note: "dust for recombs still has price". To source. |
+| Time per operation | 1–5 s by type; recombine 15 s | Current code; rough. |
+| Chaos per hour | 1,500 | User preference. |
+
+## 11. Scope
+
+**v1 (rebuild order):**
+1. Base currency: transmute, alteration, augment, regal, chaos, exalt, annul, scour
+2. Essences
+3. Fossils and resonators
+4. Bench crafts and metamods
+5. Harvest reforges
+6. Eldritch currency
+7. Fracturing
+8. Purchases and starting items
+
+Then **recombinators** (including the NNN technique), with donor bases. These are a hard priority,
+and the planner must support them from day one, even before the mechanic lands.
+
+**Later:** unveiling, Awakener, beastcrafting, imprints, elevation, influence application,
+catalysts, synthesis implicits, Eldritch implicits.
