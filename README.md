@@ -1,6 +1,6 @@
 # ponder
 
-Find profitable Path of Exile crafts. What ponder is and how it is built: [SPEC.md](SPEC.md).
+A stochastic model of Path of Exile crafting: item costs, recipes and profitable crafts. What ponder is and how it is built: [SPEC.md](SPEC.md).
 
 The code is mid-rebuild toward that spec. Where the code and the spec disagree, the spec is the
 target.

@@ -6,18 +6,19 @@ no benchmark logs, handoffs or paper reviews here.
 
 ## 1. Purpose
 
-ponder finds **profitable Path of Exile crafts**.
+At its core, ponder is a **fast, modular stochastic model of the Path of Exile crafting
+space**: what every operation does to an item, with what probability, at what cost, and the
+cheapest way to get from any item (or nothing) to any goal.
 
-1. **Price check a craft.** Given any finished item, estimate the expected cost to make it,
-   compared with buying it. This is the core query; everything else builds on it.
-2. **Find profit.** Run that query over thousands of candidate items (from ladder demand,
-   imports or pasted items) and rank them by sale price minus craft cost.
-3. **Explain the recipe.** The cheapest method is a recipe: steps, stop conditions, fallbacks
-   and per-step costs, readable like the crafting guides.
+Applications are built on that core, not baked into it:
 
-Because the model is a full cost model of the crafting space, it also supports: selling
-intermediates instead of finishing, buying a partial item instead of making it, and finishing an
-item someone already owns.
+1. **Cost of an item.** The expected cost to make any finished or partial item, compared with
+   buying it. This is the first application and the main acceptance test.
+2. **Recipes.** The cheapest method rendered as steps, stop conditions, fallbacks and per-step
+   costs, readable like the crafting guides.
+3. **Profit.** Craft cost against sale price over thousands of candidate items from the ladder.
+4. **Anything else the model answers**: selling intermediates, buying partial items, finishing
+   an item someone owns, comparing two recipes, how a patch changes a craft.
 
 Reference game version: **PoE 1, 3.29**. PoE 2 is out of scope, but nothing in the solver may
 assume PoE 1.
@@ -40,9 +41,11 @@ assume PoE 1.
 
 These hold for the life of the project. Changing one is a deliberate decision recorded here.
 
-1. **Profit is the objective.** Cost = expected currency spent at market prices + time × the
-   user's chaos-per-hour rate. Profit = sale price − cost. Nothing else enters the objective.
-   Risk measures (variance, budget exceedance) may be reported, never silently optimized.
+1. **The model comes first, applications second.** The rules and solver answer "what happens and
+   what does it cost". Profit, ladder scans and the app are consumers; none of them may leak
+   special cases into the core. The default objective is expected currency at market prices +
+   time × the user's chaos-per-hour rate. Other objectives (risk, click count) are explicit
+   alternatives, never silently mixed in.
 2. **New mechanics are modules, not edits.** Adding a crafting mechanic means adding one module
    that implements the operation contract (§6), plus its data. If adding it requires changing the
    solver, state layout, or another mechanic, the design is wrong and gets fixed first.
@@ -151,7 +154,8 @@ Proposed crates: `ponder-game` (data, parsing), `ponder-rules` (items, operation
 
 ## 7. Performance targets
 
-Measured with a release build on the reference machine, network excluded.
+Measured with a release build limited to 4 worker threads, network excluded. Single-goal
+latency must also hold on 1 thread.
 
 | Workload | Cold | Warm |
 |---|---|---|
@@ -168,8 +172,11 @@ part of `cargo test`.
    items and checks §4 on the outputs. A new mechanic gets these for free.
 2. **Exact agrees with sample.** For every operation that provides `exact`, its distribution
    matches sampling within tolerance.
-3. **Guide acceptance.** Each guide case: the guide's recipe is expressible, and ponder's best plan
-   costs at most guide + 5% (immutable 6).
+3. **Guide acceptance.** Every recipe sheet in the guide workbook (42 recipes; the index and
+   reference sheets excluded) is encoded as a case: its goal, its intermediates and its recipe.
+   Each case lists the mechanics it needs and runs once they all exist, so the suite doubles as
+   the progress meter. An active case passes when the guide's recipe is expressible and ponder's
+   best plan costs at most guide + 5% (immutable 6).
 4. **Small mechanic tests** only for rules with a non-obvious contract.
 
 No timing assertions, no snapshot tests of internal structures, no tests that pin a particular
@@ -214,6 +221,9 @@ caches.
 
 Then **recombinators** (including the NNN technique), with donor bases. These are a hard priority,
 and the planner must support them from day one, even before the mechanic lands.
+
+**Inputs:** ladder demand mining stays as the candidate-item source. Sale prices come from the
+trade API, good enough for now and not a focus.
 
 **Later:** unveiling, Awakener, beastcrafting, imprints, elevation, influence application,
 catalysts, synthesis implicits, Eldritch implicits.
