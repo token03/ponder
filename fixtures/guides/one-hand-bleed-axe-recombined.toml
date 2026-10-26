@@ -62,5 +62,5 @@ max = 1
 else = 1
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "harvest:reforge-physical"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "harvest:reforge-physical"]
 until = "goal"
