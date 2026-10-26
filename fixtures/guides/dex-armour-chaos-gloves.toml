@@ -5,7 +5,7 @@ quality = 28
 [goal]
 mods = [
   { text = "+# to Dexterity", fractured = true, source = "essence" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+# to maximum Life", tier = 1 },
 ]
@@ -21,7 +21,7 @@ mods = [{ text = "+# to Dexterity", fractured = true, source = "essence" }]
 [stages.resist]
 mods = [
   { text = "+# to Dexterity", fractured = true, source = "essence" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
 ]
 

@@ -8,7 +8,7 @@ quality = 26
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = "+#% to Fire Resistance", tier = 2 },
   { text = "+# to maximum Life", tier = 1 },
   { text = "#% increased Area Damage / #% increased Area of Effect", source = "crafted" },
@@ -48,14 +48,14 @@ mods = [{ text = "+# to Level of Socketed Minion Gems", fractured = true, source
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
 ]
 
 [stages.suppress_open]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
 ]
 open_suffix = 1
 
@@ -63,7 +63,7 @@ open_suffix = 1
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = "+#% to Fire Resistance", tier = 2 },
 ]
 
@@ -71,7 +71,7 @@ mods = [
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = "+#% to Fire Resistance", tier = 2 },
   { text = "+# to maximum Life", tier = 1 },
 ]

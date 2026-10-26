@@ -1,5 +1,11 @@
 //! Crafting rules on real items. See SPEC.md §4–§6.
 
+pub mod assumptions;
 pub mod data;
+pub mod game;
 pub mod goal;
 pub mod guide;
+pub mod item;
+pub mod ops;
+pub mod rng;
+pub mod target;

@@ -6,7 +6,7 @@ influences = ["elder"]
 [goal]
 mods = [
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
-  { text = "#% increased Physical Damage", source = "veiled" },
+  { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
   { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
   { text = "+#% to Physical Damage over Time Multiplier", source = "crafted" },
 ]
@@ -22,13 +22,13 @@ open_suffix = 1
 [stages.physical]
 mods = [
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
-  { text = "#% increased Physical Damage", source = "veiled" },
+  { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
 ]
 
 [stages.culling]
 mods = [
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
-  { text = "#% increased Physical Damage", source = "veiled" },
+  { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
   { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
 ]
 

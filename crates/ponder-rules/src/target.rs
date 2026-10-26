@@ -1,0 +1,116 @@
+//! Goals compiled against game data: the predicate the solver and simulator test items with.
+
+use std::collections::HashSet;
+
+use crate::game::{BaseId, Game, Influences, Kind, ModId, Side};
+use crate::goal::{Goal, Rarity, Source};
+use crate::item::{Affix, Item};
+
+/// One compiled `ModReq`: `count` distinct affixes from `ok`.
+#[derive(Clone, Debug)]
+pub struct Need {
+    pub ok: HashSet<ModId>,
+    pub count: u8,
+    pub fractured: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Target {
+    pub base: Option<BaseId>,
+    pub ilvl: u8,
+    pub quality: u8,
+    pub influences: Influences,
+    pub rarity: Option<Rarity>,
+    pub needs: Vec<Need>,
+    pub open: [u8; 2],
+    pub max_side: [Option<u8>; 2],
+    pub max_mods: Option<u8>,
+    pub min_mods: u8,
+}
+
+impl Target {
+    /// Resolve a goal's mod templates and tiers. The goal must name its base (guides fill it in).
+    pub fn compile(game: &Game, goal: &Goal) -> Result<Target, String> {
+        let name = goal.base.as_deref().ok_or("goal has no base")?;
+        let base = game.base(name).ok_or_else(|| format!("unknown base {name:?}"))?;
+        let influences = Influences::of(&goal.influences);
+        let kind = Kind { base, ilvl: goal.ilvl.unwrap_or(100), influences };
+        let mut needs = Vec::new();
+        for req in &goal.mods {
+            let mut ok = HashSet::new();
+            for text in &req.text {
+                let mods = game.with_template(text);
+                if mods.is_empty() {
+                    return Err(format!("no mod has template {text:?}"));
+                }
+                for &m in mods {
+                    let source = game.def(m).source;
+                    let fits = match (req.source, req.tier) {
+                        (Some(s), _) if s != source => false,
+                        (_, Some(t)) if matches!(source, Source::Natural | Source::Influence) => game.tier(kind, m).is_some_and(|x| x <= t),
+                        (None, Some(_)) => false,
+                        _ => true,
+                    };
+                    if fits {
+                        ok.insert(m);
+                    }
+                }
+            }
+            if ok.is_empty() {
+                return Err(format!("nothing satisfies {:?} on {name}", req.text));
+            }
+            needs.push(Need { ok, count: req.count, fractured: req.fractured });
+        }
+        Ok(Target {
+            base: Some(base),
+            ilvl: goal.ilvl.unwrap_or(0),
+            quality: goal.quality.unwrap_or(0),
+            influences,
+            rarity: goal.rarity,
+            needs,
+            open: [goal.open_prefix, goal.open_suffix],
+            max_side: [goal.max_prefix, goal.max_suffix],
+            max_mods: goal.max_mods,
+            min_mods: goal.min_mods.unwrap_or(0),
+        })
+    }
+
+    pub fn holds(&self, game: &Game, item: &Item) -> bool {
+        let n = item.affixes.len();
+        self.base.is_none_or(|b| b == item.kind.base)
+            && item.kind.ilvl >= self.ilvl
+            && item.quality >= self.quality
+            && item.kind.influences.0 & self.influences.0 == self.influences.0
+            && self.rarity.is_none_or(|r| r == item.rarity)
+            && self.max_mods.is_none_or(|m| n <= m as usize)
+            && n >= self.min_mods as usize
+            && Side::BOTH.iter().all(|&s| {
+                item.open(game, s) >= self.open[s as usize] as usize
+                    && self.max_side[s as usize].is_none_or(|m| item.count(game, s) <= m as usize)
+            })
+            && assign(&self.needs, &item.affixes, &mut vec![false; n])
+    }
+}
+
+/// Can every need take its count of distinct, unused affixes? Backtracking: items have at most
+/// six affixes.
+fn assign(needs: &[Need], affixes: &[Affix], used: &mut Vec<bool>) -> bool {
+    let Some((need, rest)) = needs.split_first() else { return true };
+    fn take(need: &Need, left: u8, from: usize, rest: &[Need], affixes: &[Affix], used: &mut Vec<bool>) -> bool {
+        if left == 0 {
+            return assign(rest, affixes, used);
+        }
+        for i in from..affixes.len() {
+            let a = &affixes[i];
+            if !used[i] && need.ok.contains(&a.id) && (!need.fractured || a.fractured) {
+                used[i] = true;
+                if take(need, left - 1, i + 1, rest, affixes, used) {
+                    return true;
+                }
+                used[i] = false;
+            }
+        }
+        false
+    }
+    take(need, need.count, 0, rest, affixes, used)
+}

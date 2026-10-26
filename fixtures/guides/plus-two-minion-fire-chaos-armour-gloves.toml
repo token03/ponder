@@ -5,7 +5,7 @@ quality = 28
 [goal]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
   { text = "+# to maximum Life", tier = 1 },
@@ -39,14 +39,14 @@ mods = [{ text = "+# to Level of Socketed Minion Gems", fractured = true, source
 [stages.resist]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
 ]
 
 [stages.resist_open]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
 ]
 open_suffix = 1
@@ -54,7 +54,7 @@ open_suffix = 1
 [stages.suffixes]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
 ]
@@ -62,7 +62,7 @@ mods = [
 [stages.life]
 mods = [
   { text = "+# to Level of Socketed Minion Gems", fractured = true, source = "legacy" },
-  { text = "+#% to Chaos Resistance", source = "essence" },
+  { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Fire and Chaos Resistances", source = "veiled" },
   { text = "+# to maximum Life", tier = 1 },

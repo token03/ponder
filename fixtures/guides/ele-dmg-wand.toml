@@ -6,7 +6,6 @@ mods = [
   { text = "Adds # to # Cold Damage to Spells", tier = 2 },
   { text = "Adds # to # Fire Damage to Spells", tier = 2 },
   { text = "Adds # to # Lightning Damage to Spells", tier = 2 },
-  { text = "+#% to Damage over Time Multiplier", source = "crafted" },
   { text = ["#% increased Critical Strike Chance / +# to Strength and Intelligence", "#% increased Attack Speed / +# to Dexterity and Intelligence", "+#% to Global Critical Strike Multiplier"], source = "veiled" },
 ]
 

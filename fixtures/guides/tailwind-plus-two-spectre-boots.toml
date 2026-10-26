@@ -9,7 +9,7 @@ mods = [
   { text = "+# to Level of all Raise Spectre Gems", source = "elevated" },
   { text = "You have Tailwind if you have dealt a Critical Strike Recently / #% increased Effect of Tailwind on you", source = "elevated" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
-  { text = "#% increased Movement Speed", source = "veiled" },
+  { text = ["#% increased Movement Speed / #% chance to Avoid being Chilled", "#% increased Movement Speed / #% chance to gain Onslaught for # seconds on Kill", "#% increased Movement Speed / #% increased Movement Speed if you haven't been Hit Recently"], source = "veiled" },
   { text = "+# to maximum Life", source = "crafted" },
 ]
 

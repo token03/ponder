@@ -4,9 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use ponder_rules::data::{Repoe, template};
-use ponder_rules::goal::{Goal, Source};
+use ponder_rules::data::Repoe;
+use ponder_rules::game::Game;
 use ponder_rules::guide::Guide;
+use ponder_rules::target::Target;
 
 /// Operation vocabulary of the guides. A mechanic here is not necessarily implemented.
 const MECHANICS: &[&str] = &[
@@ -65,45 +66,9 @@ fn guides() -> Vec<(String, Guide)> {
     out
 }
 
-/// Problems with one goal's references to game data.
-fn check_goal(repoe: &Repoe, goal: &Goal, problems: &mut Vec<String>) {
-    let base_name = goal.base.as_deref().unwrap();
-    let Some(base) = repoe.base(base_name) else {
-        return problems.push(format!("unknown base {base_name:?}"));
-    };
-    let mut tags: BTreeSet<String> = base.tags.iter().cloned().collect();
-    for inf in &goal.influences {
-        tags.extend(base.tags.iter().map(|t| format!("{t}_{}", inf.tag())));
-    }
-    let spawns = |m: &ponder_rules::data::Mod| m.spawn_weights.iter().find(|w| tags.contains(&w.tag)).is_some_and(|w| w.weight > 0);
-    for req in &goal.mods {
-        for text in &req.text {
-            let key = text.to_lowercase();
-            let matching: Vec<_> = repoe
-                .mods
-                .values()
-                .filter(|m| matches!(m.domain.as_str(), "item" | "crafted" | "unveiled" | "delve"))
-                .filter(|m| matches!(m.generation_type.as_str(), "prefix" | "suffix"))
-                .filter(|m| m.text.as_deref().is_some_and(|t| template(t).to_lowercase() == key))
-                .collect();
-            if matching.is_empty() {
-                problems.push(format!("no mod has template {text:?}"));
-                continue;
-            }
-            let natural = matches!(req.source, None | Some(Source::Natural) | Some(Source::Influence));
-            if let (Some(tier), true) = (req.tier, natural) {
-                let levels: BTreeSet<u32> = matching.iter().filter(|m| m.domain == "item" && spawns(m)).map(|m| m.required_level).collect();
-                if levels.len() < tier as usize {
-                    problems.push(format!("{text:?} has {} rolling tiers on {base_name}, tier {tier} asked", levels.len()));
-                }
-            }
-        }
-    }
-}
-
 #[test]
 fn guides_name_real_things() {
-    let repoe = Repoe::load(&root().join("fixtures/repoe")).unwrap();
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guides = guides();
     let mut problems = Vec::new();
     let mut tally: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
@@ -111,7 +76,9 @@ fn guides_name_real_things() {
         let mut local = Vec::new();
         let targets = std::iter::once("goal").chain(guide.stages.keys().map(String::as_str));
         for target in targets {
-            check_goal(&repoe, &guide.target(target).unwrap(), &mut local);
+            if let Err(e) = Target::compile(&game, &guide.target(target).unwrap()) {
+                local.push(format!("{target}: {e}"));
+            }
         }
         for (i, step) in guide.steps.iter().enumerate() {
             if let Some(until) = &step.until

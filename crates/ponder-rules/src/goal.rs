@@ -14,6 +14,9 @@ pub enum Influence {
 }
 
 impl Influence {
+    pub const ALL: [Influence; 6] =
+        [Influence::Shaper, Influence::Elder, Influence::Crusader, Influence::Redeemer, Influence::Hunter, Influence::Warlord];
+
     /// The suffix influenced spawn tags carry, e.g. `gloves_basilisk` for Hunter gloves.
     pub fn tag(self) -> &'static str {
         match self {
