@@ -94,7 +94,8 @@ static ANY: Pick = Pick::ANY;
 /// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
 type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
 type Samples = Arc<[(f64, Vec<u8>)]>;
-type SampleCache = HashMap<(Vec<(usize, u8)>, usize), Samples>;
+type SampleKey = (Vec<(usize, u8)>, Vec<(usize, u64)>);
+type SampleCache = HashMap<SampleKey, Samples>;
 /// Expands one (state, rolled count) into weighted successors.
 type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
@@ -696,53 +697,62 @@ impl<'g> Lens<'g> {
                     Origin::Natural(Some(i)) => heir.influences & 1 << i as u8 != 0,
                     _ => true,
                 };
-                let mut results: Vec<(f64, Vec<u8>)> = vec![(1.0, vec![0; 2 * n])];
-                for side in Side::BOTH {
+                let sides = Side::BOTH.map(|side| {
                     let pool: Vec<(usize, u8)> = (0..2 * n)
                         .filter(|&c| self.classes[c % n].side == side && allowed(c))
                         .map(|c| (c, s.counts[c] + o.counts[c]))
                         .filter(|e| e.1 > 0)
                         .collect();
-                    let size: usize = pool.iter().map(|e| e.1 as usize).sum();
-                    let table = crate::ops::recombine_kept(ctx, size);
-                    let all: f64 = table.iter().map(|e| e.1).sum();
-                    let mut kept: HashMap<Vec<u8>, f64> = HashMap::new();
-                    for &(k, w) in table {
-                        for (p, chosen) in self.sample(&pool, (k as usize).min(limit)).iter() {
-                            *kept.entry(chosen.clone()).or_default() += w / all * p;
+                    let kept = self.kept(ctx, &pool, limit);
+                    (pool, kept)
+                });
+                for (p, prefix) in sides[0].1.iter() {
+                    for (r, suffix) in sides[1].1.iter() {
+                        let mut counts = vec![0; 2 * n];
+                        for ((pool, _), chosen) in sides.iter().zip([prefix, suffix]) {
+                            for (&(c, _), &count) in pool.iter().zip(chosen) {
+                                counts[c] = count;
+                            }
                         }
+                        let t = self.settled(State {
+                            rarity: heir.rarity,
+                            influences: heir.influences,
+                            eldritch: heir.eldritch,
+                            counts: counts.into(),
+                        });
+                        emit(q * p * r, t, total);
                     }
-                    let pool = &pool;
-                    results = results
-                        .iter()
-                        .flat_map(|(p, counts)| {
-                            kept.iter().map(move |(chosen, r)| {
-                                let mut counts = counts.clone();
-                                for (e, &(c, _)) in pool.iter().enumerate() {
-                                    counts[c] += chosen[e];
-                                }
-                                (p * r, counts)
-                            })
-                        })
-                        .collect();
-                }
-                for (p, counts) in results {
-                    let t = self.settled(State { counts: counts.into(), ..(*heir).clone() });
-                    emit(q * p, t, total);
                 }
             }
         }
+    }
+
+    fn kept(&self, ctx: &Ctx, pool: &[(usize, u8)], limit: usize) -> Samples {
+        let size = pool.iter().map(|e| e.1 as usize).sum();
+        let table = crate::ops::recombine_kept(ctx, size);
+        let key = (pool.to_vec(), table.iter().map(|&(k, w)| ((k as usize).min(limit), w.to_bits())).collect());
+        if let Some(out) = self.samples.lock().unwrap().get(&key) {
+            return out.clone();
+        }
+        let all: f64 = table.iter().map(|e| e.1).sum();
+        let mut mixed = HashMap::<Vec<u8>, f64>::new();
+        for &(k, w) in table {
+            for (p, chosen) in self.sample(pool, (k as usize).min(limit)) {
+                *mixed.entry(chosen).or_default() += w / all * p;
+            }
+        }
+        let mut out: Vec<_> = mixed.into_iter().map(|(s, p)| (p, s)).collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        let out: Samples = out.into();
+        self.samples.lock().unwrap().insert(key, out.clone());
+        out
     }
 
     /// Distinct affixes drawn uniformly from `pool` ((class, count) entries) until `keep` are
     /// kept or none are left; one conflicting with a kept affix is discarded (for untracked
     /// classes, sharing a group with each kept one of its class by chance). Per outcome, how
     /// many of each entry were kept.
-    fn sample(&self, pool: &[(usize, u8)], keep: usize) -> Samples {
-        let key = (pool.to_vec(), keep);
-        if let Some(out) = self.samples.lock().unwrap().get(&key) {
-            return out.clone();
-        }
+    fn sample(&self, pool: &[(usize, u8)], keep: usize) -> Vec<(f64, Vec<u8>)> {
         let n = self.classes.len();
         let conflicts = |a: usize, b: usize| {
             let (a, b) = (a % n, b % n);
@@ -784,8 +794,6 @@ impl<'g> Lens<'g> {
         }
         let mut out: Vec<_> = done.into_iter().map(|(k, p)| (p, k)).collect();
         out.sort_by(|a, b| a.1.cmp(&b.1));
-        let out: Samples = out.into();
-        self.samples.lock().unwrap().insert(key, out.clone());
         out
     }
 

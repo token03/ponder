@@ -274,6 +274,29 @@ fn recombination_matches_sampled_items() {
 }
 
 #[test]
+fn recombination_cache_tracks_keep_count_weights() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/cheap-phys-weapon.toml")).unwrap()).unwrap();
+    let kind = Kind { base: game.base(&guide.base).unwrap(), ilvl: 83, influences: Influences::default() };
+    let target = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
+    let item = target.witness(&game, kind).unwrap();
+    let partner = Arc::new(Handful { items: vec![Item::new(kind)] });
+    let recombine = Recombinator::new("Two Hand Axe", "cache", partner);
+    let lens = Lens::new(&game, kind, vec![target], &[&recombine], &[&item]);
+    let first = Assumptions { recombine_bonus: 0.0, ..Assumptions::default() };
+    let mut second = first.clone();
+    second.recombine_kept[1] = vec![(0, 2.0), (1, 1.0)];
+    let state = lens.project(&item);
+    for (assumptions, expected) in [(&first, 2.0 / 3.0), (&second, 1.0 / 3.0), (&first, 2.0 / 3.0)] {
+        let ctx = Ctx { game: &game, assumptions };
+        let out = lens.run(&ctx, recombine.steps(), &state);
+        let chance: f64 = out.iter().filter(|(_, s)| lens.holds(0, s)).map(|(p, _)| p).sum();
+        assert!((out.iter().map(|(p, _)| p).sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((chance - expected).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn permanent_conflicts_are_pruned_only_when_they_cannot_be_removed() {
     let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
     let guide: Guide =
