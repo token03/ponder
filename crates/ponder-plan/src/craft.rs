@@ -249,6 +249,10 @@ impl Model for Craft<'_> {
         *n == Node::Restart
     }
 
+    fn restarts_anywhere(&self) -> bool {
+        true
+    }
+
     fn actions(&self, n: &Node) -> Vec<(usize, f64)> {
         match n {
             Node::Market => self

@@ -13,7 +13,8 @@
 //! exactly, merging equal states after every step. Unveil offers are drawn by class, removing a
 //! class's average mod weight per offer (exact for single-mod classes).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::game::{Game, GroupId, Influences, Kind, ModId, Side, TagId};
@@ -238,8 +239,8 @@ impl<'g> Lens<'g> {
         }
 
         let mut classes = Vec::new();
-        let mut class_of = HashMap::new();
-        let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::new();
+        let mut class_of = HashMap::default();
+        let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::default();
         for ((side, group, serves, tags, origin, fixed, rank, _), mods) in keys {
             let idx = classes.len();
             let groups: BTreeSet<GroupId> = mods.iter().flat_map(|m| game.def(*m).groups.iter().copied()).collect();
@@ -363,12 +364,16 @@ impl<'g> Lens<'g> {
         lens
     }
 
+    pub fn is_tracked(&self, c: usize) -> bool {
+        self.classes[c].tracked
+    }
+
     pub fn classes(&self) -> usize {
         self.classes.len()
     }
 
     pub fn clear_cache(&mut self) {
-        *self.samples.get_mut().unwrap() = HashMap::new();
+        *self.samples.get_mut().unwrap() = HashMap::default();
     }
 
     /// One class for diagnostics: its fields and a few of its mods.
@@ -470,7 +475,7 @@ impl<'g> Lens<'g> {
     pub fn run(&self, ctx: &Ctx, steps: &[Step], state: &State) -> Vec<(f64, State)> {
         let mut dist: Vec<(f64, State, u8)> = vec![(1.0, state.clone(), 0)];
         let merge = |dist: Vec<(f64, State, u8)>, f: &Expand| {
-            let mut next: HashMap<(State, u8), f64> = HashMap::new();
+            let mut next: HashMap<(State, u8), f64> = HashMap::default();
             for (p, s, total) in dist {
                 f(s, total, &mut |q, s2, t2| *next.entry((s2, t2)).or_default() += p * q);
             }
@@ -739,7 +744,7 @@ impl<'g> Lens<'g> {
             return out.clone();
         }
         let all: f64 = table.iter().map(|e| e.1).sum();
-        let mut mixed = HashMap::<Vec<u8>, f64>::new();
+        let mut mixed = HashMap::<Vec<u8>, f64>::default();
         for &(k, w) in table {
             for (p, chosen) in self.sample(pool, (k as usize).min(limit)) {
                 *mixed.entry(chosen).or_default() += w / all * p;
@@ -763,9 +768,9 @@ impl<'g> Lens<'g> {
             self.classes[a].conflicts.contains(&b) || (a == b && self.classes[a].origin == Origin::Fixed)
         };
         let mut open: Vec<(f64, Vec<u8>, Vec<u8>)> = vec![(1.0, pool.iter().map(|e| e.1).collect(), vec![0; pool.len()])];
-        let mut done: HashMap<Vec<u8>, f64> = HashMap::new();
+        let mut done: HashMap<Vec<u8>, f64> = HashMap::default();
         while !open.is_empty() {
-            let mut next: HashMap<(Vec<u8>, Vec<u8>), f64> = HashMap::new();
+            let mut next: HashMap<(Vec<u8>, Vec<u8>), f64> = HashMap::default();
             for (p, left, kept) in open {
                 let remaining: u32 = left.iter().map(|&x| x as u32).sum();
                 if remaining == 0 || kept.iter().map(|&x| x as usize).sum::<usize>() >= keep {
