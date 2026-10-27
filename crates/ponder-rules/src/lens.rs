@@ -25,13 +25,16 @@ use crate::ops::{
 };
 use crate::target::{Target, matches};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// Most classes a lens has: states hold their counts inline, so making one allocates nothing.
+pub const CLASSES: usize = 40;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct State {
     pub rarity: Rarity,
     pub influences: u8,
     pub eldritch: Option<Side>,
-    /// Per class: normal affixes, then (after `classes`) fractured ones.
-    pub counts: Box<[u8]>,
+    /// Per class: normal affixes, then (after the lens's classes) fractured ones.
+    pub counts: [u8; 2 * CLASSES],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,12 +91,33 @@ pub struct Lens<'g> {
     bans: Vec<(usize, u32)>,
     partners: Vec<(SupplyRef, Vec<(f64, State)>)>,
     samples: Mutex<SampleCache>,
+    /// What the lens was built from, to build its relaxation.
+    source: (Vec<Step>, Vec<Item>),
+}
+
+/// How a lens's states look through its relaxation (see [`Lens::relaxed`]).
+pub struct Relaxation {
+    class: Vec<usize>,
+    classes: usize,
+}
+
+impl Relaxation {
+    pub fn state(&self, s: &State) -> State {
+        let n = self.class.len();
+        let mut counts = [0u8; 2 * CLASSES];
+        for (c, &r) in self.class.iter().enumerate() {
+            counts[r] += s.counts[c];
+            counts[r + self.classes] += s.counts[c + n];
+        }
+        State { counts, ..*s }
+    }
 }
 
 static ANY: Pick = Pick::ANY;
 
-/// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it).
-type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32);
+/// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it,
+/// relaxed blocker).
+type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32, bool);
 type Samples = Arc<[(f64, Vec<u8>)]>;
 type SampleKey = (Vec<(usize, u8)>, Vec<(usize, u64)>);
 type SampleCache = HashMap<SampleKey, Samples>;
@@ -102,6 +126,27 @@ type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
 impl<'g> Lens<'g> {
     pub fn new(game: &'g Game, kind: Kind, targets: Vec<Target>, ops: &[&dyn Operation], inputs: &[&Item]) -> Lens<'g> {
+        let steps = ops.iter().flat_map(|op| op.steps()).cloned().collect();
+        Lens::build(game, kind, targets, (steps, inputs.iter().map(|i| (*i).clone()).collect()), false)
+    }
+
+    /// The same problem coarser: a blocker (a mod sharing a group with a need without serving
+    /// it) no longer blocks the need, though a need present still keeps it out, and junk is one
+    /// class per side and tags whatever pools roll it or its unveil rank. Its costs are close lower
+    /// bounds on this lens's, and its states far fewer. Also how this lens's states look
+    /// through it.
+    pub fn relaxed(&self) -> (Lens<'g>, Relaxation) {
+        let targets = self.targets.iter().map(|t| t.target.clone()).collect();
+        let relaxed = Lens::build(self.game, self.kind, targets, self.source.clone(), true);
+        let mut class = vec![usize::MAX; self.classes.len()];
+        for (m, &c) in &self.class_of {
+            class[c] = relaxed.class_of[m];
+        }
+        let classes = relaxed.classes.len();
+        (relaxed, Relaxation { class, classes })
+    }
+
+    fn build(game: &'g Game, kind: Kind, targets: Vec<Target>, source: (Vec<Step>, Vec<Item>), relaxed: bool) -> Lens<'g> {
         let mut offsets = Vec::new();
         let mut bits = 0;
         for t in &targets {
@@ -122,7 +167,7 @@ impl<'g> Lens<'g> {
         };
 
         // What the operations read and add.
-        let steps: Vec<&Step> = ops.iter().flat_map(|op| op.steps()).collect();
+        let steps: Vec<&Step> = source.0.iter().collect();
         let mut partners = Vec::new();
         for step in &steps {
             if let Step::Recombine(p) = step
@@ -131,7 +176,7 @@ impl<'g> Lens<'g> {
                 partners.push(p.clone());
             }
         }
-        let inputs: Vec<&Item> = inputs.iter().copied().chain(partners.iter().flat_map(|p| p.0.items())).collect();
+        let inputs: Vec<&Item> = source.1.iter().chain(partners.iter().flat_map(|p| p.0.items())).collect();
         let mut picks: Vec<&Pick> = Vec::new();
         let mut filters: Vec<TagFilter> = Vec::new();
         let mut forced: BTreeSet<ModId> = BTreeSet::new();
@@ -208,8 +253,14 @@ impl<'g> Lens<'g> {
         forced.extend(inputs.iter().flat_map(|i| &i.affixes).map(|a| a.id).filter(|m| !roll_ids.contains(m)));
         let pref_mods = prefs.iter().flat_map(|p| p.iter().flatten().copied());
         let wanted = targets.iter().flat_map(|t| t.needs.iter().flat_map(|n| n.ok.iter().copied()));
-        let tracked_groups: BTreeSet<GroupId> =
-            wanted.chain(forced.iter().copied()).chain(pref_mods).flat_map(|m| game.def(m).groups.iter().copied()).collect();
+        let tracked_groups: BTreeSet<GroupId> = if relaxed {
+            wanted.flat_map(|m| game.def(m).groups.iter().copied()).collect()
+        } else {
+            wanted.chain(forced.iter().copied()).chain(pref_mods).flat_map(|m| game.def(m).groups.iter().copied()).collect()
+        };
+        // A blocker in the relaxation is still kept out by a need present but no longer blocks one.
+        let blocker = |m: ModId| relaxed && serves(m) == 0 && game.def(m).groups.iter().any(|g| tracked_groups.contains(g));
+        let tracked = |m: ModId| -> Vec<GroupId> { game.def(m).groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect() };
 
         let mut keys: BTreeMap<Key, Vec<ModId>> = BTreeMap::new();
         let rolled_by = |m: ModId, w: f64| {
@@ -221,40 +272,47 @@ impl<'g> Lens<'g> {
         for &(m, w) in &rolls {
             let def = game.def(m);
             // All tracked groups, not just the first: a hybrid's conflicts are not its parts'.
-            let group: Vec<GroupId> = def.groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect();
+            let group = tracked(m);
             // Fossil and veiled mods differ from natural ones only in their weights.
             let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
             let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
             // Untracked mods split by the pools that can roll them: a mod a pool cannot roll (a
             // fracture, an earlier fossil's) must not count as one of that pool's draws.
-            let rolled_by = if !group.is_empty() { 0 } else { rolled_by(m, w) };
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by)).or_default().push(m);
+            // The relaxation merges junk the pools roll differently and its unveil ranks.
+            let junk = relaxed && group.is_empty();
+            let rolled_by = if !group.is_empty() || junk { 0 } else { rolled_by(m, w) };
+            let rank = if junk { 0 } else { rank };
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by, blocker(m))).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
             let def = game.def(m);
             let fixed = (def.source == Source::Crafted || game.veils.contains(&m)).then_some(m);
-            let group = def.groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect();
+            let group = tracked(m);
             let origin = fixed.map_or(Origin::Natural(def.influence), |_| Origin::Fixed);
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0)).or_default().push(m);
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0, blocker(m))).or_default().push(m);
         }
 
+        assert!(keys.len() <= CLASSES, "at most {CLASSES} classes per lens");
         let mut classes = Vec::new();
         let mut class_of = HashMap::default();
         let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::default();
-        for ((side, group, serves, tags, origin, fixed, rank, _), mods) in keys {
+        let mut blockers = Vec::new();
+        for ((side, group, serves, tags, origin, fixed, rank, _, blocks), mods) in keys {
             let idx = classes.len();
-            let groups: BTreeSet<GroupId> = mods.iter().flat_map(|m| game.def(*m).groups.iter().copied()).collect();
-            for g in groups.iter().filter(|g| tracked_groups.contains(g)) {
+            for g in group.iter().filter(|_| !blocks) {
                 group_classes.entry(*g).or_default().push(idx);
             }
             for &m in &mods {
                 class_of.insert(m, idx);
             }
+            if blocks {
+                blockers.push(idx);
+            }
             classes.push(Class {
                 side,
                 origin,
                 veiled: mods.iter().filter(|m| game.def(**m).source == Source::Veiled).count(),
-                tracked: !group.is_empty() || fixed.is_some(),
+                tracked: (!group.is_empty() && !blocks) || fixed.is_some(),
                 crafted: fixed.is_some_and(|m| game.def(m).source == Source::Crafted),
                 veil: fixed.is_some_and(|m| game.veils.contains(&m)),
                 tags,
@@ -268,7 +326,7 @@ impl<'g> Lens<'g> {
             members[*c].push(*m);
         }
         for (i, c) in classes.iter_mut().enumerate() {
-            if c.tracked {
+            if c.tracked || blockers.contains(&i) {
                 let mut conflicts: BTreeSet<usize> = members[i]
                     .iter()
                     .flat_map(|m| game.def(*m).groups.iter())
@@ -276,7 +334,9 @@ impl<'g> Lens<'g> {
                     .flatten()
                     .copied()
                     .collect();
-                conflicts.insert(i);
+                if c.tracked {
+                    conflicts.insert(i);
+                }
                 c.conflicts = conflicts.into_iter().collect();
             }
         }
@@ -353,6 +413,7 @@ impl<'g> Lens<'g> {
             bans,
             partners: Vec::new(),
             samples: Mutex::default(),
+            source: (Vec::new(), Vec::new()),
         };
         lens.partners = partners
             .into_iter()
@@ -361,6 +422,7 @@ impl<'g> Lens<'g> {
                 (p, states)
             })
             .collect();
+        lens.source = source;
         lens
     }
 
@@ -385,12 +447,12 @@ impl<'g> Lens<'g> {
     /// The state of a real item of this lens's base.
     pub fn project(&self, item: &Item) -> State {
         let n = self.classes.len();
-        let mut counts = vec![0u8; 2 * n];
+        let mut counts = [0u8; 2 * CLASSES];
         for a in &item.affixes {
             let c = *self.class_of.get(&a.id).unwrap_or_else(|| panic!("{} is outside the lens", self.game.def(a.id).key));
             counts[c + if a.fractured { n } else { 0 }] += 1;
         }
-        State { rarity: item.rarity, influences: item.kind.influences.0, eldritch: item.eldritch, counts: counts.into() }
+        State { rarity: item.rarity, influences: item.kind.influences.0, eldritch: item.eldritch, counts }
     }
 
     pub fn project_items(&self, items: &[Item]) -> Vec<(f64, State)> {
@@ -717,7 +779,7 @@ impl<'g> Lens<'g> {
                 });
                 for (p, prefix) in sides[0].1.iter() {
                     for (r, suffix) in sides[1].1.iter() {
-                        let mut counts = vec![0; 2 * n];
+                        let mut counts = [0; 2 * CLASSES];
                         for ((pool, _), chosen) in sides.iter().zip([prefix, suffix]) {
                             for (&(c, _), &count) in pool.iter().zip(chosen) {
                                 counts[c] = count;
@@ -727,7 +789,7 @@ impl<'g> Lens<'g> {
                             rarity: heir.rarity,
                             influences: heir.influences,
                             eldritch: heir.eldritch,
-                            counts: counts.into(),
+                            counts,
                         });
                         emit(q * p * r, t, total);
                     }
@@ -825,8 +887,10 @@ impl<'g> Lens<'g> {
         let class = &self.classes[c];
         let n = self.classes.len();
         let present = |o: usize| s.counts[o] + s.counts[o + n];
-        if class.tracked {
-            if class.conflicts.iter().any(|&o| present(o) > 0) { 0.0 } else { w[0] }
+        if class.conflicts.iter().any(|&o| present(o) > 0) {
+            0.0
+        } else if class.tracked {
+            w[0]
         } else {
             w[(present(c) as usize).min(w.len() - 1)]
         }

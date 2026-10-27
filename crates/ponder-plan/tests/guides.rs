@@ -219,7 +219,8 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         let refs: Vec<_> = best_ops.iter().map(|o| o.as_ref()).collect();
         let inputs: Vec<_> = starts.iter().flat_map(|s| s.items()).collect();
         let lens = Lens::new(game, kind, vec![goal.clone()], &refs, &inputs);
-        let craft = Craft::new(&ctx, &lens, &refs, market, starts, 0);
+        let mut craft = Craft::new(&ctx, &lens, &refs, market, starts, 0);
+        craft.relax(limit);
         println!("  {item} best: {} classes, {} operations", lens.classes(), craft.dominated.iter().filter(|d| !**d).count());
         if std::env::var("OPS").is_ok() {
             for c in 0..lens.classes() {

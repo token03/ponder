@@ -164,7 +164,8 @@ impl<'a> Session<'a> {
         let refs: Vec<_> = ops.iter().map(|o| o.as_ref()).collect();
         let inputs: Vec<_> = request.starts.iter().flat_map(|s| s.items()).collect();
         let mut lens = Lens::new(game, request.kind, vec![request.goal], &refs, &inputs);
-        let craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
+        let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
+        craft.relax(limit);
         let solution = solve(&craft, &[(1.0, Node::Market)], limit).map_err(Error::Solve)?;
         lens.clear_cache();
         let plan = Arc::new(Plan {

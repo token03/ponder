@@ -33,6 +33,11 @@ pub trait Model: Sync {
     fn restarts_anywhere(&self) -> bool {
         false
     }
+    /// A lower bound on a state's cost to the goal, if the model knows one. The solver leaves
+    /// such a state unexpanded, worth its bound, until the best policy reaches it.
+    fn bound(&self, _: &Self::State) -> Option<f64> {
+        None
+    }
     /// Usable actions with their costs; ids are the model's own.
     fn actions(&self, s: &Self::State) -> Vec<(usize, f64)>;
     fn outcomes(&self, s: &Self::State, action: usize) -> Vec<(f64, Self::State)>;
@@ -65,6 +70,9 @@ pub struct Stats {
     pub values: f64,
     /// Newton steps on the worth of starting over.
     pub newton: usize,
+    /// Rounds of expansion, and states expanded on reaching them (see [`Model::bound`]).
+    pub rounds: usize,
+    pub expanded: usize,
     /// Per action id, how many states it was first to reach: where the state space comes from.
     pub found: std::collections::BTreeMap<usize, usize>,
 }
@@ -100,17 +108,29 @@ impl Affine {
 }
 
 pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
+    solve_keeping(model, start, limit, false)
+}
+
+/// [`solve`], keeping every explored state with its value rather than only those the policy
+/// reaches.
+pub fn solve_everywhere<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
+    solve_keeping(model, start, limit, true)
+}
+
+fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, keep_all: bool) -> Result<Solution<M::State>, Error> {
     let mut stats = Stats::default();
     if !model.restarts_anywhere() {
-        return solve_within(model, start, limit, f64::INFINITY, &mut stats).map(|s| Solution { stats, ..s.0 });
+        return solve_within(model, start, limit, f64::INFINITY, keep_all, &mut stats).map(|s| Solution { stats, ..s.0 });
     }
     // Explore only actions cheaper than a ceiling. A start worth less than the ceiling proves
     // every action left out dearer than starting over, so the solution is exact; otherwise the
     // ceiling rises to that worth, and the actions the solution used keep it from rising again.
+    // A bound on the start's worth is a better first guess than its cheapest action.
     let first = start.iter().flat_map(|(_, s)| model.actions(s)).map(|a| a.1).fold(f64::INFINITY, f64::min);
-    let mut ceiling = 2.0 * first.clamp(0.5, 1e9);
+    let bound: f64 = start.iter().map(|(p, s)| p * model.bound(s).unwrap_or(0.0)).sum();
+    let mut ceiling = 2.0 * first.max(bound).clamp(0.5, 1e9);
     loop {
-        match solve_within(model, start, limit, ceiling, &mut stats) {
+        match solve_within(model, start, limit, ceiling, keep_all, &mut stats) {
             Ok((solution, w)) if w < ceiling => return Ok(Solution { stats, ..solution }),
             Ok((_, w)) => ceiling = w * (1.0 + 1e-9),
             Err(Error::Unreachable) if ceiling.is_finite() => ceiling = if ceiling > 1e9 { f64::INFINITY } else { ceiling * 4.0 },
@@ -119,191 +139,295 @@ pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Re
     }
 }
 
+/// The actions of a state with their costs and outcomes.
+type Expansion<S> = Vec<(usize, f64, Vec<(f64, S)>)>;
+
+/// How a state enters the graph.
+enum Entry<S> {
+    /// Fixed worth: a goal or a restart.
+    Fixed(Affine),
+    /// Left unexpanded, worth its bound.
+    Tip(f64),
+    New(Expansion<S>),
+}
+
+/// The graph's number for a state, numbering it if new.
+fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<S, usize>, limit: usize) -> Result<usize, Error> {
+    if let Some(&i) = index.get(s) {
+        return Ok(i);
+    }
+    if states.len() >= limit {
+        return Err(Error::TooManyStates(limit));
+    }
+    index.insert(s.clone(), states.len());
+    states.push(s.clone());
+    Ok(states.len() - 1)
+}
+
 /// The solution and the worth of starting over, using only actions cheaper than `ceiling`.
+///
+/// States the model bounds stay unexpanded, worth their bound, until the best policy reaches
+/// them; then they are expanded and the graph solved again. With admissible bounds the policy
+/// that reaches no unexpanded state is optimal (LAO*), and its value is exact either way.
 fn solve_within<M: Model>(
     model: &M,
     start: &[(f64, M::State)],
     limit: usize,
     ceiling: f64,
+    keep_all: bool,
     stats: &mut Stats,
 ) -> Result<(Solution<M::State>, f64), Error> {
     stats.attempts += 1;
-    let clock = std::time::Instant::now();
+    let expand = |s: &M::State| -> Expansion<M::State> {
+        let mut actions = model.actions(s);
+        actions.retain(|a| a.1 < ceiling);
+        actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect()
+    };
     let mut states: Vec<M::State> = Vec::new();
     let mut index: HashMap<M::State, usize> = HashMap::default();
-    let mut intern = |s: M::State, states: &mut Vec<M::State>| -> Result<usize, Error> {
-        if let Some(&i) = index.get(&s) {
-            return Ok(i);
-        }
-        if states.len() >= limit {
-            return Err(Error::TooManyStates(limit));
-        }
-        let i = states.len();
-        index.insert(s.clone(), i);
-        states.push(s);
-        Ok(i)
-    };
-    let starts: Vec<(f64, usize)> = start.iter().map(|(p, s)| intern(s.clone(), &mut states).map(|i| (*p, i))).collect::<Result<_, _>>()?;
+    let starts: Vec<(f64, usize)> =
+        start.iter().map(|(p, s)| intern(s, &mut states, &mut index, limit).map(|i| (*p, i))).collect::<Result<_, _>>()?;
     let mut edges: Vec<Vec<Edge>> = Vec::new();
     let mut end = Vec::new();
+    let mut tip = Vec::new();
     let mut fixed: Vec<Option<Affine>> = Vec::new();
-    // Expand states in batches, the model's work in parallel, numbering in order.
-    let mut next = 0;
-    while next < states.len() {
-        let batch = next..states.len().min(next + rayon::current_num_threads());
-        let expanded: Vec<_> = states[batch.clone()]
-            .par_iter()
-            .map(|s| {
-                let value = if model.is_goal(s) {
-                    Some(Affine { a: 0.0, b: 0.0 })
-                } else if model.is_restart(s) {
-                    Some(Affine { a: 0.0, b: 1.0 })
-                } else {
-                    None
-                };
-                let mut actions = if value.is_some() { Vec::new() } else { model.actions(s) };
-                actions.retain(|a| a.1 < ceiling);
-                let out: Vec<_> = actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect();
-                (value, out)
-            })
-            .collect();
-        for (value, out) in expanded {
-            let mut successors = Vec::new();
-            for (action, cost, to) in out {
-                let known = states.len();
-                let to =
-                    to.into_iter().filter(|o| o.0 > 0.0).map(|(p, t)| intern(t, &mut states).map(|i| (p, i))).collect::<Result<_, _>>()?;
-                if states.len() > known {
-                    *stats.found.entry(action).or_default() += states.len() - known;
-                }
-                successors.push(Edge { action, cost, to });
-            }
-            end.push(value.is_some());
-            fixed.push(value);
-            edges.push(successors);
-        }
-        next = batch.end;
-    }
-    let n = states.len();
-    let outcomes = edges.iter().flatten().map(|e| e.to.len()).sum();
-    let actions = edges.iter().map(Vec::len).sum();
-    stats.outcomes += outcomes;
-    stats.explore += clock.elapsed().as_secs_f64();
-    let clock = std::time::Instant::now();
-    // Keep only actions whose every outcome can still reach the goal (or a restart) and that
-    // leave the state; a state is alive while some kept action path gets there.
-    let mut alive = vec![true; n];
     let mut given_up = Vec::new();
+    let mut found: std::collections::BTreeMap<usize, usize> = Default::default();
+    // The edges of an expansion, numbering the states it finds.
+    let mut link = |out: Expansion<M::State>, states: &mut Vec<M::State>, index: &mut HashMap<M::State, usize>| -> Result<Vec<Edge>, Error> {
+        let mut successors = Vec::new();
+        for (action, cost, to) in out {
+            let known = states.len();
+            let to = to.iter().filter(|o| o.0 > 0.0).map(|(p, t)| intern(t, states, index, limit).map(|i| (*p, i))).collect::<Result<_, _>>()?;
+            if states.len() > known {
+                *found.entry(action).or_default() += states.len() - known;
+            }
+            successors.push(Edge { action, cost, to });
+        }
+        Ok(successors)
+    };
+    // Expanded tips the best policy reached, to join the graph.
+    let mut reached: Vec<(usize, Expansion<M::State>)> = Vec::new();
+    // The last round's policy (as action ids) and worth of starting over, to start from.
+    let mut acted: Vec<usize> = Vec::new();
+    let mut warm = None;
+    // Values at the last solve, extended over states found since.
+    let mut known: Vec<f64> = Vec::new();
     loop {
-        for s in 0..n {
-            if !end[s] {
-                edges[s].retain(|e| e.to.iter().all(|&(_, t)| alive[t]) && e.to.iter().any(|&(_, t)| t != s));
+        stats.rounds += 1;
+        let clock = std::time::Instant::now();
+        let mut fresh: Vec<usize> = reached.iter().map(|r| r.0).collect();
+        let entered = edges.len();
+        for (s, out) in reached.drain(..) {
+            edges[s] = link(out, &mut states, &mut index)?;
+            (end[s], tip[s], fixed[s]) = (false, false, None);
+        }
+        // Enter new states in batches, the model's work in parallel, numbering in order.
+        while edges.len() < states.len() {
+            let batch = edges.len()..states.len().min(edges.len() + rayon::current_num_threads());
+            let entries: Vec<Entry<M::State>> = states[batch.clone()]
+                .par_iter()
+                .map(|s| {
+                    if model.is_goal(s) {
+                        Entry::Fixed(Affine { a: 0.0, b: 0.0 })
+                    } else if model.is_restart(s) {
+                        Entry::Fixed(Affine { a: 0.0, b: 1.0 })
+                    } else if let Some(bound) = model.bound(s).filter(|_| !start.iter().any(|(_, t)| t == s)) {
+                        Entry::Tip(bound)
+                    } else {
+                        Entry::New(expand(s))
+                    }
+                })
+                .collect();
+            for entry in entries {
+                let (value, unexpanded, out) = match entry {
+                    Entry::Fixed(value) => (Some(value), false, Vec::new()),
+                    Entry::Tip(bound) => (Some(Affine { a: bound, b: 0.0 }), true, Vec::new()),
+                    Entry::New(out) => (None, false, link(out, &mut states, &mut index)?),
+                };
+                end.push(value.is_some());
+                tip.push(unexpanded);
+                fixed.push(value);
+                edges.push(out);
             }
         }
-        let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut seen = vec![usize::MAX; n];
-        for (s, out) in edges.iter().enumerate() {
-            for t in successors(out, &mut seen, s) {
-                into[t].push(s);
+        let n = states.len();
+        fresh.extend((entered..n).filter(|&s| !end[s]));
+        // Before solving again, follow the best actions by the last values (states found since
+        // at their bounds, unexpanded ones free) from what was just expanded to more tips.
+        if let Some(w) = warm.filter(|_| !fresh.is_empty()) {
+            known.extend((known.len()..n).map(|s| fixed[s].map_or(0.0, |f| f.at(w))));
+            let mut next: Vec<usize> = fresh
+                .iter()
+                .filter_map(|&s| edges[s].get(best(&edges[s], &known).1))
+                .flat_map(|e| e.to.iter().map(|o| o.1))
+                .filter(|&t| tip[t])
+                .collect();
+            next.sort_unstable();
+            next.dedup();
+            if !next.is_empty() {
+                reached = next.par_iter().map(|&s| (s, expand(&states[s]))).collect();
+                stats.expanded += reached.len();
+                stats.explore += clock.elapsed().as_secs_f64();
+                continue;
             }
         }
-        let mut reach = end.clone();
-        let mut stack: Vec<usize> = (0..n).filter(|&s| end[s]).collect();
-        while let Some(t) = stack.pop() {
-            for &s in &into[t] {
-                if !reach[s] {
-                    reach[s] = true;
-                    stack.push(s);
-                }
-            }
-        }
-        if model.gives_up() {
+        let outcomes = edges.iter().flatten().map(|e| e.to.len()).sum();
+        let actions = edges.iter().map(Vec::len).sum();
+        stats.explore += clock.elapsed().as_secs_f64();
+        let clock = std::time::Instant::now();
+        // Keep only actions whose every outcome can still reach the goal (or a restart) and that
+        // leave the state; a state is alive while some kept action path gets there.
+        let mut alive = vec![true; n];
+        loop {
             for s in 0..n {
-                if reach[s] {
-                    continue;
-                }
-                (end[s], fixed[s], reach[s]) = (true, Some(Affine { a: 0.0, b: 1.0 }), true);
-                edges[s].clear();
-                given_up.push(s);
-            }
-        }
-        if reach == alive {
-            break;
-        }
-        alive = reach;
-    }
-
-    let mut seen = vec![usize::MAX; n];
-    let order: Vec<Vec<usize>> =
-        components(&edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect::<Vec<_>>())
-            .into_iter()
-            .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
-            .filter(|c: &Vec<usize>| !c.is_empty())
-            .collect();
-    stats.prune += clock.elapsed().as_secs_f64();
-    let clock = std::time::Instant::now();
-    let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
-    let mut choice = vec![usize::MAX; n];
-    let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
-    // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed point.
-    let mut w = if restarts { 1e12 } else { 0.0 };
-    for _ in 0..200 {
-        stats.newton += 1;
-        let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
-        let mut stable = true;
-        for component in &order {
-            stable &= solve_component(component, &edges, &mut values, &mut choice, &mut affine, w);
-        }
-        let at_start =
-            starts.iter().fold(Affine { a: 0.0, b: 0.0 }, |acc, &(p, s)| Affine { a: acc.a + p * affine[s].a, b: acc.b + p * affine[s].b });
-        // A policy still improving may not reach the goal yet: keep improving at this `w`.
-        let hopeless = !at_start.a.is_finite() || (restarts && at_start.b >= 1.0 - 1e-12);
-        if hopeless && !stable {
-            continue;
-        }
-        if hopeless {
-            return Err(Error::Unreachable);
-        }
-        let next = if restarts { (at_start.a / (1.0 - at_start.b)).min(w) } else { w };
-        if stable && (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
-            let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
-            let mut reachable = vec![false; n];
-            let mut stack = Vec::new();
-            for &(_, s) in &starts {
-                if !reachable[s] {
-                    reachable[s] = true;
-                    stack.push(s);
+                if !end[s] {
+                    edges[s].retain(|e| e.to.iter().all(|&(_, t)| alive[t]) && e.to.iter().any(|&(_, t)| t != s));
                 }
             }
-            while let Some(s) = stack.pop() {
-                if choice[s] != usize::MAX && !end[s] && alive[s] {
-                    for &(_, t) in &edges[s][choice[s]].to {
-                        if !reachable[t] {
-                            reachable[t] = true;
-                            stack.push(t);
-                        }
+            let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
+            let mut seen = vec![usize::MAX; n];
+            for (s, out) in edges.iter().enumerate() {
+                for t in successors(out, &mut seen, s) {
+                    into[t].push(s);
+                }
+            }
+            let mut reach = end.clone();
+            let mut stack: Vec<usize> = (0..n).filter(|&s| end[s]).collect();
+            while let Some(t) = stack.pop() {
+                for &s in &into[t] {
+                    if !reach[s] {
+                        reach[s] = true;
+                        stack.push(s);
                     }
                 }
             }
-            let explored = n;
-            drop(index);
-            let retained = reachable.iter().filter(|r| **r).count();
-            let mut kept = Vec::with_capacity(retained);
-            let mut values = Vec::with_capacity(retained);
-            let mut policy = Vec::with_capacity(retained);
-            let mut index = HashMap::with_capacity_and_hasher(retained, Default::default());
-            for (i, state) in states.into_iter().enumerate().filter(|(i, _)| reachable[*i]) {
-                index.insert(state.clone(), kept.len());
-                kept.push(state);
-                values.push(affine[i].at(next));
-                policy.push((choice[i] != usize::MAX && !end[i] && alive[i]).then(|| edges[i][choice[i]].action));
+            if model.gives_up() {
+                for s in 0..n {
+                    if reach[s] {
+                        continue;
+                    }
+                    (end[s], fixed[s], reach[s]) = (true, Some(Affine { a: 0.0, b: 1.0 }), true);
+                    edges[s].clear();
+                    given_up.push(s);
+                }
             }
-            stats.values += clock.elapsed().as_secs_f64();
-            return Ok((Solution { cost: at_start.at(next), states: kept, values, policy, index, given_up, outcomes, explored, actions, stats: stats.clone() }, next));
+            if reach == alive {
+                break;
+            }
+            alive = reach;
         }
-        w = next;
+
+        let mut seen = vec![usize::MAX; n];
+        let order: Vec<Vec<usize>> =
+            components(&edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect::<Vec<_>>())
+                .into_iter()
+                .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
+                .filter(|c: &Vec<usize>| !c.is_empty())
+                .collect();
+        stats.prune += clock.elapsed().as_secs_f64();
+        let clock = std::time::Instant::now();
+        let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
+        acted.resize(n, usize::MAX);
+        let mut choice: Vec<usize> = (0..n).map(|s| edges[s].iter().position(|e| !end[s] && e.action == acted[s]).unwrap_or(usize::MAX)).collect();
+        let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
+        // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed
+        // point. Or from the last round's worth, below it: any proper policy's worth is above, so
+        // the first step lands above it too.
+        let mut w = if restarts { warm.unwrap_or(1e12) } else { 0.0 };
+        let mut first = true;
+        let mut solved = None;
+        for _ in 0..200 {
+            stats.newton += 1;
+            let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
+            let mut stable = true;
+            for component in &order {
+                stable &= solve_component(component, &edges, &mut values, &mut choice, &mut affine, w);
+            }
+            let at_start =
+                starts.iter().fold(Affine { a: 0.0, b: 0.0 }, |acc, &(p, s)| Affine { a: acc.a + p * affine[s].a, b: acc.b + p * affine[s].b });
+            // A policy still improving may not reach the goal yet: keep improving at this `w`.
+            let hopeless = !at_start.a.is_finite() || (restarts && at_start.b >= 1.0 - 1e-12);
+            if hopeless && !stable {
+                continue;
+            }
+            // Below the start's worth everything may start over: begin again from high up.
+            if hopeless && restarts && w < 1e12 {
+                (w, first) = (1e12, false);
+                continue;
+            }
+            if hopeless {
+                return Err(Error::Unreachable);
+            }
+            let next = if !restarts {
+                w
+            } else if first {
+                at_start.a / (1.0 - at_start.b)
+            } else {
+                (at_start.a / (1.0 - at_start.b)).min(w)
+            };
+            first = false;
+            if stable && (next - w).abs() <= 1e-10 * next.abs().max(1.0) {
+                solved = Some((at_start, next));
+                break;
+            }
+            w = next;
+        }
+        stats.values += clock.elapsed().as_secs_f64();
+        let Some((at_start, w)) = solved else { return Err(Error::Unreachable) };
+        warm = Some(w);
+        known = affine.iter().map(|f| f.at(w)).collect();
+        acted = (0..n).map(|s| if choice[s] == usize::MAX { usize::MAX } else { edges[s][choice[s]].action }).collect();
+        let mut reachable = vec![false; n];
+        let mut stack = Vec::new();
+        for &(_, s) in &starts {
+            if !reachable[s] {
+                reachable[s] = true;
+                stack.push(s);
+            }
+        }
+        while let Some(s) = stack.pop() {
+            if choice[s] != usize::MAX && !end[s] && alive[s] {
+                for &(_, t) in &edges[s][choice[s]].to {
+                    if !reachable[t] {
+                        reachable[t] = true;
+                        stack.push(t);
+                    }
+                }
+            }
+        }
+        let tips: Vec<usize> = (0..n).filter(|&s| reachable[s] && tip[s]).collect();
+        if !tips.is_empty() {
+            let clock = std::time::Instant::now();
+            reached = tips.par_iter().map(|&s| (s, expand(&states[s]))).collect();
+            stats.expanded += reached.len();
+            stats.explore += clock.elapsed().as_secs_f64();
+            continue;
+        }
+        stats.outcomes += outcomes;
+        for (a, k) in found {
+            *stats.found.entry(a).or_default() += k;
+        }
+        let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
+        let explored = n;
+        drop(index);
+        if keep_all {
+            reachable.iter_mut().for_each(|r| *r = true);
+        }
+        let retained = reachable.iter().filter(|r| **r).count();
+        let mut kept = Vec::with_capacity(retained);
+        let mut values = Vec::with_capacity(retained);
+        let mut policy = Vec::with_capacity(retained);
+        let mut index = HashMap::with_capacity_and_hasher(retained, Default::default());
+        for (i, state) in states.into_iter().enumerate().filter(|(i, _)| reachable[*i]) {
+            index.insert(state.clone(), kept.len());
+            kept.push(state);
+            values.push(affine[i].at(w));
+            policy.push((choice[i] != usize::MAX && !end[i] && alive[i]).then(|| edges[i][choice[i]].action));
+        }
+        let solution = Solution { cost: at_start.at(w), states: kept, values, policy, index, given_up, outcomes, explored, actions, stats: stats.clone() };
+        return Ok((solution, w));
     }
-    Err(Error::Unreachable)
 }
 
 fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl Iterator<Item = usize> + 'a {

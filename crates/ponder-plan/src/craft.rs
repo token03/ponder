@@ -2,10 +2,10 @@
 //! the market, buying one of its start items, and any item can be abandoned to start over.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ponder_rules::item::Item;
-use ponder_rules::lens::{Lens, State};
+use ponder_rules::lens::{Lens, Relaxation, State};
 use ponder_rules::ops::{Ctx, Operation, Step, Supply};
 use ponder_solve::Model;
 use rayon::prelude::*;
@@ -41,6 +41,11 @@ pub struct Craft<'a> {
     start_states: Vec<Vec<(f64, State)>>,
     upper_bound: f64,
     finishes: Vec<usize>,
+    /// Purchases worked once by an operation that combines the item with another
+    /// (recombinators): (start, operation, outcomes once needed).
+    combined: Vec<(usize, usize, OnceLock<Vec<(f64, State)>>)>,
+    /// The relaxed craft's values (see [`Craft::relax`]).
+    relaxed: Option<(Relaxation, ponder_solve::Solution<Node>)>,
 }
 
 impl<'a> Craft<'a> {
@@ -54,6 +59,10 @@ impl<'a> Craft<'a> {
         goal: usize,
     ) -> Craft<'a> {
         let ops: Vec<(&dyn Operation, f64)> = ops.iter().filter_map(|op| market.price(&op.cost()).map(|c| (*op, c))).collect();
+        Craft::priced(ctx, lens, ops, starts, goal)
+    }
+
+    fn priced(ctx: &'a Ctx<'a>, lens: &'a Lens<'a>, ops: Vec<(&'a dyn Operation, f64)>, starts: Vec<Arc<dyn Supply>>, goal: usize) -> Craft<'a> {
         // An operation that does what a cheaper (or earlier, equally priced) one of the same mechanic
         // does is never best.
         let dominated = (0..ops.len())
@@ -75,13 +84,41 @@ impl<'a> Craft<'a> {
             .collect();
         let start_states = starts.iter().map(|s| lens.project_items(s.items())).collect();
         let finishes = ops.iter().enumerate().filter(|(_, (op, _))| op.steps().iter().all(deterministic)).map(|(i, _)| i).collect();
-        let mut craft =
-            Craft { ctx, lens, ops, dominated, starts, goal, hubs, continuations, start_states, upper_bound: f64::INFINITY, finishes };
+        // Combining is only worth it on items as made, so it happens right after buying one: its
+        // outcomes are worked out once rather than from every item along the way.
+        let combined = (0..ops.len())
+            .filter(|&i| combines(ops[i].0))
+            .flat_map(|i| (0..starts.len()).map(move |j| (j, i, OnceLock::new())))
+            .collect();
+        let mut craft = Craft {
+            ctx,
+            lens,
+            ops,
+            dominated,
+            starts,
+            goal,
+            hubs,
+            continuations,
+            start_states,
+            upper_bound: f64::INFINITY,
+            finishes,
+            combined,
+            relaxed: None,
+        };
         craft.upper_bound = craft.repeat_bound();
         for (i, dominated) in craft.dominated.iter_mut().enumerate() {
             *dominated |= craft.ops[i].1 > craft.upper_bound;
         }
         craft
+    }
+
+    /// Bound every item's cost by the same craft through the relaxed lens (see
+    /// [`Lens::relaxed`]), solved first, so the solver expands only items the best policy can
+    /// reach. Left unbounded if the relaxed craft does not solve within `limit` states.
+    pub fn relax(&mut self, limit: usize) {
+        let (lens, relaxation) = self.lens.relaxed();
+        let craft = Craft::priced(self.ctx, &lens, self.ops.clone(), self.starts.clone(), self.goal);
+        self.relaxed = ponder_solve::solve_everywhere(&craft, &[(1.0, Node::Market)], limit).ok().map(|s| (relaxation, s));
     }
 
     pub fn start_states(&self, i: usize) -> &[(f64, State)] {
@@ -98,11 +135,32 @@ impl<'a> Craft<'a> {
         self.ops.len() + self.starts.len()
     }
 
+    /// Action id `i` buys an item and combines it: (start, operation).
+    pub fn combined_of(&self, i: usize) -> Option<(usize, usize)> {
+        i.checked_sub(self.restart() + 1).and_then(|k| self.combined.get(k)).map(|&(j, op, _)| (j, op))
+    }
+
     pub fn action_name(&self, i: usize) -> String {
         if i == self.restart() {
             return "start over".into();
         }
+        if let Some((j, op)) = self.combined_of(i) {
+            return format!("buy:{} then {}", self.starts[j].name(), self.ops[op].0.name());
+        }
         self.start_of(i).map_or_else(|| self.ops[i].0.name(), |s| format!("buy:{}", s.name()))
+    }
+
+    fn combined_states(&self, k: usize) -> &[(f64, State)] {
+        let (j, i, states) = &self.combined[k];
+        states.get_or_init(|| {
+            let mut merged = HashMap::new();
+            for (p, s) in &self.start_states[*j] {
+                for (q, t) in self.outcomes_of(s, *i) {
+                    *merged.entry(t).or_insert(0.0) += p * q;
+                }
+            }
+            merged.into_iter().map(|(t, p)| (p, t)).collect()
+        })
     }
 
     /// Outcomes of operation `i` on an item.
@@ -253,22 +311,32 @@ impl Model for Craft<'_> {
         true
     }
 
+    fn bound(&self, n: &Node) -> Option<f64> {
+        let (relaxation, solution) = self.relaxed.as_ref()?;
+        let relaxed = match n {
+            Node::Item(s) => Node::Item(relaxation.state(s)),
+            Node::Hub(i, s) => Node::Hub(*i, relaxation.state(s)),
+            Node::Market => Node::Market,
+            _ => return None,
+        };
+        // An item the relaxation never reached (its dynamics differ) is expanded instead.
+        solution.index.get(&relaxed).map(|&i| solution.values[i])
+    }
+
     fn actions(&self, n: &Node) -> Vec<(usize, f64)> {
         match n {
-            Node::Market => self
-                .starts
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.price() <= self.upper_bound)
-                .map(|(j, b)| (self.ops.len() + j, b.price()))
-                .collect(),
+            Node::Market => {
+                let buys = self.starts.iter().enumerate().map(|(j, b)| (self.ops.len() + j, b.price()));
+                let combined = self.combined.iter().enumerate().map(|(k, &(j, i, _))| (self.restart() + 1 + k, self.starts[j].price() + self.ops[i].1));
+                buys.chain(combined).filter(|(_, price)| *price <= self.upper_bound).collect()
+            }
             Node::Item(s) => {
                 if !self.lens.viable(self.goal, s) {
                     return vec![(self.restart(), 0.0)];
                 }
                 let view = self.lens.view(s);
                 let ops = (0..self.ops.len())
-                    .filter(|&i| !self.dominated[i] && self.ops[i].0.applies(self.ctx, &view))
+                    .filter(|&i| !self.dominated[i] && !combines(self.ops[i].0) && self.ops[i].0.applies(self.ctx, &view))
                     .map(|i| (i, self.ops[i].1));
                 ops.chain([(self.restart(), 0.0)]).collect()
             }
@@ -280,6 +348,9 @@ impl Model for Craft<'_> {
     fn outcomes(&self, n: &Node, i: usize) -> Vec<(f64, Node)> {
         if i == self.restart() {
             return vec![(1.0, Node::Restart)];
+        }
+        if i > self.restart() {
+            return self.nodes(self.combined_states(i - self.restart() - 1).iter().cloned());
         }
         match (n, self.start_of(i)) {
             (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
@@ -300,6 +371,10 @@ fn hub(steps: &[Step]) -> Option<usize> {
         None => steps.iter().position(|s| !deterministic(s))? + 1,
     };
     (end < steps.len() && !steps[..end].iter().any(|s| matches!(s, Step::RollCount))).then_some(end)
+}
+
+fn combines(op: &dyn Operation) -> bool {
+    matches!(op.steps().first(), Some(Step::Recombine(_)))
 }
 
 fn deterministic(step: &Step) -> bool {
@@ -333,7 +408,8 @@ pub struct Followed {
 impl Craft<'_> {
     /// What the solution buys first.
     pub fn first_buy(&self, solution: &ponder_solve::Solution<Node>) -> Option<&dyn Supply> {
-        solution.index.get(&Node::Market).and_then(|&i| solution.policy[i]).and_then(|a| self.start_of(a))
+        let a = solution.index.get(&Node::Market).and_then(|&i| solution.policy[i])?;
+        self.start_of(a).or_else(|| self.combined_of(a).map(|(j, _)| self.starts[j].as_ref()))
     }
 
     /// Runs start at the market; run `r` is seeded with `seed + r`.
@@ -362,6 +438,12 @@ impl Craft<'_> {
                 } else if let Some(b) = self.start_of(op) {
                     item = Some(b.item(rng));
                     cost += b.price();
+                } else if let Some((j, i)) = self.combined_of(op) {
+                    let mut made = self.starts[j].item(rng);
+                    let (operation, price) = self.ops[i];
+                    ponder_rules::ops::run(self.ctx, operation.steps(), &mut made, rng);
+                    item = Some(made);
+                    cost += self.starts[j].price() + price;
                 } else {
                     let (operation, price) = self.ops[op];
                     ponder_rules::ops::run(self.ctx, operation.steps(), item.as_mut().unwrap(), rng);
@@ -371,7 +453,7 @@ impl Craft<'_> {
             (cost, actions, None)
         };
         let done: Vec<(f64, Vec<usize>, Option<Item>)> = (0..runs as u64).into_par_iter().map(run).collect();
-        let mut uses = vec![0usize; self.restart() + 1];
+        let mut uses = vec![0usize; self.restart() + 1 + self.combined.len()];
         for &op in done.iter().flat_map(|d| &d.1) {
             uses[op] += 1;
         }
