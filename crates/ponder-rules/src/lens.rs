@@ -5,8 +5,8 @@
 //!   unveil prefers, split by which needs they serve and which tags operations read;
 //! - fixed: crafted mods and veiled placeholders;
 //! - untracked: everything else, counted per side, origin and read tags. A class holding `k`
-//!   mods keeps the weight expected after `k` weighted draws without replacement over its groups,
-//!   the one estimate the lens makes.
+//!   mods keeps the weight expected after `k` weighted draws without replacement over its groups
+//!   (each as likely as it spawns), the one estimate the lens makes.
 //!
 //! Classes also split by origin (natural, an influence's, fossil-only, unveiled), so every draw
 //! pool gives each class one weight. [`Lens::run`] interprets an operation's steps on states
@@ -131,8 +131,8 @@ impl<'g> Lens<'g> {
     }
 
     /// The same problem coarser: a blocker (a mod sharing a group with a need without serving
-    /// it) no longer blocks the need, though a need present still keeps it out, and junk is one
-    /// class per side and tags whatever pools roll it or its unveil rank. Its costs are close lower
+    /// it) no longer blocks the need, though a need present still keeps it out, only the needs'
+    /// groups are tracked, and junk ignores the pools that roll it and its unveil rank. Its costs are close lower
     /// bounds on this lens's, and its states far fewer. Also how this lens's states look
     /// through it.
     pub fn relaxed(&self) -> (Lens<'g>, Relaxation) {
@@ -209,10 +209,9 @@ impl<'g> Lens<'g> {
             .filter_map(|(i, t)| Some((*game.metamods.get(i)?, game.tag_id(t)?)))
             .filter(|(m, _)| forced.contains(m))
             .collect();
+        // Tags read off the mods an item holds (tagged removals, bans) keep those mods apart; a
+        // tagged draw only weighs each mod by its own tags.
         let mut read: BTreeSet<TagId> = BTreeSet::new();
-        // Tagged draws need their tag's mods apart: a mod present blocks its group, and the
-        // average-group estimate cannot see which part of a mixed class the group held.
-        read.extend(picks.iter().filter_map(|p| p.tag.map(|t| t.0)));
         read.extend(filters.iter().filter_map(|f| f.map(|t| t.0)));
         read.extend(bans.iter().map(|b| b.1));
         let read_tags: Vec<TagId> = read.into_iter().collect();
@@ -263,12 +262,6 @@ impl<'g> Lens<'g> {
         let tracked = |m: ModId| -> Vec<GroupId> { game.def(m).groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect() };
 
         let mut keys: BTreeMap<Key, Vec<ModId>> = BTreeMap::new();
-        let rolled_by = |m: ModId, w: f64| {
-            pools.iter().enumerate().fold(0u32, |bits, (i, (p, tag))| {
-                let passes = tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want);
-                if passes && pool_weight(game.def(m), m, w, p) > 0.0 { bits | 1 << i } else { bits }
-            })
-        };
         for &(m, w) in &rolls {
             let def = game.def(m);
             // All tracked groups, not just the first: a hybrid's conflicts are not its parts'.
@@ -276,12 +269,16 @@ impl<'g> Lens<'g> {
             // Fossil and veiled mods differ from natural ones only in their weights.
             let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
             let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
-            // Untracked mods split by the pools that can roll them: a mod a pool cannot roll (a
-            // fracture, an earlier fossil's) must not count as one of that pool's draws.
+            // Junk splits by the pools that can roll it: a mod a pool cannot roll (an earlier
+            // fossil's) must not count as one of that pool's draws. Draw tags only weigh it.
             // The relaxation merges junk the pools roll differently and its unveil ranks.
-            let junk = relaxed && group.is_empty();
-            let rolled_by = if !group.is_empty() || junk { 0 } else { rolled_by(m, w) };
-            let rank = if junk { 0 } else { rank };
+            let junk = group.is_empty();
+            let rolled_by = if junk && !relaxed {
+                pools.iter().enumerate().filter(|(_, p)| pool_weight(def, m, w, &p.0) > 0.0).fold(0u32, |b, (i, _)| b | 1 << i)
+            } else {
+                0
+            };
+            let rank = if relaxed && junk { 0 } else { rank };
             keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by, blocker(m))).or_default().push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
@@ -341,24 +338,24 @@ impl<'g> Lens<'g> {
             }
         }
         let weight_of: HashMap<ModId, f64> = rolls.iter().copied().collect();
+        let in_pool = |m: ModId, w: f64, (p, tag): &(Pool, TagFilter)| {
+            if tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want) { pool_weight(game.def(m), m, w, p) } else { 0.0 }
+        };
         let class_weights = |f: &dyn Fn(ModId, f64) -> f64| -> Vec<Weights> {
             members
                 .iter()
                 .map(|ms| {
-                    let mut groups: BTreeMap<Option<GroupId>, f64> = BTreeMap::new();
+                    let mut groups: BTreeMap<Option<GroupId>, (f64, f64)> = BTreeMap::new();
                     for m in ms {
-                        *groups.entry(game.def(*m).groups.first().copied()).or_default() += weight_of.get(m).map_or(0.0, |w| f(*m, *w));
+                        let (h, w) = weight_of.get(m).map_or((0.0, 0.0), |&w| (w, f(*m, w)));
+                        let g = groups.entry(game.def(*m).groups.first().copied()).or_default();
+                        (g.0, g.1) = (g.0 + h, g.1 + w);
                     }
-                    remaining(&groups.into_values().filter(|w| *w > 0.0).collect::<Vec<_>>())
+                    remaining(&groups.into_values().filter(|g| g.0 > 0.0 || g.1 > 0.0).collect::<Vec<_>>())
                 })
                 .collect()
         };
-        let pools = pools.into_iter().map(|(p, tag)| {
-            let passes = |m: ModId| tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want);
-            let w = class_weights(&|m, w| if passes(m) { pool_weight(game.def(m), m, w, &p) } else { 0.0 });
-            ((p, tag), w)
-        });
-        let pools = pools.collect();
+        let pools: Vec<_> = pools.iter().map(|p| (p.clone(), class_weights(&|m, w| in_pool(m, w, p)))).collect();
         let unveil = class_weights(&|m, w| unveil_weight(game, game.def(m), m, w));
         // Two rolled mods of an untracked class share a group with chance sum(w_g^2) / (sum w)^2.
         let collide = members
@@ -1047,20 +1044,22 @@ impl View for StateView<'_> {
 /// A class's weight in one pool while the item holds 0, 1, 2 or 3 of its mods.
 type Weights = [f64; 4];
 
-/// Expected weight left after `k` draws without replacement, each picking a group in proportion
-/// to its weight, for `k` = 0..=3: skewed classes (a fossil's favourites) lose most of their
-/// weight with their first mod.
-fn remaining(groups: &[f64]) -> Weights {
-    fn go(groups: &[f64], taken: &mut Vec<usize>, k: usize) -> f64 {
-        let left: f64 = groups.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, w)| w).sum();
-        if k == 0 || left <= 0.0 {
-            return left;
+/// Per group (spawn weight, weight in a pool): expected pool weight left once the item holds `k`
+/// of the class's mods, drawn without replacement by spawn weight, for `k` = 0..=3. A tagged draw
+/// keeps its weight when the mods held are mostly untagged.
+fn remaining(groups: &[(f64, f64)]) -> Weights {
+    fn go(groups: &[(f64, f64)], taken: &mut Vec<usize>, k: usize) -> f64 {
+        let left =
+            |f: fn(&(f64, f64)) -> f64| groups.iter().enumerate().filter(|(i, _)| !taken.contains(i)).map(|(_, g)| f(g)).sum::<f64>();
+        let (held, weight) = (left(|g| g.0), left(|g| g.1));
+        if k == 0 || held <= 0.0 {
+            return weight;
         }
         let mut sum = 0.0;
         for i in 0..groups.len() {
             if !taken.contains(&i) {
                 taken.push(i);
-                sum += groups[i] / left * go(groups, taken, k - 1);
+                sum += groups[i].0 / held * go(groups, taken, k - 1);
                 taken.pop();
             }
         }

@@ -162,6 +162,8 @@ struct Graph<S> {
     tip: Vec<bool>,
     fixed: Vec<Option<Affine>>,
     ceiling: f64,
+    /// The worth of starting over under the last ceiling: at least what it is under a higher one.
+    worth: Option<f64>,
     /// Pruned under the last ceiling, back in play under a higher one.
     dropped: Vec<(usize, Edge)>,
     given_up: Vec<usize>,
@@ -178,6 +180,7 @@ impl<S> Graph<S> {
             tip: Vec::new(),
             fixed: Vec::new(),
             ceiling: 0.0,
+            worth: None,
             dropped: Vec::new(),
             given_up: Vec::new(),
             found: Default::default(),
@@ -220,7 +223,7 @@ fn solve_within<M: Model>(
         actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect()
     };
     let expand = |s: &M::State| actions_from(s, f64::NEG_INFINITY);
-    let Graph { states, index, edges, end, tip, fixed, ceiling: explored_under, dropped, given_up, found } = graph;
+    let Graph { states, index, edges, end, tip, fixed, ceiling: explored_under, worth, dropped, given_up, found } = graph;
     for s in given_up.drain(..) {
         (end[s], fixed[s]) = (false, None);
     }
@@ -389,8 +392,8 @@ fn solve_within<M: Model>(
         let mut affine: Vec<Affine> = fixed.iter().map(|f| f.unwrap_or(Affine::INFINITE)).collect();
         // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed
         // point. Or from the last round's worth, below it: any proper policy's worth is above, so
-        // the first step lands above it too.
-        let mut w = if restarts { warm.unwrap_or(1e12) } else { 0.0 };
+        // the first step lands above it too. Or from the last ceiling's, above it.
+        let mut w = if restarts { warm.or(*worth).unwrap_or(1e12) } else { 0.0 };
         let mut first = true;
         let mut solved = None;
         for _ in 0..200 {
@@ -432,7 +435,7 @@ fn solve_within<M: Model>(
         }
         stats.values += clock.elapsed().as_secs_f64();
         let Some((at_start, w)) = solved else { return Err(Error::Unreachable) };
-        warm = Some(w);
+        (warm, *worth) = (Some(w), Some(w));
         known = affine.iter().map(|f| f.at(w)).collect();
         acted = (0..n).map(|s| if choice[s] == usize::MAX { usize::MAX } else { edges[s][choice[s]].action }).collect();
         let mut reachable = vec![false; n];

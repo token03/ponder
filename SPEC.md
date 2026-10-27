@@ -58,8 +58,9 @@ These hold for the life of the project. Changing one is a deliberate decision re
 5. **The simulator is the ground truth.** Any faster model (exact enumeration, compressed states,
    cached kernels) must agree with Monte Carlo of the real-item simulator within tolerance.
 6. **Guides are the oracle.** Every human recipe in the guide suite must be expressible as a
-   plan, and ponder's best plan must cost no more than the guide's plan + 5% under the same
-   prices and assumptions. Beating a guide is fine; losing to one is a bug.
+   plan, and ponder's best plan must cost no more than the guide's plan under the same prices
+   and assumptions, within the margin of error that immutable 5 also allows. Beating a guide is
+   fine; losing to one is a bug.
 7. **Assumptions live in one place.** Every number that does not come from game data or market
    prices is a named entry in the assumptions file (§10). No magic numbers in code. Assumptions
    are part of every cache key.
@@ -211,7 +212,7 @@ part of `cargo test`.
    checks every reference against game data and prints how many recipes need each mechanic.
    A case runs once all its mechanics exist, so the suite doubles as the progress meter. An
    active case passes when the guide's recipe is expressible and ponder's best plan costs at most
-   guide + 5% (immutable 6).
+   the guide's within the margin of error (immutable 6).
 4. **Small mechanic tests** only for rules with a non-obvious contract.
 
 No timing assertions, no snapshot tests of internal structures, no tests that pin a particular

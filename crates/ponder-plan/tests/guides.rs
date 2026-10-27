@@ -1,6 +1,6 @@
 //! Guide acceptance (SPEC §8.3): for every guide whose mechanics exist, ponder's best plan costs
-//! at most the guide's recipe + 5%, and simulating the recipe on real items agrees with its
-//! exact cost. Prints a table with `-- --nocapture`.
+//! no more than the guide's recipe, and simulating either on real items agrees with its exact
+//! cost, each within the margin of error. Prints a table with `-- --nocapture`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +23,10 @@ use ponder_rules::ops::{Ctx, Operation, Supply, catalogue, parse};
 use ponder_rules::rng::Rng;
 use ponder_rules::target::Target;
 use ponder_solve::solve;
+
+/// How far an exact cost may sit from what it is checked against (SPEC immutables 5 and 6),
+/// beyond the simulation's own noise.
+const MARGIN: f64 = 0.05;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -427,16 +431,16 @@ fn guides_cost_no_less_than_ponder() {
                 active += 1;
                 report(&name, &o);
                 let f = &o.followed;
-                if f.lost > 0 || (f.mean - o.best).abs() > 4.0 * f.error + 0.05 * o.best {
+                if f.lost > 0 || (f.mean - o.best).abs() > 4.0 * f.error + MARGIN * o.best {
                     failures.push(format!(
                         "{name}: ponder's policy costs {:.1} ± {:.1} on real items vs {:.1} exact ({} lost)",
                         f.mean, f.error, o.best, f.lost
                     ));
                 }
-                if o.best > o.guide * 1.05 {
-                    failures.push(format!("{name}: ponder {:.1} > guide {:.1} + 5%", o.best, o.guide));
+                if o.best > o.guide * (1.0 + MARGIN) {
+                    failures.push(format!("{name}: ponder {:.1} > guide {:.1}", o.best, o.guide));
                 }
-                if (o.simulated.0 - o.guide).abs() > 4.0 * o.simulated.1 + 0.05 * o.guide {
+                if (o.simulated.0 - o.guide).abs() > 4.0 * o.simulated.1 + MARGIN * o.guide {
                     failures.push(format!("{name}: simulated {:.1} ± {:.1} vs exact {:.1}", o.simulated.0, o.simulated.1, o.guide));
                 }
             }
