@@ -535,7 +535,7 @@ impl<'g> Lens<'g> {
 
     /// The exact outcome distribution of `steps` on `state`.
     pub fn run(&self, ctx: &Ctx, steps: &[Step], state: &State) -> Vec<(f64, State)> {
-        let mut dist: Vec<(f64, State, u8)> = vec![(1.0, state.clone(), 0)];
+        let mut dist: Vec<(f64, State, u8)> = vec![(1.0, *state, 0)];
         let merge = |dist: Vec<(f64, State, u8)>, f: &Expand| {
             let mut next: HashMap<(State, u8), f64> = HashMap::default();
             for (p, s, total) in dist {
@@ -556,7 +556,7 @@ impl<'g> Lens<'g> {
             }
         }
         let mut out: Vec<(f64, State)> = dist.into_iter().map(|(p, s, _)| (p, s)).collect();
-        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.sort_by_key(|a| a.1);
         out.dedup_by(|a, b| {
             if a.1 != b.1 {
                 return false;
@@ -591,7 +591,7 @@ impl<'g> Lens<'g> {
                 let table = count_table(ctx, &self.class_name, s.rarity);
                 let sum: f64 = table.iter().map(|e| e.1).sum();
                 for &(count, w) in table {
-                    emit(w / sum, s.clone(), count);
+                    emit(w / sum, s, count);
                 }
             }
             Step::Force(m) => {
@@ -617,7 +617,7 @@ impl<'g> Lens<'g> {
                     return emit(1.0, s, total);
                 }
                 for (c, w) in options {
-                    let mut t = s.clone();
+                    let mut t = s;
                     let mut others = self.removable(&t, Sides::Both, *remove, true);
                     t.counts[c] += 1;
                     for o in others.iter_mut() {
@@ -632,7 +632,7 @@ impl<'g> Lens<'g> {
                     }
                     for &(o, k) in &others {
                         if k > 0 {
-                            let mut u = t.clone();
+                            let mut u = t;
                             u.counts[o] -= 1;
                             emit(w / all * k as f64 / all_others, u, total);
                         }
@@ -662,7 +662,7 @@ impl<'g> Lens<'g> {
                     return emit(1.0, s, total);
                 }
                 for c in options {
-                    let mut t = s.clone();
+                    let mut t = s;
                     t.counts[c] -= 1;
                     t.counts[c + n] += 1;
                     emit(s.counts[c] as f64 / all, t, total);
@@ -680,7 +680,7 @@ impl<'g> Lens<'g> {
                     return emit(1.0, s, total);
                 }
                 for &c in &options {
-                    let mut t = s.clone();
+                    let mut t = s;
                     t.counts[c] += 1;
                     emit(1.0 / options.len() as f64, t, total);
                 }
@@ -691,7 +691,7 @@ impl<'g> Lens<'g> {
                 self.recombine(ctx, &s, total, partner, emit);
             }
             Step::RecombineBonus => {
-                let rare = State { rarity: Rarity::Rare, ..s.clone() };
+                let rare = State { rarity: Rarity::Rare, ..s };
                 let limit = self.view(&rare).limit();
                 let v = self.view(&s);
                 let (prefixes, suffixes) = (v.count(Side::Prefix), v.count(Side::Suffix));
@@ -699,7 +699,7 @@ impl<'g> Lens<'g> {
                     return emit(1.0, s, total);
                 }
                 let bonus = ctx.assumptions.recombine_bonus;
-                emit(1.0 - bonus, s.clone(), total);
+                emit(1.0 - bonus, s, total);
                 let sides = crate::ops::bonus_sides(s.rarity, prefixes, suffixes, limit);
                 self.draw(rare, total, &Pick { sides, ..Pick::ANY }, &mut |p, t, total| emit(bonus * p, self.settled(t), total));
             }
@@ -730,7 +730,7 @@ impl<'g> Lens<'g> {
             return emit(1.0, s, total);
         }
         for &(c, k) in options {
-            let mut t = s.clone();
+            let mut t = s;
             t.counts[c] -= 1;
             emit(k as f64 / all, t, total);
         }
@@ -758,7 +758,7 @@ impl<'g> Lens<'g> {
     /// dropping any that conflicts with one kept.
     fn recombine(&self, ctx: &Ctx, s: &State, total: u8, partner: &[(f64, State)], emit: &mut dyn FnMut(f64, State, u8)) {
         let n = self.classes.len();
-        let rare = State { rarity: Rarity::Rare, ..s.clone() };
+        let rare = State { rarity: Rarity::Rare, ..*s };
         let limit = self.view(&rare).limit();
         for (q, o) in partner {
             let heirs = if (s.influences, s.eldritch) == (o.influences, o.eldritch) { vec![s] } else { vec![s, o] };
@@ -785,12 +785,7 @@ impl<'g> Lens<'g> {
                                 counts[c] = count;
                             }
                         }
-                        let t = self.settled(State {
-                            rarity: heir.rarity,
-                            influences: heir.influences,
-                            eldritch: heir.eldritch,
-                            counts,
-                        });
+                        let t = self.settled(State { rarity: heir.rarity, influences: heir.influences, eldritch: heir.eldritch, counts });
                         emit(q * p * r, t, total);
                     }
                 }
@@ -875,7 +870,7 @@ impl<'g> Lens<'g> {
             return emit(1.0, s, total);
         }
         for (c, w) in options {
-            let mut t = s.clone();
+            let mut t = s;
             t.counts[c] += 1;
             emit(w / all, t, total);
         }
@@ -967,7 +962,7 @@ impl<'g> Lens<'g> {
         let mut left: Vec<f64> = offers.iter().map(|o| o.1).collect();
         walk(self, &offers, &mut left, (1.0, None, None, 0), &mut kept);
         for (c, p) in kept {
-            let mut t = s.clone();
+            let mut t = s;
             t.counts[c] += 1;
             emit(p, t, total);
         }

@@ -307,7 +307,8 @@ fn both_locks_preserve_the_ama_tagged_reforge_setup() {
         ("ama-328-minion-life-recovery-shield", "main_2", "natural", "minion"),
     ] {
         let guide: Guide = toml::from_str(&std::fs::read_to_string(root().join(format!("fixtures/guides/{name}.toml"))).unwrap()).unwrap();
-        let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: guide.ilvl.unwrap(), influences: Influences::of(&guide.influences) };
+        let kind =
+            Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: guide.ilvl.unwrap(), influences: Influences::of(&guide.influences) };
         let class = &game.bases[kind.base.0 as usize].class;
         let mut item = Target::compile(&game, &guide.target(start).unwrap()).unwrap().witness(&game, kind).unwrap();
         let mut keep = guide.target("protected").unwrap();
@@ -329,7 +330,7 @@ fn both_locks_preserve_the_ama_tagged_reforge_setup() {
         let lens = Lens::new(&game, kind, targets.clone(), &refs, &[&item]);
         let state = lens.project(&item);
         for op in [annul.as_ref(), scour.as_ref()] {
-            assert_eq!(lens.run(&ctx, op.steps(), &state), vec![(1.0, state.clone())], "{name}: {}", op.name());
+            assert_eq!(lens.run(&ctx, op.steps(), &state), vec![(1.0, state)], "{name}: {}", op.name());
             let mut sampled = item.clone();
             run(&ctx, op.steps(), &mut sampled, &mut rng);
             assert_eq!(sampled, item, "{name}: {}", op.name());

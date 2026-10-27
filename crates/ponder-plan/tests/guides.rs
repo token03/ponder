@@ -220,7 +220,6 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         let inputs: Vec<_> = starts.iter().flat_map(|s| s.items()).collect();
         let lens = Lens::new(game, kind, vec![goal.clone()], &refs, &inputs);
         let mut craft = Craft::new(&ctx, &lens, &refs, market, starts, 0);
-        craft.relax(limit);
         println!("  {item} best: {} classes, {} operations", lens.classes(), craft.dominated.iter().filter(|d| !**d).count());
         if std::env::var("OPS").is_ok() {
             for c in 0..lens.classes() {
@@ -237,7 +236,7 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
                     .collect::<Vec<_>>()
             );
         }
-        let best = solve(&craft, &[(1.0, Node::Market)], limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
+        let best = craft.solve(limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
         println!(
             "  {item} best: {} policy states ({} items, {} continuations), {} explored, {} actions, {} outcomes, {:.3}s",
             best.states.len(),
@@ -286,7 +285,12 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
 /// best policy can reach.
 fn stats(craft: &Craft, best: &ponder_solve::Solution<Node>, lens: &Lens) {
     let tracked = (0..lens.classes()).filter(|&c| lens.is_tracked(c)).count();
-    println!("  {} classes ({tracked} tracked), {} ops ({} not dominated)", lens.classes(), craft.ops.len(), craft.dominated.iter().filter(|d| !**d).count());
+    println!(
+        "  {} classes ({tracked} tracked), {} ops ({} not dominated)",
+        lens.classes(),
+        craft.ops.len(),
+        craft.dominated.iter().filter(|d| !**d).count()
+    );
     let mut by: std::collections::BTreeMap<String, usize> = Default::default();
     for n in &best.states {
         let key = match n {
@@ -314,21 +318,36 @@ fn stats(craft: &Craft, best: &ponder_solve::Solution<Node>, lens: &Lens) {
     println!("  states the best policy visits: {}", seen.len());
     // Distinct states once each decoration is forgotten.
     let n = lens.classes();
-    let items: Vec<&ponder_rules::lens::State> = best.states.iter().filter_map(|s| if let Node::Item(s) = s { Some(s) } else { None }).collect();
-    let distinct = |f: &dyn Fn(&ponder_rules::lens::State) -> ponder_rules::lens::State| items.iter().map(|s| f(s)).collect::<std::collections::HashSet<_>>().len();
-    let plain = |s: &ponder_rules::lens::State| ponder_rules::lens::State { eldritch: None, ..s.clone() };
+    let items: Vec<&ponder_rules::lens::State> =
+        best.states.iter().filter_map(|s| if let Node::Item(s) = s { Some(s) } else { None }).collect();
+    let distinct = |f: &dyn Fn(&ponder_rules::lens::State) -> ponder_rules::lens::State| {
+        items.iter().map(|s| f(s)).collect::<std::collections::HashSet<_>>().len()
+    };
+    let plain = |s: &ponder_rules::lens::State| ponder_rules::lens::State { eldritch: None, ..*s };
     let unfractured = |s: &ponder_rules::lens::State| {
-        let mut t = s.clone();
-        for c in 0..n { t.counts[c] += t.counts[c + n]; t.counts[c + n] = 0; }
+        let mut t = *s;
+        for c in 0..n {
+            t.counts[c] += t.counts[c + n];
+            t.counts[c + n] = 0;
+        }
         t
     };
     let crafted: Vec<usize> = (0..n).filter(|&c| lens.describe(c).contains("crafted: true")).collect();
     let uncrafted = |s: &ponder_rules::lens::State| {
-        let mut t = s.clone();
-        for &c in &crafted { t.counts[c] = 0; }
+        let mut t = *s;
+        for &c in &crafted {
+            t.counts[c] = 0;
+        }
         t
     };
-    println!("  items {}; without eldritch {}; unfractured {}; uncrafted {}; all three {}", items.len(), distinct(&plain), distinct(&unfractured), distinct(&uncrafted), distinct(&|s| uncrafted(&unfractured(&plain(s)))));
+    println!(
+        "  items {}; without eldritch {}; unfractured {}; uncrafted {}; all three {}",
+        items.len(),
+        distinct(&plain),
+        distinct(&unfractured),
+        distinct(&uncrafted),
+        distinct(&|s| uncrafted(&unfractured(&plain(s))))
+    );
     // States by their decorations: fractured, crafted, unveiled and veiled mods.
     let has = |s: &ponder_rules::lens::State, word: &str| -> usize {
         (0..n).filter(|&c| lens.describe(c).contains(word)).map(|c| s.counts[c] as usize).sum()

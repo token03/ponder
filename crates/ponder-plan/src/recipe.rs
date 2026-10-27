@@ -264,7 +264,7 @@ impl<'a> Following<'a> {
     }
 
     fn outcomes_of(&self, s: &State, a: usize, hub: bool) -> Outcomes {
-        let key = (s.clone(), a, hub);
+        let key = (*s, a, hub);
         if let Some(out) = self.cache.lock().unwrap().get(&key) {
             return out.clone();
         }
@@ -325,7 +325,7 @@ impl Model for Following<'_> {
                     .iter()
                     .map(|(p, s)| {
                         let (i, j, k) = self.recipe.bought(|t| self.craft.lens.holds(t, s));
-                        (*p, Position::At(i as u8, j as u8, k, s.clone()))
+                        (*p, Position::At(i as u8, j as u8, k, *s))
                     })
                     .collect();
             }
@@ -335,8 +335,8 @@ impl Model for Following<'_> {
         let a = self.recipe.steps[i].ops[j];
         let hub = matches!(p, Position::Hub(..));
         match action {
-            1 => vec![(1.0, self.advance(i, j + 1, k, s.clone()))],
-            2 => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, s.clone()))],
+            1 => vec![(1.0, self.advance(i, j + 1, k, *s))],
+            2 => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, *s))],
             _ if self.craft.start_of(a).is_some() => vec![(1.0, Position::Restart)],
             _ if !hub && let Some(out) = self.craft.start_operation(s, a) => {
                 out.into_iter().map(|(p, t)| (p, Position::Hub(i as u8, j as u8, k, t))).collect()

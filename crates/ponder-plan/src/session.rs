@@ -7,7 +7,7 @@ use ponder_rules::lens::Lens;
 use ponder_rules::ops::recombinator::Recombinator;
 use ponder_rules::ops::{Ctx, Operation, Supply, parse};
 use ponder_rules::target::Target;
-use ponder_solve::{Solution, solve};
+use ponder_solve::Solution;
 
 use crate::craft::{Craft, Node};
 use crate::market::Market;
@@ -165,8 +165,7 @@ impl<'a> Session<'a> {
         let inputs: Vec<_> = request.starts.iter().flat_map(|s| s.items()).collect();
         let mut lens = Lens::new(game, request.kind, vec![request.goal], &refs, &inputs);
         let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
-        craft.relax(limit);
-        let solution = solve(&craft, &[(1.0, Node::Market)], limit).map_err(Error::Solve)?;
+        let solution = craft.solve(limit).map_err(Error::Solve)?;
         lens.clear_cache();
         let plan = Arc::new(Plan {
             solution,
