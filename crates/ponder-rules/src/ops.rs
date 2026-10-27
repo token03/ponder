@@ -410,7 +410,8 @@ fn unveil(ctx: &Ctx, item: &mut Item, rng: &mut Rng, prefs: &[Vec<ModId>]) {
 
 fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
     let game = ctx.game;
-    let ilvl = ((item.kind.ilvl as u16 + other.kind.ilvl as u16) / 2) as u8;
+    let (a, b) = (item.kind.ilvl as u16, other.kind.ilvl as u16);
+    let ilvl = ((a + b) / 2 + 2).min(a.max(b)) as u8;
     let mut pool: Vec<Affix> = item.affixes.drain(..).chain(other.affixes.iter().copied()).collect();
     if rng.below(2) == 1 {
         (item.kind, item.quality, item.eldritch) = (other.kind, other.quality, other.eldritch);

@@ -13,7 +13,8 @@ use ponder_plan::recipe::{Following, Position, Recipe};
 use ponder_plan::supply::{Product, Stock};
 use ponder_rules::assumptions::Assumptions;
 use ponder_rules::data::Repoe;
-use ponder_rules::game::{Game, GroupId, Influences, Kind};
+use ponder_rules::game::{Game, GroupId, Influences, Kind, ModId};
+use ponder_rules::goal::Source;
 use ponder_rules::guide::Guide;
 use ponder_rules::item::Item;
 use ponder_rules::lens::Lens;
@@ -21,7 +22,7 @@ use ponder_rules::ops::currency::Currency;
 use ponder_rules::ops::recombinator::Recombinator;
 use ponder_rules::ops::{Ctx, Operation, Supply, catalogue, parse};
 use ponder_rules::rng::Rng;
-use ponder_rules::target::Target;
+use ponder_rules::target::{Need, Target};
 use ponder_solve::solve;
 
 /// How far an exact cost may sit from what it is checked against (SPEC immutables 5 and 6),
@@ -80,6 +81,18 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         }
         index.insert(name.clone(), targets.len());
         targets.push(Target::compile(game, &goal)?);
+    }
+    // Mods sharing a group never sit together, recombined or not (poewiki, Recombinator).
+    let pool = game.pool(kind);
+    let rolls = |m: &&ModId| !matches!(game.def(**m).source, Source::Natural | Source::Influence) || pool.mods.iter().any(|(id, _)| id == *m);
+    let shares = |a: &Need, b: &Need| {
+        let (a, b): (Vec<_>, Vec<_>) = (a.ok.iter().filter(rolls).collect(), b.ok.iter().filter(rolls).collect());
+        let group = |x: &ModId, y: &ModId| x != y && game.def(*x).groups.iter().any(|g| game.def(*y).groups.contains(g));
+        !a.is_empty() && !b.is_empty() && a.iter().all(|x| b.iter().all(|y| group(x, y)))
+    };
+    let needs = &targets[0].needs;
+    if needs.iter().enumerate().any(|(i, a)| needs[i + 1..].iter().any(|b| shares(a, b))) {
+        return Err("the goal's needs share a mod group".into());
     }
 
     // The items the guide works on, in order: each is made by its own steps, the last is the goal.
@@ -181,7 +194,7 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         let actions: Vec<String> = (0..guide_craft.ops.len() + guide_craft.starts.len()).map(|i| guide_craft.action_name(i)).collect();
         let start = from.map(|_| guide_craft.ops.len() + guide_craft.starts.len() - 1);
         let recipe = Recipe::new(guide, item, &local_index, &actions, guide_craft.ops.len(), start)?;
-        if last && std::env::var("TRACE").is_ok() {
+        if std::env::var("TRACE").is_ok_and(|t| t == *item || (last && t == "1")) {
             trace(&recipe, &guide_craft, &local_targets);
         }
         let following = Following::new(&guide_craft, &recipe);

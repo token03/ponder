@@ -1,4 +1,5 @@
 sheet = "Ele Dmg Wand "
+scope = "Cold, fire and lightning spell damage share a mod group, which recombination also respects (poewiki); the guide's goal needs a mechanic not modelled."
 base = "Prophecy Wand"
 
 [goal]
