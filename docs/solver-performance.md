@@ -52,3 +52,11 @@ Of 44 active final-item solves, 22 take under 2 s (most under 0.5 s) and 13 take
 Solving stage by stage along the guide's own stages (each stage's real finished items, at its cost, are all the next stage can buy) was tried and dropped. It is faster on some (archmage wand 13.8 s to 2.5 s, boots 10.8 s to 5.9 s) but slower and dearer on others (Hunter belt 6.1 s to 26.1 s and +15%, fire-dot quiver +38%, physical-dot wand +29%), and two guides lost their plans. Each stage still tracks every class the operations can force, so stage graphs stay at 10-25 thousand states.
 
 The previous planner's millisecond cases were single stages of two or three requirements (131-276 states), with junk lumped into six counters and at most eight targets.
+
+## 2026-10-27: junk by pool, not by draw tag
+
+Junk (mods sharing no group with a need or a forced mod) used to split by every tag an operation's draw reads, so a tagged harvest reforge multiplied the classes: 86% of the physical-dot wand's 98,005 states were worth exactly starting over, and merging junk left 4,603. Junk now splits only by tags read off held mods (tagged removals, bans) and by the pools that can roll it; merging across pools too broke fossil rerolls (the lens property test: 0.0001 exact against 0.085 sampled). A class's remaining weight assumes the mods held were drawn by spawn weight, so a tagged draw keeps its weight when the item holds untagged junk; with tagged junk merged and draw-weighted, real items reached outcomes the lens gave no chance.
+
+Solver times (best plan only) across the suite: none above 8.3 s (Hunter belt, still 161,293 states: its junk differs by pool), wand 10.2 s to 1.0 s, archmage 13.8 s to 1.5 s, BV gloves 15.9 s to 1.2 s, es-block shield 28.4 s to under 0.1 s; the claw and both bleed axes now solve.
+
+Each higher ceiling restarted Newton at a worth of 1e12, where policy iteration evaluated policies recombining forever: components of 20-44 thousand states at 1-4 s per evaluation, and the fire-dot sceptre ran out of memory. Newton now starts from the last ceiling's worth, an upper bound. The sceptre then solved in about 32 s of solver time (3,533 against 3,505 ± 95 on real items) with the pool-merged lens; its policy is 15,000 states of recombination cycles. It and the two other recombination finals (cheap ele bow, cheap high-ES regalia) still exceed 60 s.
