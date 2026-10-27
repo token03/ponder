@@ -36,3 +36,19 @@ The fractured regalia retains 309 of 24,585 explored states. It solves in 1.209 
 An action-lazy experiment used immediate action cost as an optimistic bound and expanded the actions selected by the partial graph. It preserved the checked costs and reduced the axe intermediate from 23,541 to roughly 13,700 explored states, and from 3.4 million to roughly 695,000 outcomes. Repeated graph work outweighed those savings. Policy reuse and Bellman updates reduced that overhead but still took 1.659 seconds for the fractured axe, against approximately 0.2 seconds eagerly. The full axe was stopped after more than 80 seconds in its final solve. The experiment was removed; no search-mode switch or tuning parameters were added.
 
 Cold final-item solving remains the bottleneck. The minion wand's known 200,000-state failure and the final regalia's timeout are not resolved by retaining compact policies or memoizing completed requests.
+
+## 2026-10-27: where solve time goes
+
+Timings below are the solver alone ("best plan"), not the guide harness, which also loads game data and simulates the guide's own recipe on 500 real items.
+
+The int/chaos boots (5 requirements, 22 classes, 29 operations) explore 101,755 states and 3.95 million outcomes; the best policy visits 7,213. Raising the action-cost ceiling used to rebuild the graph from scratch on each of five attempts (16 s of 22 s exploring). The graph now persists across attempts and only gains the actions a higher ceiling admits: 10.3 s, same cost. Values take 3.4 s, pruning 0.9 s.
+
+Lazy expansion against a relaxed lens (LAO*) re-solved the whole graph each round: 107 rounds and 15 s for the relaxed bound on the boots, 43 s in all, while the bound still let 94% of states be expanded. Exploring everything is the default again; the relaxed bound is only the fallback when a craft exceeds the state limit (the dex-resist ring, the BV gloves, the minion wand need it).
+
+Recombination is allowed from any item, not only right after a purchase: the purchase-only restriction cost 30-40% on the double-dot quiver, the redeemer ring and the physical weapon, confirmed on real items.
+
+Of 44 active final-item solves, 22 take under 2 s (most under 0.5 s) and 13 take 2-28 s. The state count is mostly the goal itself: each requirement brings its serving class and its blocking lower tiers, plus the bench crafts and metamods the operations force.
+
+Solving stage by stage along the guide's own stages (each stage's real finished items, at its cost, are all the next stage can buy) was tried and dropped. It is faster on some (archmage wand 13.8 s to 2.5 s, boots 10.8 s to 5.9 s) but slower and dearer on others (Hunter belt 6.1 s to 26.1 s and +15%, fire-dot quiver +38%, physical-dot wand +29%), and two guides lost their plans. Each stage still tracks every class the operations can force, so stage graphs stay at 10-25 thousand states.
+
+The previous planner's millisecond cases were single stages of two or three requirements (131-276 states), with junk lumped into six counters and at most eight targets.
