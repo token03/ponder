@@ -10,6 +10,9 @@
 //! model marks restart states, worth whatever the start is worth: `w`. For a fixed policy the
 //! start's cost is affine in `w`, `a + b w` with `b` the chance of restarting, so Newton steps
 //! `w = a / (1 - b)` find the fixed point in a few solves of the same acyclic structure.
+//!
+//! Actions a model defers (wide ones that seldom pay) join a state only once the best policy
+//! reaches it, and the graph is solved again until the policy reaches no state missing any.
 
 use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hash;
@@ -40,6 +43,11 @@ pub trait Model: Sync {
     }
     /// Usable actions with their costs; ids are the model's own.
     fn actions(&self, s: &Self::State) -> Vec<(usize, f64)>;
+    /// An action worth exploring only where the best policy goes (one with many outcomes that
+    /// rarely pays): the solver adds it to a state once the best policy reaches that state.
+    fn defers(&self, _: &Self::State, _action: usize) -> bool {
+        false
+    }
     fn outcomes(&self, s: &Self::State, action: usize) -> Vec<(f64, Self::State)>;
 }
 
@@ -73,6 +81,8 @@ pub struct Stats {
     /// Rounds of expansion, and states expanded on reaching them (see [`Model::bound`]).
     pub rounds: usize,
     pub expanded: usize,
+    /// States given their deferred actions (see [`Model::defers`]).
+    pub completed: usize,
     /// Per action id, how many states it was first to reach: where the state space comes from.
     pub found: std::collections::BTreeMap<usize, usize>,
 }
@@ -161,6 +171,8 @@ struct Graph<S> {
     end: Vec<bool>,
     tip: Vec<bool>,
     fixed: Vec<Option<Affine>>,
+    /// Has its deferred actions too.
+    complete: Vec<bool>,
     ceiling: f64,
     /// The worth of starting over under the last ceiling: at least what it is under a higher one.
     worth: Option<f64>,
@@ -179,6 +191,7 @@ impl<S> Graph<S> {
             end: Vec::new(),
             tip: Vec::new(),
             fixed: Vec::new(),
+            complete: Vec::new(),
             ceiling: 0.0,
             worth: None,
             dropped: Vec::new(),
@@ -216,14 +229,15 @@ fn solve_within<M: Model>(
     stats: &mut Stats,
 ) -> Result<(Solution<M::State>, f64), Error> {
     stats.attempts += 1;
-    // Actions in [`from`, `ceiling`): a state's own, or those a higher ceiling adds.
-    let actions_from = |s: &M::State, from: f64| -> Expansion<M::State> {
+    // Actions in [`from`, `ceiling`): a state's own, or those a higher ceiling adds; deferred ones
+    // only, all of them, or all but those.
+    let actions_from = |s: &M::State, from: f64, deferred: Option<bool>| -> Expansion<M::State> {
         let mut actions = model.actions(s);
-        actions.retain(|a| a.1 >= from && a.1 < ceiling);
+        actions.retain(|a| a.1 >= from && a.1 < ceiling && deferred.is_none_or(|d| model.defers(s, a.0) == d));
         actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect()
     };
-    let expand = |s: &M::State| actions_from(s, f64::NEG_INFINITY);
-    let Graph { states, index, edges, end, tip, fixed, ceiling: explored_under, worth, dropped, given_up, found } = graph;
+    let expand = |s: &M::State| actions_from(s, f64::NEG_INFINITY, Some(false));
+    let Graph { states, index, edges, end, tip, fixed, complete, ceiling: explored_under, worth, dropped, given_up, found } = graph;
     for s in given_up.drain(..) {
         (end[s], fixed[s]) = (false, None);
     }
@@ -254,7 +268,8 @@ fn solve_within<M: Model>(
     // Under a higher ceiling, the actions it adds to the states already expanded.
     if let Some(from) = raise {
         let open: Vec<usize> = (0..edges.len()).filter(|&s| !end[s]).collect();
-        let more: Vec<(usize, Expansion<M::State>)> = open.par_iter().map(|&s| (s, actions_from(&states[s], from))).collect();
+        let more: Vec<(usize, Expansion<M::State>)> =
+            open.par_iter().map(|&s| (s, actions_from(&states[s], from, (!complete[s]).then_some(false)))).collect();
         for (s, out) in more {
             let new = link(out, states, index)?;
             edges[s].extend(new);
@@ -300,6 +315,7 @@ fn solve_within<M: Model>(
                     Entry::New(out) => (None, false, link(out, states, index)?),
                 };
                 end.push(value.is_some());
+                complete.push(false);
                 tip.push(unexpanded);
                 fixed.push(value);
                 edges.push(out);
@@ -462,6 +478,25 @@ fn solve_within<M: Model>(
             reached = tips.par_iter().map(|&s| (s, expand(&states[s]))).collect();
             stats.expanded += reached.len();
             stats.explore += clock.elapsed().as_secs_f64();
+            continue;
+        }
+        // The best policy's states get their deferred actions; solve again if any had some.
+        let pending: Vec<usize> = (0..n).filter(|&s| reachable[s] && !end[s] && !complete[s]).collect();
+        let clock = std::time::Instant::now();
+        let more: Vec<(usize, Expansion<M::State>)> =
+            pending.par_iter().map(|&s| (s, actions_from(&states[s], f64::NEG_INFINITY, Some(true)))).collect();
+        let mut added = false;
+        for (s, out) in more {
+            complete[s] = true;
+            if !out.is_empty() {
+                let new = link(out, states, index)?;
+                edges[s].extend(new);
+                added = true;
+            }
+        }
+        stats.completed += pending.len();
+        stats.explore += clock.elapsed().as_secs_f64();
+        if added {
             continue;
         }
         stats.outcomes += outcomes;

@@ -173,8 +173,10 @@ states it can never finish restart instead, as a crafter abandons a bricked item
 Newton steps on the start's affine value, so buying fresh does not merge every state into one
 component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
 item after its reset, so their thousands of outcomes are stored once per hub rather than once
-per item. Any focused search (iLAO\* and friends) is a later swap behind the same
-`Model` trait, adopted only if it wins on the full workload.
+per item. Recombining an item that holds junk is deferred: it joins a state only once the best
+policy reaches that state, and the graph is solved again until no state the policy reaches lacks
+it. Any wider focused search (iLAO\* and friends) is a later swap behind the same `Model` trait,
+adopted only if it wins on the full workload.
 
 **Simulator.** Runs a plan (ponder's policy or a guide recipe) on real items for validation and
 recipe rendering.

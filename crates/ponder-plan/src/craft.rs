@@ -330,6 +330,13 @@ impl Model for Craft<'_> {
         }
     }
 
+    /// Recombining has hundreds of outcomes. An item holding only what the goal needs is worth
+    /// recombining anywhere; one also holding junk only where the best policy takes it.
+    fn defers(&self, n: &Node, i: usize) -> bool {
+        matches!(n, Node::Item(s) if !self.lens.clean(s))
+            && self.ops.get(i).is_some_and(|op| op.0.steps().iter().any(|s| matches!(s, Step::Recombine(_))))
+    }
+
     fn outcomes(&self, n: &Node, i: usize) -> Vec<(f64, Node)> {
         if i == self.restart() {
             return vec![(1.0, Node::Restart)];

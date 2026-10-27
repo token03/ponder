@@ -484,6 +484,12 @@ impl<'g> Lens<'g> {
         StateView { lens: self, state, counts, crafted, fractured }
     }
 
+    /// Does the item hold nothing but what some need asks for?
+    pub fn clean(&self, state: &State) -> bool {
+        let n = self.classes.len();
+        (0..n).all(|c| self.classes[c].serves != 0 || state.counts[c] + state.counts[c + n] == 0)
+    }
+
     /// Does target `t` (in construction order) hold?
     pub fn holds(&self, t: usize, state: &State) -> bool {
         let predicate = &self.targets[t];
