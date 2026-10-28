@@ -9,19 +9,19 @@ reference recipes.
 
 ## Current position
 
-- The complete T2-default cohort before the component-layout change has 41 passing guides, 24 inactive and one bow
-  state-budget failure. Thirty passing final-item solves are under one second,
-  13 under 100ms and eight under 50ms. All use the usual 200,000-state, 8 GB
+- The merged T2-default cohort has 42 passing guides, 24 inactive and no failed
+  guides. Thirty-five final-item solves are under one second, 16 under 100ms and
+  twelve under 50ms. All use the usual 200,000-state, 8 GB
   address-space, 120-second and four-worker limits. These are single observations,
   including borderline timings, not established latency guarantees.
 - Requiring the bow's unveiled suffix invalidates the previous cheap bench finish.
-  The full bow now hits the state cap after 51.7s; the supplied-fracture bow solves
-  in 2.58s. Sceptre and recombined regalia take 10.14s and 17.67s. Recombined bleed
-  axe is 0.63s; the corrected essence axe is 2.67s.
+  The full bow now passes within the state cap in 9.12s; the supplied-fracture bow
+  solves in 0.75s. Sceptre and recombined regalia take 2.60s and 2.69s. Recombined
+  bleed axe is 0.40s; the corrected essence axe is 1.79s.
 - Common cluster-notable candidates mined from the cached ladder solve in
   milliseconds. Candidate mining already exists in the older implementation;
   its connection to the new planner is not yet a production feature.
-- Unrestricted optimization spends considerable work on alternative and recovery
+- Earlier unrestricted optimization spent considerable work on alternative and recovery
   policies that do not belong in a short main recipe. Local repairs remain
   valuable. Detailed recovery can be requested for the actual item instead.
 - The newer planner returns a policy, not a complete human-readable guide.
@@ -29,9 +29,53 @@ reference recipes.
 - The all-guides-under-one-second target is incomplete. Goal fidelity and shared
   mechanic errors must be audited before attributing large cost wins to planning.
 
+## Merged branch validation
+
+The local rule/goal corrections and contiguous component layout were committed
+as `cce1d63`, then merged with remote commits `c661042` and `7bac599` in `cbaf976`.
+The remote changes add phased fracture/Eldritch policies and settled deferred-action
+checks. These policy restrictions can change cost; the combined speedup must not
+be attributed solely to Rust data layout or an unchanged optimization problem.
+
+The full release workspace builds. Forty ordinary test executables pass after
+correcting one stale assertion: a tagged reforge guarantees a modifier family,
+not T2 quality. The regression now separately checks preservation of protected
+affixes, the guaranteed family and the existence of a finished-quality outcome;
+production goals were not loosened. The resulting ordinary suite has 326 passing
+tests and one ignored throughput test. Workspace doctests pass. All 19 supported
+AMA reference recipes pass their exact-versus-concrete sampling checks. Strict
+release Clippy and formatting checks pass for the four new crates.
+
+The complete guide rerun has 42 passing active guides and 24 inactive, with no
+state limits, deadlines or failed checks. Compilation and other tests were kept
+outside benchmark runs. Current holdouts are:
+
+| Guide | Final solver time | Explored states | Model cost |
+|---|---:|---:|---:|
+| Full elemental bow | 9.116s | 116,135 | 2,373.4c |
+| Full ES regalia | 2.695s | 47,996 | 1,387.1c |
+| Fire-DoT / spell-crit sceptre | 2.602s | 60,909 | 5,116.3c |
+| Essence bleed axe | 1.786s | 76,212 | 13,567.9c |
+| Block/fire/reduced-crit shield | 1.428s | 37,948 | 13,460.2c |
+| +2 minion/reservation helmet | 1.120s | 51,437 | 5,259.7c |
+| Life/int/chaos boots | 1.034s | 51,438 | 4,428.8c |
+
+The supplied-fracture bow is 0.752s, the supplied-fracture ES chest 0.258s and
+the recombined bleed axe 0.396s. These are single samples, not latency guarantees.
+Compared with the pre-phase T2 goals, sceptre cost rises about 0.84%, full ES
+regalia about 3.45% and the Overlord cluster about 4.58%. These are real effects
+of restricting policy choices, distinct from the cost-preserving layout change.
+
+Artifacts are `.cache/benchmarks/merged-workspace-build-20261027`,
+`merged-workspace-tests-20261027`, `merged-lens-regression-20261027`,
+`merged-workspace-doctests-20261027`, `merged-ama-recipes-20261027`,
+`merged-clippy-20261027` and `merged-guide-cohort-20261027` under the same cache
+directory. The original failed regression log is retained alongside its passing
+rerun. Subsequent sections retain earlier measurements as historical context.
+
 ## Code-level performance audit
 
-The 2026-10-27 code audit measured the current T2 targets using temporary Rust
+The 2026-10-27 code audit measured the T2 targets before the phase-rule merge using temporary Rust
 timers/counters. Sampling with samply was blocked by `perf_event_paranoid = 2`;
 no system setting was changed. Temporary instrumentation was removed afterward.
 Profiles are in `.cache/benchmarks/solver-code-profile-20261027`. Four workers,
@@ -40,6 +84,8 @@ in force. The times below are instrumented single observations, not estimates
 of instruction-level CPU utilization or stable latency distributions.
 
 ### What the bow failure actually means
+
+This is the earlier failure trace. The bow passes in the merged validation above.
 
 The reference bow recipe itself solves in about 6ms with 821 states, at a model
 cost of 5,260.5c. Its concrete simulation also passes. The optimizer's error does
