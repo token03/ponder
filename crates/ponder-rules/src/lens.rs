@@ -24,7 +24,7 @@ use crate::item::Item;
 use crate::ops::{
     Ctx, Operation, Pick, Pool, Sides, Step, SupplyRef, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
 };
-use crate::target::{Target, matches};
+use crate::target::{Need, Target, matches};
 
 mod side;
 mod transitions;
@@ -591,6 +591,27 @@ impl<'g> Lens<'g> {
             let (class, fractured) = affixes[i];
             self.classes[class].serves >> (offset + need) & 1 == 1 && (!target.needs[need].fractured || fractured)
         })
+    }
+
+    /// How many of target `t`'s needs the item does not hold.
+    pub fn missing_needs(&self, t: usize, state: &State) -> usize {
+        let n = self.classes.len();
+        let TargetLens { target, offset, .. } = &self.targets[t];
+        let held = |(i, need): &(usize, &Need)| {
+            let bit = 1u128 << (offset + i);
+            let have: usize =
+                (0..n).filter(|&c| self.classes[c].serves & bit != 0).map(|c| (state.counts[c] + state.counts[c + n]) as usize).sum();
+            have >= need.count as usize
+        };
+        target.needs.iter().enumerate().filter(|n| !held(n)).count()
+    }
+
+    /// Whether some fractured mod on the item serves none of target `t`'s needs.
+    pub fn fractured_spare(&self, t: usize, state: &State) -> bool {
+        let n = self.classes.len();
+        let TargetLens { target, offset, .. } = &self.targets[t];
+        let needed = ((1u128 << target.needs.len()) - 1) << offset;
+        (0..n).any(|c| state.counts[c + n] > 0 && self.classes[c].serves & needed == 0)
     }
 
     pub fn viable(&self, t: usize, state: &State) -> bool {

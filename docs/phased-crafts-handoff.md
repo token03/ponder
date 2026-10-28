@@ -13,6 +13,57 @@ one used for research.md (sceptre 18.4 s here against 10.3 s there), so compare
 ratios, not absolute seconds. The experiment switches were temporary patches and
 are not on the branch.
 
+## Implemented (2026-10-28)
+
+Three changes are now on the branch:
+
+- **Fracture rule** (`Phase::Fracture` in `crates/ponder-plan/src/craft.rs`): a
+  fracture that locks a mod serving no need ends the attempt. The model maps
+  that outcome to `Restart`, and `Craft::follow` does the same on real items.
+- **Eldritch rule** (`Phase::Eldritch`, `Phase::Restarts`): an Eldritch
+  implicit is applied only with at most one need missing. An item that carries
+  one takes no rerolls, rarity changes, recombination, new influences or
+  fractures, so the craft is no longer mirrored with the implicit.
+- **Settled recombination checks** (`ponder-solve`, exact): between admission
+  rounds, a state whose deferred actions stayed further above its value than
+  any value has since fallen is not checked again. Recombination tables are
+  prepared only for the states still checked, and the first pass's expectations
+  are reused. Costs are unchanged to the last digit.
+
+The bench-craft gate measured below was **not** shipped. With metamods free it
+cost +11.5% on the recombined bleed axe and +7% on the chaos claw, saved
+nothing on the regalia, and saved only about 10% on the sceptre. Deferring
+bench crafts instead of banning them restores the exact costs but also all of
+the time.
+
+Full cohort, final-item solver time on this 4-vCPU Xeon at 2.1 GHz. All 44
+active guides pass, and the 22 inactive guides are unchanged.
+
+| Guide | Before (s) | After (s) | Cost change |
+|---|---:|---:|---:|
+| cheap-high-es-regalia | 15.39 | 2.44 | +1.8% |
+| ama-327-fire-dot-spell-crit-sceptre | 16.99 | 6.29 | +2.8% |
+| cheap-ele-bow | 24.45 | 11.28 | 0 |
+| chaos-dmg-claw | 2.25 | 0.85 | 0 |
+| int-chaos-armour-boots | 2.46 | 1.69 | +1.3% |
+| plus-two-minion-reservation-helmet | 2.34 | 1.68 | 0 |
+| one-hand-bleed-axe | 1.76 | 1.39 | 0 |
+| minion-plus-two-wand | 1.27 | 0.48 | +0.0% |
+| ama-326-overlord-staff-cluster | 0.006 | 0.006 | **+4.6%** |
+
+Other cost changes are under 3%: physical weapon +2.8%, regen helmet +1.4%,
+pact weapon +0.7%, dex/resist ring +0.2%. The overlord cluster is the one
+excess: after fracturing an unneeded notable, carrying on is sometimes cheaper
+than starting over.
+
+Still over one second here: bow 11.3 s, sceptre 6.3 s, regalia 2.4 s, then
+five guides at 1.1–1.7 s. In all three slow crafts, what is left is
+recombination. It is the bow's main strategy (6.6 recombinations per run,
+10.9 M outcome rows over 111 k states). In the sceptre and regalia it is
+checked at every state and forces 5–10 whole-graph re-solves. Regalia split:
+exploring 0.34 s, values 0.78 s, recombination checks 1.03 s (mostly the first
+two rounds, where all 35 k states are still open).
+
 ## Summary
 
 - Each of these crafts explores 89–139 thousand states, but its optimal policy

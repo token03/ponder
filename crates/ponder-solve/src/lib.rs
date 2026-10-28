@@ -114,6 +114,8 @@ pub struct Stats {
     pub prepared: usize,
     pub streamed_outcomes: usize,
     pub violated: usize,
+    /// States whose deferred actions were not checked again: no value fell far enough since.
+    pub settled: usize,
     pub separation: f64,
     pub discovered: usize,
     /// Rounds of expansion, and states expanded on reaching them (see [`Model::bound`]).
@@ -220,6 +222,9 @@ fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, k
     }
 }
 
+/// A state's deferred actions with their prepared expected worth, if any.
+type Futures = Vec<(usize, Option<f64>)>;
+
 /// The actions of a state with their costs and outcomes.
 type Expansion<S> = Vec<(usize, f64, Transitions<S>)>;
 
@@ -256,6 +261,7 @@ struct Checks {
     prepared: usize,
     outcomes: usize,
     violated: usize,
+    settled: usize,
 }
 
 fn expand_deferred<M: Model>(model: &M, state: &M::State, edges: &[Edge]) -> Expansion<M::State> {
@@ -410,6 +416,9 @@ fn solve_within<M: Model>(
     // Values at the last solve, extended over states found since.
     let mut known: Vec<f64> = Vec::new();
     let mut seed: Vec<Affine> = Vec::new();
+    // Values at the last check of deferred actions, and per state how far its deferred actions'
+    // worth stayed above its value then (see `settled` below).
+    let mut slack: Option<(Vec<f64>, Vec<f64>)> = None;
     'search: loop {
         stats.rounds += 1;
         let clock = std::time::Instant::now();
@@ -660,19 +669,40 @@ fn solve_within<M: Model>(
             let inspect = |s: usize| w < ceiling || reachable[s];
             let finite = known.iter().all(|v| v.is_finite() && *v >= 0.0);
             let lookup = |t: &M::State| index.get(t).map_or_else(|| model.bound(t).filter(|v| v.is_finite()).unwrap_or(0.0), |&t| known[t]);
-            let evaluate = finite.then(|| model.prepare_expectations(states, &lookup));
+            let tolerance = |v: f64| 1e-10 * v.abs().max(1.0);
+            // A deferred action's worth falls at most as far as any value has since the last
+            // check. A state whose deferred actions all stayed further above its value than
+            // that cannot have a violated one now, and is not checked again.
+            let fallen = slack.as_ref().map(|(then, _)| then.iter().zip(&known).map(|(a, b)| a - b).fold(0.0, f64::max));
+            let room_now = |s: usize| match (&slack, fallen) {
+                (Some((then, room)), Some(fallen)) if s < room.len() => room[s] - fallen - (known[s] - then[s]),
+                _ => f64::NEG_INFINITY,
+            };
+            let settled = |s: usize| room_now(s) > tolerance(known[s]);
+            let open: Vec<usize> = (0..n).into_par_iter().filter(|&s| !end[s] && inspect(s) && !settled(s)).collect();
+            let unsettled: Vec<M::State> = open.iter().map(|&s| states[s].clone()).collect();
+            let evaluate = finite.then(|| model.prepare_expectations(&unsettled, &lookup));
+            // The prepared worth of each unsettled state's deferred actions, at these values.
+            let futures: Vec<(usize, Futures)> = match &evaluate {
+                Some(evaluate) => open
+                    .par_iter()
+                    .map(|&s| {
+                        let deferred = edges[s].iter().filter(|e| matches!(e.to, Transitions::Deferred) && e.cost < known[s]);
+                        (s, deferred.map(|e| (e.action, evaluate(&states[s], e.action))).collect())
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
             let mut link_states = Vec::new();
-            if let Some(evaluate) = &evaluate {
+            if evaluate.is_some() {
                 let mut candidates = std::collections::BTreeMap::<usize, Vec<usize>>::new();
-                for s in 0..n {
-                    if end[s] || !inspect(s) {
-                        continue;
-                    }
+                for (s, worth) in &futures {
                     let mut materialize = false;
-                    for edge in edges[s].iter().filter(|e| matches!(e.to, Transitions::Deferred) && e.cost < known[s]) {
-                        match evaluate(&states[s], edge.action) {
-                            Some(future) if edge.cost + future < known[s] - 1e-10 * known[s].abs().max(1.0) => {
-                                candidates.entry(edge.action).or_default().push(s);
+                    for (action, future) in worth {
+                        let cost = edges[*s].iter().find(|e| e.action == *action).map_or(f64::INFINITY, |e| e.cost);
+                        match future {
+                            Some(future) if cost + future < known[*s] - tolerance(known[*s]) => {
+                                candidates.entry(*action).or_default().push(*s);
                                 materialize = true;
                             }
                             None => materialize = true,
@@ -680,7 +710,7 @@ fn solve_within<M: Model>(
                         }
                     }
                     if materialize {
-                        link_states.push(s);
+                        link_states.push(*s);
                     }
                 }
                 let mut updates = Vec::new();
@@ -698,28 +728,41 @@ fn solve_within<M: Model>(
                     continue;
                 }
             }
+            let mut at = vec![usize::MAX; n];
+            for (k, (s, _)) in futures.iter().enumerate() {
+                at[*s] = k;
+            }
             let lookup_index = |t: &M::State| index.get(t).copied();
             let link_states: Vec<_> = link_states.into_iter().map(|s| states[s].clone()).collect();
             let transitions = (!link_states.is_empty()).then(|| model.prepare_transitions(&link_states, &lookup_index));
-            let (mut updates, checks) = (0..n)
+            let (mut updates, checks, rooms) = (0..n)
                 .into_par_iter()
                 .fold(
-                    || (Vec::new(), Checks::default()),
-                    |(mut updates, mut checks), s| {
+                    || (Vec::new(), Checks::default(), Vec::new()),
+                    |(mut updates, mut checks, mut rooms), s| {
                         if end[s] || !inspect(s) {
-                            return (updates, checks);
+                            return (updates, checks, rooms);
+                        }
+                        if settled(s) {
+                            checks.settled += 1;
+                            rooms.push((s, room_now(s)));
+                            return (updates, checks, rooms);
                         }
                         let actions = edges[s].iter().filter(|e| matches!(e.to, Transitions::Deferred)).map(|e| (e.action, e.cost));
                         let mut selected = None;
+                        let mut room = f64::INFINITY;
                         for (action, cost) in actions {
                             checks.actions += 1;
                             if finite && cost >= known[s] {
                                 checks.bounded += 1;
+                                room = room.min(cost - known[s]);
                                 continue;
                             }
                             let mut value = cost;
                             let mut terms = 0;
-                            let nonempty = if let Some(future) = evaluate.as_ref().and_then(|evaluate| evaluate(&states[s], action)) {
+                            let cached = futures.get(at[s]).and_then(|(_, worth)| worth.iter().find(|w| w.0 == action)).map(|w| w.1);
+                            let future = cached.unwrap_or_else(|| evaluate.as_ref().and_then(|evaluate| evaluate(&states[s], action)));
+                            let nonempty = if let Some(future) = future {
                                 value += future;
                                 checks.prepared += 1;
                                 true
@@ -733,17 +776,19 @@ fn solve_within<M: Model>(
                                 terms > 0
                             };
                             checks.outcomes += terms;
-                            if !finite || (nonempty && value < known[s] - 1e-10 * known[s].abs().max(1.0)) {
+                            room = room.min(if finite && nonempty { value - known[s] } else { f64::NEG_INFINITY });
+                            if !finite || (nonempty && value < known[s] - tolerance(known[s])) {
                                 checks.violated += 1;
                                 if selected.is_none_or(|(_, _, best)| value < best) {
                                     selected = Some((action, cost, value));
                                 }
                             }
                         }
+                        rooms.push((s, room));
                         if let Some((action, cost, _)) = selected {
                             if let Some(to) = transitions.as_ref().and_then(|link| link(&states[s], action)) {
                                 updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::Known(to) }]));
-                                return (updates, checks);
+                                return (updates, checks, rooms);
                             }
                             let out = model.outcomes(&states[s], action);
                             let linked: Option<Box<[_]>> =
@@ -754,26 +799,34 @@ fn solve_within<M: Model>(
                                 updates.push(Update::Deferred(s, vec![(action, cost, Transitions::Known(out.into_boxed_slice()))]));
                             }
                         }
-                        (updates, checks)
+                        (updates, checks, rooms)
                     },
                 )
                 .reduce(
-                    || (Vec::new(), Checks::default()),
-                    |(mut left, mut a), (mut right, b)| {
+                    || (Vec::new(), Checks::default(), Vec::new()),
+                    |(mut left, mut a, mut rooms), (mut right, b, mut more)| {
                         left.append(&mut right);
+                        rooms.append(&mut more);
                         a.actions += b.actions;
                         a.bounded += b.bounded;
                         a.prepared += b.prepared;
                         a.outcomes += b.outcomes;
                         a.violated += b.violated;
-                        (left, a)
+                        a.settled += b.settled;
+                        (left, a, rooms)
                     },
                 );
+            let mut room = vec![f64::NEG_INFINITY; n];
+            for (s, r) in rooms {
+                room[s] = r;
+            }
+            slack = Some((known.clone(), room));
             stats.checked += checks.actions;
             stats.bounded += checks.bounded;
             stats.prepared += checks.prepared;
             stats.streamed_outcomes += checks.outcomes;
             stats.violated += checks.violated;
+            stats.settled += checks.settled;
             stats.separation += clock.elapsed().as_secs_f64();
             updates.sort_by_key(Update::state);
             stats.completed += updates.iter().filter(|u| matches!(u, Update::Deferred(_, _) | Update::Linked(_, _))).count();
