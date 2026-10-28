@@ -335,6 +335,9 @@ many superficially renamed recipes.
 
 ## Next work and verification
 
+The sceptre/regalia diagnosis and the phased-craft plan are in
+[the phased-crafts handoff](phased-crafts-handoff.md).
+
 1. Audit remaining rule gaps and independent examples before promoting new
    mechanics or judging profitable loopholes.
 2. Discover compact methods with priced ordinary fallbacks and worthwhile local
