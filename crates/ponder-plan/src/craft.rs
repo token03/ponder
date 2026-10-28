@@ -38,6 +38,8 @@ pub struct Craft<'a> {
     pub goal: usize,
     /// Per operation, where its shared continuation begins, if it has one.
     hubs: Vec<Option<usize>>,
+    /// Per operation, when in a craft it may be used (see [`Phase`]).
+    phases: Vec<Phase>,
     continuations: Vec<usize>,
     start_states: Vec<Vec<(f64, State)>>,
     upper_bound: f64,
@@ -96,6 +98,7 @@ impl<'a> Craft<'a> {
             })
             .collect();
         let start_states = starts.iter().map(|s| lens.project_items(s.items())).collect();
+        let phases = ops.iter().map(|(op, _)| Phase::of(op.steps())).collect();
         let finishes = ops.iter().enumerate().filter(|(_, (op, _))| op.steps().iter().all(deterministic)).map(|(i, _)| i).collect();
         let nonnegative = ops.iter().all(|(_, price)| *price >= 0.0) && starts.iter().all(|s| s.price() >= 0.0);
         let mut craft = Craft {
@@ -106,6 +109,7 @@ impl<'a> Craft<'a> {
             starts,
             goal,
             hubs,
+            phases,
             continuations,
             start_states,
             upper_bound: f64::INFINITY,
@@ -184,6 +188,11 @@ impl<'a> Craft<'a> {
     pub fn finish_operation(&self, s: &State, i: usize) -> Vec<(f64, State)> {
         let k = self.hubs[i].expect("an operation with a continuation");
         self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s)
+    }
+
+    /// A just-fractured item whose fractured mod serves no need: the craft starts over.
+    fn spare_fracture(&self, n: &Node) -> bool {
+        matches!(n, Node::Item(s) if self.lens.fractured_spare(self.goal, s))
     }
 
     fn finish_cost(&self, s: &State) -> f64 {
@@ -347,8 +356,9 @@ impl Model for Craft<'_> {
                     return vec![(self.restart(), 0.0)];
                 }
                 let view = self.lens.view(s);
+                let missing = self.lens.missing_needs(self.goal, s);
                 let ops = (0..self.ops.len())
-                    .filter(|&i| !self.dominated[i] && self.ops[i].0.applies(self.ctx, &view))
+                    .filter(|&i| !self.dominated[i] && self.phases[i].allows(s, missing) && self.ops[i].0.applies(self.ctx, &view))
                     .map(|i| (i, self.ops[i].1));
                 ops.chain([(self.restart(), 0.0)]).collect()
             }
@@ -371,6 +381,10 @@ impl Model for Craft<'_> {
             (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
             (Node::Item(s), None) => match self.start_operation(s, i) {
                 Some(out) => out.into_iter().map(|(p, t)| (p, Node::Hub(self.continuations[i], t))).collect(),
+                None if self.phases[i] == Phase::Fracture => {
+                    let out = self.outcomes_of(s, i).into_iter();
+                    self.nodes(out).into_iter().map(|(p, t)| (p, if self.spare_fracture(&t) { Node::Restart } else { t })).collect()
+                }
                 None => self.nodes(self.outcomes_of(s, i).into_iter()),
             },
             (Node::Hub(_, s), None) => self.nodes(self.finish_operation(s, i).into_iter()),
@@ -472,6 +486,47 @@ impl Model for Craft<'_> {
     }
 }
 
+/// When in a craft an operation may be used. These restrict the policy, not the rules: each
+/// rules out uses that would add a whole copy of the craft's states and rarely pay
+/// (docs/phased-crafts-handoff.md has the measurements).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Any,
+    /// An Eldritch implicit starts the finish: only with at most one need missing.
+    Eldritch,
+    /// Rerolls, rarity changes, recombination and new influences start a craft over. An item
+    /// with an Eldritch implicit is being finished and does not take them, or every state of
+    /// the craft would exist again with the implicit.
+    Restarts,
+    /// Fracturing: a fractured mod that serves no need ends the attempt.
+    Fracture,
+}
+
+impl Phase {
+    fn of(steps: &[Step]) -> Phase {
+        let has = |f: fn(&Step) -> bool| steps.iter().any(f);
+        if has(|s| matches!(s, Step::Fracture)) {
+            Phase::Fracture
+        } else if has(|s| matches!(s, Step::Eldritch(_))) {
+            Phase::Eldritch
+        } else if has(|s| {
+            matches!(s, Step::Clear { .. } | Step::Rarity(_) | Step::Settle | Step::RollCount | Step::Recombine(_) | Step::Influence(_))
+        }) {
+            Phase::Restarts
+        } else {
+            Phase::Any
+        }
+    }
+
+    fn allows(self, s: &State, missing: usize) -> bool {
+        match self {
+            Phase::Any => true,
+            Phase::Eldritch => missing <= 1,
+            Phase::Restarts | Phase::Fracture => s.eldritch.is_none(),
+        }
+    }
+}
+
 /// Where an operation's shared continuation begins.
 fn hub(steps: &[Step]) -> Option<usize> {
     let end = match steps.iter().position(|s| matches!(s, Step::Clear { .. })) {
@@ -545,6 +600,12 @@ impl Craft<'_> {
                     let (operation, price) = self.ops[op];
                     ponder_rules::ops::run(self.ctx, operation.steps(), item.as_mut().unwrap(), rng);
                     cost += price;
+                    if self.phases[op] == Phase::Fracture
+                        && item.as_ref().is_some_and(|i| self.spare_fracture(&Node::Item(self.lens.project(i))))
+                    {
+                        actions.push(self.restart());
+                        item = None;
+                    }
                 }
             }
             (cost, actions, None)
