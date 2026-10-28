@@ -5,7 +5,7 @@ ilvl = 86
 
 [goal]
 mods = [
-  { text = "#% increased maximum Energy Shield", source = "essence" },
+  { text = "#% increased maximum Energy Shield", tier = 2 },
   { text = "+# to maximum Mana", tier = 1 },
   { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
 ]

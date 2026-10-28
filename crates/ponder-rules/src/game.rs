@@ -47,6 +47,7 @@ pub struct ModDef {
 pub struct BaseDef {
     pub name: String,
     pub class: String,
+    pub unsupported_crafting: Option<String>,
     tags: Vec<TagId>,
     /// Which mods roll here: RePoE's mod domain (`item`, `misc` for jewels, `abyss_jewel`,
     /// `affliction_jewel` for clusters).
@@ -183,7 +184,17 @@ impl Game {
             }
             let tags = b.tags.iter().map(|t| game.tag(t)).collect();
             game.base_ids.insert(b.name.clone(), BaseId(game.bases.len() as u32));
-            game.bases.push(BaseDef { name: b.name.clone(), class: b.item_class.clone(), tags, domain: b.domain.clone() });
+            let unsupported_crafting = b.implicits.iter().filter_map(|id| repoe.mods.get(id)).find_map(|m| {
+                matches!(m.family.as_str(), "MaxPrefixMaxSuffixImplicit" | "MaxPrefixMaxSuffixModEffectImplicit")
+                    .then(|| format!("{}: implicit affix limits or explicit-modifier magnitudes are not supported", b.name))
+            });
+            game.bases.push(BaseDef {
+                name: b.name.clone(),
+                class: b.item_class.clone(),
+                unsupported_crafting,
+                tags,
+                domain: b.domain.clone(),
+            });
         }
         // A cluster jewel's enchant (its small passives) is fixed and decides which notables
         // roll, so each enchant is a base of its own: "Large Cluster Jewel [affliction_cold_damage]".
@@ -286,11 +297,30 @@ impl Game {
     /// Tier of a mod on this kind: 1 for the highest required level of its template.
     /// Tier 1 is the highest natural level of the mod's template on this base. Other mods
     /// (essences) rank where their level falls among the natural ones.
-    pub fn tier(&self, kind: Kind, m: ModId) -> Option<u8> {
+    pub fn tier(&self, mut kind: Kind, m: ModId) -> Option<u8> {
+        let def = self.def(m);
+        if let Some(influence) = def.influence {
+            kind.influences.0 |= 1 << influence as u8;
+        }
         let pool = self.pool(kind);
-        let list = pool.tiers.get(&self.def(m).template)?;
-        let levels: std::collections::BTreeSet<u32> = list.iter().map(|id| self.def(*id).level).collect();
-        Some(levels.iter().filter(|&&l| l > self.def(m).level).count() as u8 + 1)
+        let levels: std::collections::BTreeSet<u32> = if let Some(list) = pool.tiers.get(&def.template) {
+            list.iter().map(|id| self.def(*id).level).collect()
+        } else if def.source == Source::Essence {
+            let class = &self.bases[kind.base.0 as usize].class;
+            let mods: Vec<_> = self
+                .essences
+                .iter()
+                .filter_map(|e| self.mod_id(e.mods.get(class)?.as_deref()?))
+                .filter(|&id| self.def(id).template == def.template)
+                .collect();
+            if !mods.contains(&m) {
+                return None;
+            }
+            mods.iter().map(|&id| self.def(id).level).collect()
+        } else {
+            return None;
+        };
+        Some(levels.iter().filter(|&&l| l > def.level).count() as u8 + 1)
     }
 }
 

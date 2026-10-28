@@ -4,18 +4,18 @@ base = "Sai"
 
 [goal]
 mods = [
-  { text = "+# to Level of all Spell Skill Gems" },
-  { text = "+# to Level of all Physical Spell Skill Gems" },
-  { text = ["#% increased Cast Speed", "#% increased Spell Critical Strike Chance"] },
+  { text = "+# to Level of all Spell Skill Gems", tier = "any" },
+  { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" },
+  { text = ["#% increased Cast Speed", "#% increased Spell Critical Strike Chance"], tier = "any" },
 ]
 
 [stages.spell_gems]
 rarity = "magic"
-mods = [{ text = "+# to Level of all Spell Skill Gems" }]
+mods = [{ text = "+# to Level of all Spell Skill Gems", tier = "any" }]
 max_suffix = 0
 
 [stages.prefixes]
-mods = [{ text = "+# to Level of all Spell Skill Gems" }, { text = "+# to Level of all Physical Spell Skill Gems" }]
+mods = [{ text = "+# to Level of all Spell Skill Gems", tier = "any" }, { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" }]
 
 [[steps]]
 do = ["buy:base", "scouring", "transmutation", "alteration", "annulment"]

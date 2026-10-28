@@ -36,6 +36,45 @@ fn request(game: &Game, price: f64) -> Request {
 }
 
 #[test]
+fn unsupported_base_implicits_are_rejected_before_planning() {
+    let game = game();
+    let assumptions = Assumptions::default();
+    let market = Market { prices: HashMap::new(), chaos_per_hour: 0.0, base: 5.0 };
+    let mut session = Session::new(Ctx { game: &game, assumptions: &assumptions }, &market);
+    for base in ["Focused Amulet", "Simplex Amulet", "Cogwork Ring"] {
+        let mut request = request(&game, 5.0);
+        request.kind.base = game.base(base).unwrap();
+        assert!(matches!(session.solve(request, 200_000), Err(Error::Unsupported(_))), "{base}");
+    }
+}
+
+#[test]
+fn unrepresented_input_contexts_are_rejected_before_planning() {
+    let game = game();
+    let assumptions = Assumptions::default();
+    let market = Market { prices: HashMap::new(), chaos_per_hour: 0.0, base: 5.0 };
+    let mut session = Session::new(Ctx { game: &game, assumptions: &assumptions }, &market);
+    let mut other_goal = request(&game, 5.0);
+    other_goal.goal.base = Some(game.base("Runic Hatchet").unwrap());
+    assert!(matches!(session.solve(other_goal, 200_000), Err(Error::Unsupported(_))));
+    for donor in [false, true] {
+        let mut request = request(&game, 5.0);
+        let mut item = Item::new(request.kind);
+        item.kind.ilvl -= 1;
+        let supply = Arc::new(Stock::new("lower level", 5.0, item));
+        if donor {
+            request.methods = vec![Method::Recombine("a+b".into(), supply)];
+        } else {
+            request.starts = vec![supply];
+        }
+        assert!(matches!(session.solve(request, 200_000), Err(Error::Unsupported(_))));
+    }
+    let mut quality = request(&game, 5.0);
+    quality.goal.quality = 20;
+    assert!(matches!(session.solve(quality, 200_000), Err(Error::Unsupported(_))));
+}
+
+#[test]
 fn equal_requests_share_a_plan_and_prices_remain_exact() {
     let game = game();
     let assumptions = Assumptions::default();

@@ -23,7 +23,7 @@ max_prefix = 2
 [stages.evasion_mana]
 base = "Assassin's Garb"
 ilvl = 86
-mods = [{ text = "+# to maximum Mana", source = "natural" }, { text = "#% increased Evasion Rating" }]
+mods = [{ text = "+# to maximum Mana", source = "natural", tier = "any" }, { text = "#% increased Evasion Rating" }]
 open_prefix = 1
 
 [stages.evasion_carrier]
@@ -34,7 +34,7 @@ mods = [{ text = "Adds # to # Lightning Damage for each Shocked Enemy you've Kil
 max_suffix = 0
 
 [stages.armour_only]
-mods = [{ text = "+# to Armour", source = "natural" }]
+mods = [{ text = "+# to Armour", source = "natural", tier = "any" }]
 max_prefix = 1
 
 [stages.transferred]

@@ -2,7 +2,7 @@
 
 Reviewed 2026-10-26 against the 46 sheet recipes in [fixtures/guides](../fixtures/guides). These **19 supplemental references** replace the earlier mixed 60-entry research catalogue and now have **20 TOML equivalents** in the guide fixtures, including the Ghastly Eye fracture alternative. They cover the [3.29][ama329], [3.28][ama328], [3.27][ama327] and [3.26][ama326] AMAs, retaining ordinary crafting methods that add a distinct target, mod pool or operation sequence beyond the sheets.
 
-Each reference links to its TOML fixture and to the original answer and request. The fixtures choose representative bases and item level 86 where the answer leaves those open; unspecified tiers remain unconstrained. Historical source prices, profit claims and attempt estimates are not test inputs. Supplied fractured starting bases have an explicit zero price, so those fixtures measure subsequent crafting rather than a guessed market acquisition cost. Ordinary, abyss and cluster-jewel domains are supported by the simulator, including cluster enchant tags. The Horror ring awaits Glyphic's corrupted-essence effect. Current validation and limitations are summarized in [the research report](research.md).
+Each reference links to its TOML fixture and to the original answer and request. The fixtures choose representative bases and item level 86 where the answer leaves those open. Unspecified tiered requirements now use the user-selected T2-or-better default; numeric tiers and `tier = "any"` override it. This baseline is a product choice, not a tier claim attributed to the source. Historical source prices, profit claims and attempt estimates are not test inputs. Supplied fractured starting bases have an explicit zero price, so those fixtures measure subsequent crafting rather than a guessed market acquisition cost. Ordinary, abyss and cluster-jewel domains are supported by the simulator, including cluster enchant tags. The Horror ring awaits Glyphic's corrupted-essence effect. Current validation and limitations are summarized in [the research report](research.md).
 
 ## Conventions
 
@@ -104,7 +104,7 @@ Each reference links to its TOML fixture and to the original answer and request.
 - **Recipe:** Intelligence essence until T1 strength, exactly two filled prefixes, one open prefix and one open suffix. Hunter Exalt, aiming for increased attributes. With the successful suffix set full, Matron/lock, Veiled Chaos, block mana when possible, unveil life, then craft elemental damage with attacks.
 - **Retry:** A wrong Hunter suffix is a failed target; use another base rather than repeat the same pre-influence slam on it. Failed veils need a legal protected-prefix recovery or another attempt/base.
 - **Adds beyond the sheets:** A belt target and an influence slam directed to a suffix by occupied slots. There are no belt fixtures in the sheet set.
-- **Fixture choices:** The item image supplies no recoverable belt base or exact percentage-attributes tier. The TOML chooses Leather Belt and accepts any attributes tier; do not claim the influence slam guarantees the desired modifier.
+- **Fixture choices:** The item image supplies no recoverable belt base or exact percentage-attributes tier. The TOML chooses Leather Belt and uses the T2 default for attributes; the influence slam does not guarantee the desired modifier.
 
 ### 10. Horror frenzy-cold ring with attributes
 
@@ -165,7 +165,7 @@ Each reference links to its TOML fixture and to the original answer and request.
 - **Recipe:** Roll solo mana on one magic donor and solo DoT multiplier on another. Recombine until both survive, then obtain the rare item state and room needed to Multimod fire DoT multiplier plus spell damage.
 - **Retry:** Rebuild or recycle donors after failed combinations. A magic one-prefix/one-suffix result cannot be treated as already having rare-item crafting capacity.
 - **Adds beyond the sheets:** A budget mixed-side recombination followed by crafted completion, with a different target from the +2 spell weapons. It is the author's explicit cheaper alternative to the requested four-natural-mod weapon.
-- **Fixture choices:** The source does not specify sceptre base, mana/multiplier tiers or a rarity-conversion sequence. The TOML chooses Opal Sceptre with any tiers and explicitly pays for Regal/annul normalisation when the mixed-side product is magic.
+- **Fixture choices:** The source does not specify sceptre base, mana/multiplier tiers or a rarity-conversion sequence. The TOML chooses Opal Sceptre with the T2 default and explicitly pays for Regal/annul normalisation when the mixed-side product is magic.
 
 ### 16. Fire-DoT sceptre with three completed suffixes
 
@@ -175,7 +175,7 @@ Each reference links to its TOML fixture and to the original answer and request.
 - **Recipe:** Shrieking spell-critical essence until generic DoT multiplier for one pair. Recombine a separate spell-critical donor with isolated high fire DoT multiplier for the second pair. Combine the overlapping pairs until all three suffixes survive. Matron/lock, Veiled Chaos, block physical damage before unveiling, seek increased fire damage and craft DoT damage.
 - **Retry:** Failed suffix combinations return to the relevant donor pairs. Failed prefix unveils repeat the protected veil stage only when cleanup is legal; otherwise restart.
 - **Adds beyond the sheets:** A three-suffix recombination ladder followed by a rare prefix unveil. The budget mana sceptre instead stops at one natural prefix and one natural suffix.
-- **Fixture choices:** Base and exact suffix tiers are not recoverable from the request image. The TOML chooses Opal Sceptre with any suffix tiers; the answer does not justify a T1 predicate.
+- **Fixture choices:** Base and exact suffix tiers are not recoverable from the request image. The TOML chooses Opal Sceptre with the user-selected T2 default; the answer does not justify a T1 predicate.
 
 ### 17. Archmage spell-damage/mana wand
 

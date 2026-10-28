@@ -1,10 +1,11 @@
 sheet = "1H Bleed Axe"
 scope = "Method 1 (elder influence, essence of contempt). Tempering is not modelled."
 base = "Runic Hatchet"
-influences = ["elder"]
 
 [goal]
+influences = ["elder"]
 mods = [
+  { text = "Adds # to # Physical Damage", tier = 2 },
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
   { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
   { text = "Hits with this Weapon have Culling Strike against Bleeding Enemies / #% increased Physical Damage" },
@@ -12,20 +13,24 @@ mods = [
 ]
 
 [stages.elder]
+influences = ["elder"]
 mods = []
 
 [stages.bleed]
+influences = ["elder"]
 mods = [{ text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 }]
 open_prefix = 1
 open_suffix = 1
 
 [stages.physical]
+influences = ["elder"]
 mods = [
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
   { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
 ]
 
 [stages.culling]
+influences = ["elder"]
 mods = [
   { text = "+#% to Damage over Time Multiplier for Bleeding from Hits with this Weapon", tier = 1 },
   { text = ["#% increased Physical Damage / #% chance to Blind Enemies on hit", "#% increased Physical Damage / #% chance to Impale Enemies on Hit with Attacks", "#% increased Physical Damage / #% chance to Poison on Hit", "#% increased Physical Damage / #% chance to cause Bleeding on Hit"], source = "veiled" },
@@ -33,7 +38,7 @@ mods = [
 ]
 
 [[steps]]
-do = ["buy:base", "influence-exalted:elder"]
+do = ["buy:base", "alchemy", "influence-exalted:elder"]
 until = "elder"
 
 [[steps]]

@@ -7,7 +7,7 @@ ilvl = 86
 [goal]
 mods = [
   { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
-  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "#% increased Spell Damage", tier = 2 },
   { text = "+# to maximum Mana", tier = 3 },
   { text = "#% increased Cast Speed", tier = 3 },
   { text = "#% chance to deal Double Damage", source = "veiled" },
@@ -24,7 +24,7 @@ price = 0.0
 [stages.prefixes]
 mods = [
   { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
-  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "#% increased Spell Damage", tier = 2 },
   { text = "+# to maximum Mana", tier = 3 },
 ]
 open_suffix = 1
@@ -32,7 +32,7 @@ open_suffix = 1
 [stages.cast]
 mods = [
   { text = "#% increased Spell Damage / +# to maximum Mana", fractured = true },
-  { text = "#% increased Spell Damage", source = "essence" },
+  { text = "#% increased Spell Damage", tier = 2 },
   { text = "+# to maximum Mana", tier = 3 },
   { text = "#% increased Cast Speed", tier = 3 },
 ]

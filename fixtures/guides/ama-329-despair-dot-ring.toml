@@ -1,13 +1,13 @@
 sheet = "ama-329-despair-dot-ring"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1vc1e72/comment/p11eqmy/"
-scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. A non-influenced fractured Delve curse is supplied. Fire is the representative elemental resistance; no minimum resistance or life tier is inferred."
+scope = "The specified starting base is supplied at zero cost; this fixture measures subsequent crafting only. A non-influenced fractured Delve curse is supplied. Fire is the representative elemental resistance; life and resistance use the T2-or-better default."
 base = "Amethyst Ring"
 ilvl = 86
 
 [goal]
 mods = [
   { text = "Curse Enemies with Despair on Hit", source = "legacy", fractured = true },
-  { text = "+#% to Damage over Time Multiplier", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier", tier = 2 },
   { text = "+#% to Fire Resistance" },
   { text = "+# to maximum Life" },
   { text = "Non-Channelling Skills have -# to Total Mana Cost", source = "crafted" },
@@ -23,7 +23,7 @@ price = 0.0
 [stages.suffixes]
 mods = [
   { text = "Curse Enemies with Despair on Hit", source = "legacy", fractured = true },
-  { text = "+#% to Damage over Time Multiplier", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier", tier = 2 },
   { text = "+#% to Fire Resistance" },
 ]
 open_prefix = 1
@@ -31,7 +31,7 @@ open_prefix = 1
 [stages.life]
 mods = [
   { text = "Curse Enemies with Despair on Hit", source = "legacy", fractured = true },
-  { text = "+#% to Damage over Time Multiplier", source = "essence" },
+  { text = "+#% to Damage over Time Multiplier", tier = 2 },
   { text = "+#% to Fire Resistance" },
   { text = "+# to maximum Life" },
 ]

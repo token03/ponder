@@ -5,6 +5,7 @@ quality = 28
 
 [goal]
 mods = [
+  { text = "#% increased Mana Reservation Efficiency of Skills", tier = 2 },
   { text = "+# to Level of all Minion Skill Gems", tier = 1, fractured = true },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },

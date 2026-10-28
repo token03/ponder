@@ -4,23 +4,23 @@ quality = 27
 
 [goal]
 mods = [
-  { text = "Socketed Gems have #% more Attack and Cast Speed", source = "essence", fractured = true },
-  { text = "+# to maximum Energy Shield", source = "essence" },
+  { text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, fractured = true },
+  { text = "+# to maximum Energy Shield", tier = 2 },
   { text = "+# to Intelligence", tier = 2 },
 ]
 
 [stages.insanity_four_mods]
-mods = [{ text = "Socketed Gems have #% more Attack and Cast Speed", source = "essence" }]
+mods = [{ text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2 }]
 min_mods = 4
 max_mods = 4
 
 [stages.fractured]
-mods = [{ text = "Socketed Gems have #% more Attack and Cast Speed", source = "essence", fractured = true }]
+mods = [{ text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, fractured = true }]
 
 [stages.energy_shield]
 mods = [
-  { text = "Socketed Gems have #% more Attack and Cast Speed", source = "essence", fractured = true },
-  { text = "+# to maximum Energy Shield", source = "essence" },
+  { text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, fractured = true },
+  { text = "+# to maximum Energy Shield", tier = 2 },
 ]
 
 [[steps]]

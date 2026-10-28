@@ -86,8 +86,11 @@ fn obtainable(game: &Game, base: &str, m: ModId) -> bool {
     let base = game.base(base).unwrap();
     let class = &game.bases[base.0 as usize].class;
     let def = game.def(m);
+    if game.essences.iter().any(|e| e.mods.get(class).is_some_and(|k| k.as_deref() == Some(def.key.as_str()))) {
+        return true;
+    }
     match def.source {
-        Source::Essence => game.essences.iter().any(|e| e.mods.get(class).is_some_and(|k| k.as_deref() == Some(def.key.as_str()))),
+        Source::Essence => false,
         Source::Crafted => {
             game.bench.iter().any(|b| b.item_classes.contains(class) && b.actions.add_explicit_mod.as_deref() == Some(def.key.as_str()))
         }
@@ -158,11 +161,11 @@ fn guides_name_real_things() {
                 Ok(t) => {
                     for (need, req) in t.needs.iter().zip(&goal.mods) {
                         let known = KNOWN.iter().any(|k| k.0 == name && (k.1 == target || k.1 == "*"));
-                        if !known && !need.ok.iter().any(|m| obtainable(&game, &guide.base_name(), *m)) {
+                        if !known && !need.ok.iter().any(|m| obtainable(&game, goal.base.as_deref().unwrap(), *m)) {
                             if raw_obtainable(&repoe, guide, &goal, req) {
                                 deferred.insert(name);
                             } else {
-                                local.push(format!("{target}: {:?} cannot appear on {}", req.text, guide.base));
+                                local.push(format!("{target}: {:?} cannot appear on {}", req.text, goal.base.as_deref().unwrap()));
                             }
                         }
                     }

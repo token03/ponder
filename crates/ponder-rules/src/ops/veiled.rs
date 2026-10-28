@@ -23,7 +23,8 @@ const CHAOS: &[Step] = &[
     Step::Veil(Sides::Both),
     Step::Fill(Pick::ANY),
 ];
-const EXALTED: &[Step] = &[Step::Veil(Sides::Both)];
+const EXALTED: &[Step] =
+    &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true, respect_bans: false }, Step::Veil(Sides::Both)];
 
 impl Orb {
     pub fn parse(name: &str) -> Option<Orb> {
@@ -47,7 +48,7 @@ impl Operation for Orb {
     fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
         match self {
             Orb::Chaos => item.rarity() == Rarity::Rare,
-            Orb::Exalted => item.rarity() == Rarity::Rare && !item.veiled() && item.room(Sides::Both),
+            Orb::Exalted => item.rarity() == Rarity::Rare && !item.veiled() && item.removable(true, false) > 0,
         }
     }
 

@@ -44,6 +44,8 @@ pub struct Base {
     pub name: String,
     pub release_state: String,
     #[serde(default)]
+    pub implicits: Vec<String>,
+    #[serde(default)]
     pub tags: Vec<String>,
 }
 

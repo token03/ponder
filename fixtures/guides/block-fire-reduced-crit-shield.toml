@@ -1,14 +1,17 @@
 sheet = "BlockFireRedu Crit DmgPerBlock "
 base = "Heat-attuned Tower Shield"
 ilvl = 86
-influences = ["crusader"]
+scope = "Non-influenced donors, then a final Crusader slam. Conservative restart on failed fire/slam branches; does not encode every manual repair."
 
 [goal]
+influences = ["crusader"]
 mods = [
   { text = "#% increased Chance to Block", tier = 1 },
   { text = "#% Chance to Block Spell Damage", tier = 1 },
   { text = "You take #% reduced Extra Damage from Critical Strikes", tier = 2 },
-  { text = "+#% to Fire Resistance" },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "#% increased Damage per #% Chance to Block Attack Damage", source = "influence" },
+  { text = "+#% to Fire and Chaos Resistances", source = "crafted" },
 ]
 
 [stages.block]
@@ -30,6 +33,18 @@ mods = [
   { text = "#% Chance to Block Spell Damage", tier = 1 },
   { text = "You take #% reduced Extra Damage from Critical Strikes", tier = 2 },
 ]
+open_prefix = 1
+max_suffix = 1
+
+[stages.fire]
+mods = [
+  { text = "#% increased Chance to Block", tier = 1 },
+  { text = "#% Chance to Block Spell Damage", tier = 1 },
+  { text = "You take #% reduced Extra Damage from Critical Strikes", tier = 2 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+]
+open_prefix = 1
+open_suffix = 1
 
 [[steps]]
 item = "a"
@@ -56,10 +71,17 @@ max = 1
 else = 1
 
 [[steps]]
-do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:reforge-critical"]
+do = ["bench:remove-crafted", "bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:reforge-critical", "bench:remove-crafted"]
 until = "critical"
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "harvest:add-remove-fire", "bench:fire-and-chaos-resistance", "influence-exalted:crusader"]
+do = ["bench:prefixes-cannot-be-changed", "harvest:add-remove-fire"]
+until = "fire"
+max = 1
+else = 5
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:fire-and-chaos-resistance", "influence-exalted:crusader"]
 until = "goal"
-note = "Depending on what add/remove removes, scour back to step 4 or add/remove critical again."
+max = 1
+else = 5

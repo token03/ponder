@@ -6,7 +6,7 @@ ilvl = 86
 
 [goal]
 mods = [
-  { text = "+# to Dexterity", source = "essence" },
+  { text = "+# to Dexterity", tier = 2 },
   { text = "+#% to Fire Resistance" },
   { text = "+#% to Chaos Resistance" },
   { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
@@ -14,7 +14,7 @@ mods = [
 
 [stages.two_suffixes]
 mods = [
-  { text = "+# to Dexterity", source = "essence" },
+  { text = "+# to Dexterity", tier = 2 },
   { text = "+#% to Fire Resistance" },
 ]
 open_prefix = 1
@@ -22,7 +22,7 @@ open_suffix = 1
 
 [stages.suffixes]
 mods = [
-  { text = "+# to Dexterity", source = "essence" },
+  { text = "+# to Dexterity", tier = 2 },
   { text = "+#% to Fire Resistance" },
   { text = "+#% to Chaos Resistance" },
 ]

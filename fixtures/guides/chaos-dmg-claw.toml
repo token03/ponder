@@ -5,27 +5,27 @@ ilvl = 83
 
 [goal]
 mods = [
-  { text = "Adds # to # Chaos Damage", source = "essence" },
+  { text = "Adds # to # Chaos Damage", tier = 2 },
   { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
   { text = ["+#% to Global Critical Strike Multiplier", "#% increased Attack Speed"], tier = 2 },
   { text = ["#% increased Critical Strike Chance", "+#% to Global Critical Strike Multiplier"], source = "crafted" },
 ]
 
 [stages.chaos]
-mods = [{ text = "Adds # to # Chaos Damage", source = "essence" }]
+mods = [{ text = "Adds # to # Chaos Damage", tier = 2 }]
 open_prefix = 1
 open_suffix = 1
 
 [stages.penetration]
 mods = [
-  { text = "Adds # to # Chaos Damage", source = "essence" },
+  { text = "Adds # to # Chaos Damage", tier = 2 },
   { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
 ]
 open_suffix = 1
 
 [stages.suffix]
 mods = [
-  { text = "Adds # to # Chaos Damage", source = "essence" },
+  { text = "Adds # to # Chaos Damage", tier = 2 },
   { text = "Attacks with this Weapon Penetrate #% Chaos Resistance", source = "veiled" },
   { text = ["+#% to Global Critical Strike Multiplier", "#% increased Attack Speed"], tier = 2 },
 ]

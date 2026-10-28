@@ -19,7 +19,7 @@ max_suffix = 1
 max_prefix = 0
 
 [stages.quality_ready]
-mods = [{ text = "+# to Strength", source = "natural" }]
+mods = [{ text = "+# to Strength", source = "natural", tier = "any" }]
 max_suffix = 1
 min_mods = 4
 

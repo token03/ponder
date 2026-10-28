@@ -4,23 +4,23 @@ quality = 28
 
 [goal]
 mods = [
-  { text = "+# to Dexterity", fractured = true, source = "essence" },
+  { text = "+# to Dexterity", fractured = true, tier = 2 },
   { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+# to maximum Life", tier = 1 },
 ]
 
 [stages.dex_four_mods]
-mods = [{ text = "+# to Dexterity", source = "essence" }]
+mods = [{ text = "+# to Dexterity", tier = 2 }]
 min_mods = 4
 max_mods = 4
 
 [stages.fractured]
-mods = [{ text = "+# to Dexterity", fractured = true, source = "essence" }]
+mods = [{ text = "+# to Dexterity", fractured = true, tier = 2 }]
 
 [stages.resist]
 mods = [
-  { text = "+# to Dexterity", fractured = true, source = "essence" },
+  { text = "+# to Dexterity", fractured = true, tier = 2 },
   { text = "+#% to Chaos Resistance" },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
 ]

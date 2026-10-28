@@ -136,8 +136,12 @@ pub fn inspect<M: Model>(
             todo.extend(starts.iter().map(|r| r.1));
         }
     }
-    let mut loops = components(states.len(), |s| states[s].outcomes.iter().map(|r| r.1));
-    loops.retain(|c| states[c[0]].reachable && (c.len() > 1 || states[c[0]].outcomes.iter().any(|r| r.1 == c[0])));
+    let parts = components(states.len(), |s| states[s].outcomes.iter().map(|r| r.1));
+    let mut loops: Vec<_> = parts
+        .iter()
+        .filter(|c| states[c[0]].reachable && (c.len() > 1 || states[c[0]].outcomes.iter().any(|r| r.1 == c[0])))
+        .map(<[usize]>::to_vec)
+        .collect();
     loops.sort_by_key(|c| std::cmp::Reverse(c.len()));
     let mut report = Inspection { states, loops, runs: options.runs, finished: 0, mean_cost: 0.0, cost_stddev: 0.0, mean_steps: 0.0 };
     let mut last_run = vec![usize::MAX; report.states.len()];

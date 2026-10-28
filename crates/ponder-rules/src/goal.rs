@@ -64,7 +64,7 @@ pub struct ModReq {
     #[serde(deserialize_with = "one_or_many")]
     pub text: Vec<String>,
     /// Worst acceptable tier, 1 being the best that can roll on this base.
-    #[serde(default)]
+    #[serde(default = "default_tier", deserialize_with = "tier")]
     pub tier: Option<u8>,
     #[serde(default = "one")]
     pub count: u8,
@@ -112,6 +112,24 @@ pub struct Goal {
 
 fn one() -> u8 {
     1
+}
+
+fn default_tier() -> Option<u8> {
+    Some(2)
+}
+
+fn tier<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tier {
+        Number(u8),
+        Name(String),
+    }
+    match Tier::deserialize(d)? {
+        Tier::Number(n) if n > 0 => Ok(Some(n)),
+        Tier::Name(name) if name == "any" => Ok(None),
+        _ => Err(serde::de::Error::custom("tier must be a positive integer or \"any\"")),
+    }
 }
 
 fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {

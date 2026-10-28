@@ -28,7 +28,7 @@ const CHAOS: &[Step] =
     &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(ANY)];
 const ADD: &[Step] = &[Step::Draw(ANY)];
 const REGAL: &[Step] = &[Step::Rarity(Rarity::Rare), Step::Draw(ANY)];
-const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true }];
+const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true, respect_bans: true }];
 const SCOUR: &[Step] = &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Settle];
 const FRACTURE: &[Step] = &[Step::Fracture];
 
@@ -81,7 +81,7 @@ impl Operation for Currency {
             Currency::Regal => item.rarity() == Rarity::Magic,
             Currency::Chaos => item.rarity() == Rarity::Rare,
             Currency::Exalted => item.rarity() == Rarity::Rare && room,
-            Currency::Annulment => item.rarity() != Rarity::Normal && item.removable(true) > 0,
+            Currency::Annulment => item.rarity() != Rarity::Normal && item.removable(true, true) > 0,
             Currency::Scouring => item.rarity() != Rarity::Normal,
             // SPEC §4.5: a rare with at least four mods, not influenced, nothing fractured yet.
             Currency::Fracturing => item.rarity() == Rarity::Rare && item.mods() >= 4 && !item.influenced() && item.fractured() == 0,

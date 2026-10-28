@@ -33,7 +33,9 @@ impl Operation for Implicit {
     }
 
     fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
-        !item.influenced() && item.eldritch() != Some(side(&self.steps))
+        matches!(item.item_class(), "Body Armour" | "Boots" | "Gloves" | "Helmet")
+            && !item.influenced()
+            && item.eldritch() != Some(side(&self.steps))
     }
 
     fn steps(&self) -> &[Step] {
@@ -63,7 +65,7 @@ const PICK: Pick = Pick { sides: Sides::Eldritch, tag: None, pool: Pool::Natural
 const CHAOS: &[Step] =
     &[Step::Clear { sides: Sides::Eldritch, respect_lock: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(PICK)];
 const EXALTED: &[Step] = &[Step::Draw(PICK)];
-const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Eldritch, tag: None, respect_lock: true }];
+const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Eldritch, tag: None, respect_lock: true, respect_bans: true }];
 
 impl Orb {
     pub fn parse(name: &str) -> Option<Orb> {
@@ -88,6 +90,9 @@ impl Operation for Orb {
 
     fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
         let Some(side) = item.eldritch() else { return false };
+        if item.influenced() || !matches!(item.item_class(), "Body Armour" | "Boots" | "Gloves" | "Helmet") {
+            return false;
+        }
         let locked = item.locked()[side as usize];
         match self {
             Orb::Chaos => item.rarity() == Rarity::Rare && !locked,

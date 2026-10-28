@@ -5,9 +5,10 @@ ilvl = 86
 
 [goal]
 mods = [
+  { text = "+# to maximum Energy Shield", tier = 2 },
   { text = ["#% increased Energy Shield", "#% increased Energy Shield / #% increased Stun and Block Recovery"], tier = 2, count = 2 },
   { text = "+# to Intelligence", tier = 2 },
-  { text = "+# to all Attributes", source = "crafted" },
+  { text = "#% increased Attributes", source = "crafted" },
 ]
 
 [stages.fractured_base]
@@ -35,7 +36,7 @@ do = ["eldritch-implicit:lesser-ichor", "bench:resistance", "exalted", "eldritch
 until = "int"
 
 [[steps]]
-do = ["bench:remove-crafted", "bench:attributes"]
+do = ["bench:remove-crafted", "bench:increased-attributes"]
 until = "goal"
 max = 1
 else = 3

@@ -1,12 +1,12 @@
 sheet = "ama-326-attributes-cast-speed-es-ring"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1lgu3b7/comment/mz1o6ha/"
-scope = "The ordinary three-suffix ring route; the optional Cogwork fourth suffix is excluded. Unspecified tiers are unconstrained."
+scope = "The ordinary three-suffix ring route; the optional Cogwork fourth suffix is excluded. Unspecified tiers use the T2-or-better default."
 base = "Unset Ring"
 ilvl = 86
 
 [goal]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength" },
   { text = "#% increased Cast Speed" },
   { text = "+# to maximum Energy Shield" },
@@ -15,7 +15,7 @@ mods = [
 
 [stages.attributes]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength" },
 ]
 open_prefix = 1
@@ -23,7 +23,7 @@ open_suffix = 1
 
 [stages.suffixes]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength" },
   { text = "#% increased Cast Speed" },
 ]
@@ -31,7 +31,7 @@ open_prefix = 1
 
 [stages.clean]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength" },
   { text = "#% increased Cast Speed" },
 ]
@@ -39,7 +39,7 @@ max_prefix = 0
 
 [stages.es]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength" },
   { text = "#% increased Cast Speed" },
   { text = "+# to maximum Energy Shield" },

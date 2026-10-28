@@ -7,7 +7,7 @@ influences = ["hunter", "elder"]
 mods = [
   { text = "#% increased Movement Speed", source = "influence" },
   { text = "#% increased Area of Effect", source = "influence" },
-  { text = "+#% to Global Critical Strike Multiplier", source = "essence" },
+  { text = "+#% to Global Critical Strike Multiplier", tier = 2 },
 ]
 
 [stages.hunter_ms]
@@ -29,7 +29,7 @@ max_mods = 2
 
 [stages.astrolabe]
 base = "Astrolabe Amulet"
-mods = [{ text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+mods = [{ text = "+#% to Global Critical Strike Multiplier", tier = 2 }]
 max_prefix = 2
 min_mods = 5
 

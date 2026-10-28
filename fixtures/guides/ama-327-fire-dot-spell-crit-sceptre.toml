@@ -1,6 +1,6 @@
 sheet = "ama-327-fire-dot-spell-crit-sceptre"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnsbrm6/"
-scope = "Any natural multiplier tiers are accepted. Shrieking Scorn forces a natural spell-critical modifier, not an essence-only origin."
+scope = "Unspecified tiered requirements use the T2-or-better default. Shrieking Scorn forces a natural spell-critical modifier, not an essence-only origin."
 base = "Opal Sceptre"
 ilvl = 86
 

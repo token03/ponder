@@ -1,12 +1,12 @@
 sheet = "ama-326-torment-hunter-fire-dot-quiver"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1lgu3b7/comment/myzd2p1/"
-scope = "Any life/bow-damage tiers are accepted. Prefixes are rolled before adding Hunter influence; the final influence result is random."
+scope = "Life/bow-damage use the T2-or-better default. Prefixes are rolled before adding Hunter influence; the final influence result is random."
 base = "Vile Arrow Quiver"
 ilvl = 86
 
 [goal]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
   { text = "+# to maximum Life" },
   { text = "#% increased Damage with Bow Skills" },
@@ -16,13 +16,13 @@ mods = [
 
 [stages.pair]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
 ]
 
 [stages.isolated_5]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
 ]
 rarity = "rare"
@@ -30,7 +30,7 @@ max_mods = 5
 
 [stages.isolated_4]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
 ]
 rarity = "rare"
@@ -38,7 +38,7 @@ max_mods = 4
 
 [stages.isolated_3]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
 ]
 rarity = "rare"
@@ -46,7 +46,7 @@ max_mods = 3
 
 [stages.isolated_2]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
 ]
 rarity = "rare"
@@ -54,7 +54,7 @@ max_mods = 2
 
 [stages.prefixes]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
   { text = "+# to maximum Life" },
   { text = "#% increased Damage with Bow Skills" },
@@ -62,7 +62,7 @@ mods = [
 
 [stages.ready]
 mods = [
-  { text = "Adds # to # Lightning Damage to Attacks", source = "essence" },
+  { text = "Adds # to # Lightning Damage to Attacks", tier = 2 },
   { text = "+#% to Damage over Time Multiplier with Attack Skills" },
   { text = "+# to maximum Life" },
   { text = "#% increased Damage with Bow Skills" },

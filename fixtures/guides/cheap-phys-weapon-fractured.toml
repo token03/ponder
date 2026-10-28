@@ -5,6 +5,7 @@ ilvl = 83
 
 [goal]
 mods = [
+  { text = "Adds # to # Physical Damage", tier = 2 },
   { text = "#% increased Physical Damage", tier = 2, fractured = true },
   { text = "#% increased Physical Damage / +# to Accuracy Rating", tier = 2 },
   { text = "#% increased Attack Speed" },

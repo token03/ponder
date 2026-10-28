@@ -6,15 +6,15 @@ ilvl = 86
 mods = [
   { text = "+# to Level of all Skill Gems" },
   { text = "+# to Level of all Fire Skill Gems" },
-  { text = "+#% to Global Critical Strike Multiplier", source = "essence" },
+  { text = "+#% to Global Critical Strike Multiplier", tier = 2 },
 ]
 
 [stages.multiplier]
-mods = [{ text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+mods = [{ text = "+#% to Global Critical Strike Multiplier", tier = 2 }]
 max_mods = 1
 
 [stages.fire_gems]
-mods = [{ text = "+# to Level of all Fire Skill Gems" }, { text = "+#% to Global Critical Strike Multiplier", source = "essence" }]
+mods = [{ text = "+# to Level of all Fire Skill Gems" }, { text = "+#% to Global Critical Strike Multiplier", tier = 2 }]
 
 [stages.donor]
 base = "Onyx Amulet"

@@ -77,7 +77,8 @@ const NAMES: [(&str, &[&str]); 31] = [
 ];
 
 /// More bench names that need no table: one template each.
-const MORE: [(&str, &str); 12] = [
+const MORE: [(&str, &str); 13] = [
+    ("increased-attributes", "#% increased Attributes"),
     ("spell-damage", "#% increased Spell Damage"),
     ("mana", "+# to maximum Mana"),
     ("mana-cost-non-channelling", "Non-Channelling Skills have -# to Total Mana Cost"),

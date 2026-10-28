@@ -68,6 +68,9 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
     let assumptions = Assumptions::default();
     let ctx = Ctx { game, assumptions: &assumptions };
     let base = game.base(&guide.base_name()).ok_or("unknown base")?;
+    if let Some(why) = &game.bases[base.0 as usize].unsupported_crafting {
+        return Err(why.clone().into());
+    }
     let kind = Kind { base, ilvl: guide.ilvl.unwrap_or(100), influences: Influences::of(&guide.influences) };
     let class = game.bases[base.0 as usize].class.clone();
 

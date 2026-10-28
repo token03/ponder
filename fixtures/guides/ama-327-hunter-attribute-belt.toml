@@ -6,7 +6,7 @@ ilvl = 86
 
 [goal]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength", tier = 1 },
   { text = "#% increased Attributes", source = "influence" },
   { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },
@@ -15,7 +15,7 @@ mods = [
 
 [stages.attributes]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength", tier = 1 },
 ]
 max_prefix = 2
@@ -24,7 +24,7 @@ min_mods = 4
 
 [stages.suffixes]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength", tier = 1 },
   { text = "#% increased Attributes", source = "influence" },
 ]
@@ -32,7 +32,7 @@ open_prefix = 1
 
 [stages.life]
 mods = [
-  { text = "+# to Intelligence", source = "essence" },
+  { text = "+# to Intelligence", tier = 2 },
   { text = "+# to Strength", tier = 1 },
   { text = "#% increased Attributes", source = "influence" },
   { text = "+# to maximum Life / Regenerate # Mana per second", source = "veiled" },

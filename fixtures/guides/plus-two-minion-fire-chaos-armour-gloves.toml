@@ -20,7 +20,7 @@ max_suffix = 0
 
 [stages.mana_base]
 base = "Titan Gauntlets"
-mods = [{ text = "+# to maximum Mana", source = "natural" }]
+mods = [{ text = "+# to maximum Mana", source = "natural", tier = "any" }]
 max_prefix = 1
 min_mods = 4
 

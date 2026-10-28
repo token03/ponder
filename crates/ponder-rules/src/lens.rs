@@ -273,7 +273,7 @@ impl<'g> Lens<'g> {
         let bans: Vec<(ModId, TagId)> = [(2, "attack"), (3, "caster")]
             .into_iter()
             .filter_map(|(i, t)| Some((*game.metamods.get(i)?, game.tag_id(t)?)))
-            .filter(|(m, _)| forced.contains(m))
+            .filter(|(m, _)| forced.contains(m) || inputs.iter().any(|i| i.affixes.iter().any(|a| a.id == *m)))
             .collect();
         // Tags read off the mods an item holds (tagged removals, bans) keep those mods apart; a
         // tagged draw only weighs each mod by its own tags.
@@ -553,7 +553,7 @@ impl<'g> Lens<'g> {
         let (mut counts, mut crafted, mut fractured) = ([0; 2], 0, 0);
         for (c, class) in self.classes.iter().enumerate() {
             counts[class.side as usize] += (state.counts[c] + state.counts[c + n]) as usize;
-            crafted += if class.crafted { state.counts[c] as usize } else { 0 };
+            crafted += if class.crafted { (state.counts[c] + state.counts[c + n]) as usize } else { 0 };
             fractured += state.counts[c + n] as usize;
         }
         StateView { lens: self, state, counts, crafted, fractured }
@@ -976,8 +976,8 @@ impl<'g> Lens<'g> {
             }
             Step::Draw(pick) => self.draw(s, total, pick, emit),
             Step::Fill(_) => unreachable!("run expands Fill"),
-            Step::Remove { sides, tag, respect_lock } => {
-                let options = self.removable(&s, *sides, *tag, *respect_lock);
+            Step::Remove { sides, tag, respect_lock, respect_bans } => {
+                let options = self.removable(&s, *sides, *tag, *respect_lock, *respect_bans);
                 self.remove(s, total, &options, emit);
             }
             Step::Swap { add, remove } => {
@@ -988,7 +988,7 @@ impl<'g> Lens<'g> {
                 }
                 for (c, w) in options {
                     let mut t = s;
-                    let mut others = self.removable(&t, Sides::Both, *remove, true);
+                    let mut others = self.removable(&t, Sides::Both, *remove, true, false);
                     t.counts[c] += 1;
                     for o in others.iter_mut() {
                         if o.0 == c {
@@ -1077,10 +1077,11 @@ impl<'g> Lens<'g> {
     }
 
     /// (class, removable count) for a removal.
-    fn removable(&self, s: &State, sides: Sides, tag: TagFilter, respect_lock: bool) -> Vec<(usize, u8)> {
+    fn removable(&self, s: &State, sides: Sides, tag: TagFilter, respect_lock: bool, respect_bans: bool) -> Vec<(usize, u8)> {
         let v = self.view(s);
         let allowed = resolve(sides, s.eldritch);
         let locked = if respect_lock { v.locked() } else { [false; 2] };
+        let banned = if respect_bans { self.bans.iter().filter(|(c, _)| v.present(*c)).fold(0, |b, (_, tags)| b | tags) } else { 0 };
         let bit = tag.map(|(t, want)| (self.tag_bit(t), want));
         (0..self.classes.len())
             .filter(|&c| {
@@ -1088,6 +1089,7 @@ impl<'g> Lens<'g> {
                 s.counts[c] > 0
                     && allowed[class.side as usize]
                     && !locked[class.side as usize]
+                    && class.tags & banned == 0
                     && bit.is_none_or(|(b, want)| (class.tags & b != 0) == want)
             })
             .map(|c| (c, s.counts[c]))
@@ -1451,6 +1453,9 @@ impl StateView<'_> {
 }
 
 impl View for StateView<'_> {
+    fn item_class(&self) -> &str {
+        &self.lens.class_name
+    }
     fn rarity(&self) -> Rarity {
         self.state.rarity
     }
@@ -1475,8 +1480,8 @@ impl View for StateView<'_> {
     fn has(&self, m: ModId) -> bool {
         self.lens.class_of.get(&m).is_some_and(|&c| self.present(c))
     }
-    fn removable(&self, respect_lock: bool) -> usize {
-        self.lens.removable(self.state, Sides::Both, None, respect_lock).iter().map(|o| o.1 as usize).sum()
+    fn removable(&self, respect_lock: bool, respect_bans: bool) -> usize {
+        self.lens.removable(self.state, Sides::Both, None, respect_lock, respect_bans).iter().map(|o| o.1 as usize).sum()
     }
     fn fits(&self, m: ModId) -> bool {
         let Some(&c) = self.lens.class_of.get(&m) else { return false };

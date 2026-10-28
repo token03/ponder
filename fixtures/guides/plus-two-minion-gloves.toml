@@ -28,7 +28,7 @@ max_suffix = 0
 # Quality base: natural mana as the only prefix, suffixes full. Mana cannot roll on the donor's
 # base, so the recombinator keeps the minion prefix instead.
 [stages.mana_base]
-mods = [{ text = "+# to maximum Mana", source = "natural" }]
+mods = [{ text = "+# to maximum Mana", source = "natural", tier = "any" }]
 max_prefix = 1
 min_mods = 4
 

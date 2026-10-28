@@ -58,6 +58,7 @@ impl Target {
                     let source = game.def(m).source;
                     let fits = match (req.source, req.tier) {
                         (Some(s), _) if s != source => false,
+                        (None, _) if source == Source::Crafted => false,
                         (_, Some(t)) if matches!(source, Source::Natural | Source::Influence | Source::Essence) => {
                             game.tier(kind, m).is_some_and(|x| x <= t)
                         }

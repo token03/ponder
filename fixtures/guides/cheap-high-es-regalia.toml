@@ -8,6 +8,7 @@ mods = [
   { text = "#% increased Energy Shield", tier = 2 },
   { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 },
   { text = "+# to Intelligence", tier = 2 },
+  { text = "#% increased Attributes", source = "crafted" },
 ]
 
 [stages.flat]
@@ -34,6 +35,15 @@ mods = [
   { text = "#% increased Energy Shield", tier = 2 },
   { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 },
 ]
+
+[stages.int]
+mods = [
+  { text = "+# to maximum Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield / #% increased Stun and Block Recovery", tier = 2 },
+  { text = "+# to Intelligence", tier = 2 },
+]
+open_suffix = 1
 
 [[steps]]
 item = "a"
@@ -93,4 +103,10 @@ else = 1
 
 [[steps]]
 do = ["eldritch-implicit:lesser-ichor", "bench:resistance", "exalted", "eldritch-annulment"]
+until = "int"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:increased-attributes"]
 until = "goal"
+max = 1
+else = 12

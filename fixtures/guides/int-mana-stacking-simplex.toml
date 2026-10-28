@@ -6,7 +6,7 @@ influences = ["crusader", "shaper", "elder"]
 mods = [
   { text = "#% increased Intelligence", source = "influence" },
   { text = "#% increased Attributes", source = "influence" },
-  { text = "#% increased maximum Mana", source = "influence" },
+  { text = "#% increased maximum Mana", source = "influence", tier = "any" },
 ]
 
 [stages.int]
@@ -29,7 +29,7 @@ max_mods = 2
 [stages.mana]
 base = "Onyx Amulet"
 influences = ["elder"]
-mods = [{ text = "#% increased maximum Mana", source = "influence" }]
+mods = [{ text = "#% increased maximum Mana", source = "influence", tier = "any" }]
 min_mods = 4
 
 [[steps]]

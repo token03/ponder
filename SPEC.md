@@ -39,6 +39,16 @@ assume PoE 1.
 | **Cold run** | Game data, prices and candidate items are on disk; the plan cache is empty. Network time is excluded. |
 | **Warm run** | Same as cold, but the plan cache was filled by a previous run with identical data, prices, assumptions and code version. |
 
+Goals describe finished quality rather than prescribing ingredients. A modifier requirement
+defaults to T2-or-better; `tier = 1` or another positive integer changes that floor and
+`tier = "any"` explicitly removes it. Tier floors apply to natural, influenced and essence
+modifiers; special sources such as crafted, unveiled and fossil-only modifiers retain their
+source-specific requirements. Comparable natural and
+essence rolls can satisfy the same tier-bounded requirement. Bench modifiers satisfy only
+requirements explicitly marked crafted; an unveiled requirement cannot be met by its bench
+counterpart. The current tier comparison uses modifier levels as a quality approximation;
+essence-only families without natural tiers rank within the essences available on that base.
+
 ## 3. Project immutables
 
 These hold for the life of the project. Changing one is a deliberate decision recorded here.
@@ -93,14 +103,19 @@ every operation.
    mods, on a base that isn't influenced or synthesised. Fracturing ignores "Prefixes Cannot
    Be Changed" and "Suffixes Cannot Be Changed"; neither lock protects an affix from its pick.
 6. **Crafted mods** obey the bench limit (one, or three with the multimod metamod). They are
-   removed by "remove crafted mods" or a full reset.
+   removed by "remove crafted mods" or a full reset unless fractured. A fractured bench
+   modifier remains crafted, consumes its craft slot and cannot be removed.
 7. **Metamods** protect exactly what Craft of Exile's table says, operation by operation.
    Essences and fossils cannot be applied with a metamod present.
 8. **Information order.** You block before the outcome is drawn, then choose after seeing it.
    Unveils and Awakener previews are an observation followed by a choice, never one combined step.
 9. **Unpredictable recombination** accepts magic or rare inputs and retains at most one
    exclusive modifier across the entire output. A natural tiered modifier forced by an
-   essence is not essence-exclusive. Adding influence requires an unfractured item.
+   essence is not essence-exclusive. Influence exalted orbs require an uninfluenced,
+   unfractured rare without Eldritch implicits. Eldritch implicits require uninfluenced
+   body armour, boots, gloves or helmets.
+10. **Veiled Exalted** removes a modifier before adding a veil. The removal respects
+    prefix/suffix locks; attack/caster roll blockers do not protect against this removal.
 
 ## 5. Modelling rules
 
@@ -125,6 +140,11 @@ every operation.
    An owned starting item is available once; restarting does not replenish it for free.
 7. **Selling ends a branch.** Selling an intermediate is a terminal method with negative cost.
    No cycle may earn money.
+8. **Unsupported contexts are rejected.** The session planner requires inputs and donors
+   to share its fixed base and item level, and already meet any quality requirement.
+   Bases with implicit changes to affix limits or explicit-modifier magnitudes are not
+   admitted until those properties are represented. Lower-level craft APIs assume this
+   preflight has happened.
 
 ## 6. Architecture
 
@@ -274,7 +294,7 @@ caches.
 | Recombinator crafted classification | A crafted modifier with an ordinary natural/influenced counterpart in the same data family is non-exclusive; other crafted families are exclusive. Essence-only, veiled, fossil/drop-only and elevated modifiers are exclusive. | Data-derived classification; the full crafted exception list remains incompletely verified. Medium/low. |
 | Recombinator bonus mod | Disabled by default | Current Unpredictable Recombination does not use the old Sentinel bonus roll. The numerical hook remains available to existing assumption-based tests. |
 | Recombinator heir | Base, influences, quality and Eldritch implicits from either item at even odds; item level two above the floor of the mean, at most the higher input's; influenced mods need the heir's influence | Craft of Exile's simulator; item level from [poewiki](https://www.poewiki.net/wiki/Recombinator). Medium. |
-| Fracturing | One uniform pick among all affixes but veiled ones, crafted included; a fractured craft is permanent | User (3.29). High. |
+| Fracturing | One uniform pick among all affixes but veiled ones, crafted included; a fractured craft is permanent and still consumes the crafted-mod slot | User (3.29). High. |
 | "Cannot Be Changed" refill | New mods may land on either side when it has room | Game behaviour as commonly reported. Medium. |
 | Veiled side | Prefix or suffix, even odds | Unverified. Low. |
 | Unveil | 3 offers drawn by weight without repeats (mods of one class share its mean weight); the wanted offer is kept, else the first | Approximation. Medium. |

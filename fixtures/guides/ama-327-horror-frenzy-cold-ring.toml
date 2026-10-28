@@ -1,12 +1,12 @@
 sheet = "ama-327-horror-frenzy-cold-ring"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnxr9qu/"
-scope = "A purchased synthesised Opal Ring is the source prerequisite; synthesis implicits are outside this affix-only predicate. Strength and intelligence tiers are unspecified."
+scope = "A purchased synthesised Opal Ring is the source prerequisite; synthesis implicits are outside this affix-only predicate. Strength and intelligence use the T2-or-better default."
 base = "Opal Ring"
 ilvl = 86
 
 [goal]
 mods = [
-  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "# to # Added Cold Damage per Frenzy Charge", tier = 2 },
   { text = "+# to Strength" },
   { text = "+# to Intelligence" },
   { text = "+#% to Chaos Resistance" },
@@ -15,7 +15,7 @@ mods = [
 
 [stages.attributes]
 mods = [
-  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "# to # Added Cold Damage per Frenzy Charge", tier = 2 },
   { text = "+# to Strength" },
   { text = "+# to Intelligence" },
 ]
@@ -24,7 +24,7 @@ open_suffix = 1
 
 [stages.chaos]
 mods = [
-  { text = "# to # Added Cold Damage per Frenzy Charge", source = "essence" },
+  { text = "# to # Added Cold Damage per Frenzy Charge", tier = 2 },
   { text = "+# to Strength" },
   { text = "+# to Intelligence" },
   { text = "+#% to Chaos Resistance" },

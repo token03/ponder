@@ -557,9 +557,10 @@ fn solve_within<M: Model>(
 
         let mut seen = vec![usize::MAX; n];
         let adjacency: Vec<Vec<usize>> = edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect();
-        let order: Vec<Vec<usize>> = components(n, |s| adjacency[s].iter().copied())
-            .into_iter()
-            .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
+        let parts = components(n, |s| adjacency[s].iter().copied());
+        let order: Vec<Vec<usize>> = parts
+            .iter()
+            .map(|c| c.iter().copied().filter(|&s| alive[s] && !end[s]).collect())
             .filter(|c: &Vec<usize>| !c.is_empty())
             .collect();
         stats.prune += clock.elapsed().as_secs_f64();
@@ -1071,7 +1072,7 @@ fn evaluate(
     let position = |t: usize| states.get(local[t]).filter(|&&s| s == t).map(|_| local[t]);
     let mut out = vec![Affine::INFINITE; states.len()];
     let mut place = vec![usize::MAX; states.len()];
-    for part in components(states.len(), |i| chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t))) {
+    for part in components(states.len(), |i| chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t))).iter() {
         let n = part.len();
         if n == 1 {
             let i = part[0];
@@ -1277,14 +1278,27 @@ fn lu_solve(n: usize, a: &mut [f64], rhs: &mut [&mut Vec<f64>]) -> Option<Vec<Ve
 
 /// Strongly connected components of a successor graph, successors before predecessors
 /// (Tarjan, iterative).
-fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) -> I) -> Vec<Vec<usize>> {
+struct Components {
+    states: Vec<usize>,
+    offsets: Vec<usize>,
+}
+
+impl Components {
+    fn iter(&self) -> impl Iterator<Item = &[usize]> {
+        self.offsets.windows(2).map(|range| &self.states[range[0]..range[1]])
+    }
+}
+
+fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) -> I) -> Components {
     let (mut index, mut low, mut on) = (vec![usize::MAX; n], vec![0; n], vec![false; n]);
-    let (mut stack, mut out, mut counter) = (Vec::new(), Vec::new(), 0);
+    let (mut stack, mut out, mut counter) = (Vec::new(), Vec::with_capacity(n), 0);
+    let mut offsets = vec![0];
+    let mut call = Vec::new();
     for root in 0..n {
         if index[root] != usize::MAX {
             continue;
         }
-        let mut call = vec![(root, successors(root))];
+        call.push((root, successors(root)));
         index[root] = counter;
         low[root] = counter;
         counter += 1;
@@ -1309,20 +1323,19 @@ fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) ->
                     low[*parent] = low[*parent].min(low[v]);
                 }
                 if low[v] == index[v] {
-                    let mut comp = Vec::new();
                     while let Some(w) = stack.pop() {
                         on[w] = false;
-                        comp.push(w);
+                        out.push(w);
                         if w == v {
                             break;
                         }
                     }
-                    out.push(comp);
+                    offsets.push(out.len());
                 }
             }
         }
     }
-    out
+    Components { states: out, offsets }
 }
 
 /// Where following `solution` from `start` ends: each goal state's chance, with restarts (and

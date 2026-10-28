@@ -1,6 +1,6 @@
 sheet = "ama-328-budget-mana-rf-sceptre"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1rtfhfp/comment/oaeq46w/"
-scope = "A representative sceptre and any natural mana/DoT tiers. Regal/annul explicitly normalises a mixed-side magic output to the rare two-mod stage needed for the stated Multimod finish."
+scope = "A representative sceptre with the T2-or-better default for mana/DoT. Regal/annul explicitly normalises a mixed-side magic output to the rare two-mod stage needed for the stated Multimod finish."
 base = "Opal Sceptre"
 ilvl = 86
 

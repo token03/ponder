@@ -139,6 +139,26 @@ impl<'a> Session<'a> {
     }
 
     pub fn solve(&mut self, request: Request, limit: usize) -> Result<Arc<Plan<'a>>, Error> {
+        if let Some(why) = &self.ctx.game.bases[request.kind.base.0 as usize].unsupported_crafting {
+            return Err(Error::Unsupported(why.clone()));
+        }
+        if request.goal.base.is_some_and(|base| base != request.kind.base) || request.goal.ilvl > request.kind.ilvl {
+            return Err(Error::Unsupported("goal base or item level differs from the fixed crafting context".into()));
+        }
+        let supplies = request.starts.iter().map(|s| s.as_ref()).chain(request.methods.iter().filter_map(|method| match method {
+            Method::Recombine(_, supply) => Some(supply.as_ref()),
+            _ => None,
+        }));
+        for item in supplies.flat_map(|s| s.items()) {
+            if item.kind.base != request.kind.base || item.kind.ilvl != request.kind.ilvl || item.quality < request.goal.quality {
+                return Err(Error::Unsupported(
+                    "input base, item level or quality is not represented by the fixed crafting context".into(),
+                ));
+            }
+            if item.kind.influences.0 != 0 && item.eldritch.is_some() {
+                return Err(Error::Unsupported("an item cannot have both conventional influence and Eldritch implicits".into()));
+            }
+        }
         self.trim(limit);
         let key = Key::new(&request);
         self.accesses += 1;

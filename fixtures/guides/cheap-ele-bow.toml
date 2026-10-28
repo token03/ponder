@@ -7,7 +7,8 @@ mods = [
   { text = "Adds # to # Fire Damage", tier = 2 },
   { text = "Adds # to # Cold Damage", tier = 2 },
   { text = "Adds # to # Lightning Damage", tier = 2 },
-  { text = ["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"] }, # one, not two: both hybrids share the Intelligence family
+  { text = ["#% increased Attack Speed / +# to Dexterity and Intelligence", "#% increased Critical Strike Chance / +# to Strength and Intelligence"], source = "veiled" },
+  { text = ["#% increased Attack Speed", "#% increased Critical Strike Chance"], source = "crafted" },
 ]
 
 [stages.fire]
@@ -93,5 +94,5 @@ else = 1
 note = "Both inputs share the cold mod, which raises the odds of keeping three prefixes."
 
 [[steps]]
-do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:remove-crafted", "bench:speed-or-critical"]
+do = ["bench:remove-crafted", "bench:prefixes-cannot-be-changed", "veiled-chaos", "bench:chaos-damage-over-time-multiplier", "unveil:speed-or-critical", "bench:remove-crafted", "bench:attack-speed", "bench:critical-strike-chance"]
 until = "goal"

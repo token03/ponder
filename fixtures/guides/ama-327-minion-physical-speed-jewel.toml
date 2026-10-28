@@ -1,6 +1,6 @@
 sheet = "ama-327-minion-physical-speed-jewel"
 source = "https://www.reddit.com/r/PathOfExileBuilds/comments/1orkytw/comment/nnrhvlx/"
-scope = "Any tier of the two requested affixes is accepted. Abyss-jewel affixes require the abyss_jewel domain."
+scope = "Unspecified tiered requirements use the T2-or-better default. Abyss-jewel affixes require the abyss_jewel domain."
 base = "Ghastly Eye Jewel"
 ilvl = 86
 

@@ -4,27 +4,37 @@ base = "Prophecy Wand"
 
 [goal]
 mods = [
-  { text = "Adds # to # Lightning Damage", fractured = true, source = "essence" },
-  { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
+  { text = "Adds # to # Lightning Damage", fractured = true, tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Critical Strike Chance"], tier = 1 },
   { text = "Can have up to # Crafted Modifiers", source = "crafted" },
   { text = "#% increased Spell Damage", source = "crafted" },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Critical Strike Chance"], source = "crafted" },
 ]
 
 [stages.lightning]
-mods = [{ text = "Adds # to # Lightning Damage", source = "essence" }]
+mods = [{ text = "Adds # to # Lightning Damage", tier = 2 }]
 min_mods = 4
 max_mods = 4
 
 [stages.fractured]
-mods = [{ text = "Adds # to # Lightning Damage", fractured = true, source = "essence" }]
+mods = [{ text = "Adds # to # Lightning Damage", fractured = true, tier = 2 }]
 
 [stages.multiplier]
 mods = [
-  { text = "Adds # to # Lightning Damage", fractured = true, source = "essence" },
-  { text = "+#% to Global Critical Strike Multiplier", tier = 1 },
+  { text = "Adds # to # Lightning Damage", fractured = true, tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Critical Strike Chance"], tier = 1 },
+]
+
+[stages.craft_ready]
+mods = [
+  { text = "Adds # to # Lightning Damage", fractured = true, tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = ["+#% to Global Critical Strike Multiplier", "#% increased Critical Strike Chance"], tier = 1 },
 ]
 open_prefix = 1
-open_suffix = 1
+open_suffix = 2
 
 [[steps]]
 do = ["buy:base"]
@@ -44,7 +54,13 @@ do = ["bench:remove-crafted", "essence:deafening-hatred"]
 until = "multiplier"
 
 [[steps]]
-do = ["bench:multimod", "bench:spell-damage", "bench:critical-strike-multiplier"]
+do = ["annulment"]
+until = "craft_ready"
+max = 3
+else = 4
+
+[[steps]]
+do = ["bench:multimod", "bench:spell-damage", "bench:critical-strike-chance", "bench:critical-strike-multiplier"]
 until = "goal"
 max = 1
 else = 4

@@ -5,7 +5,7 @@ base = "Titanium Spirit Shield"
 [goal]
 mods = [
   { text = "#% increased Spell Damage" },
-  { text = "+# to Level of Socketed Gems" },
+  { text = "+# to Level of Socketed Gems", tier = "any" },
   { text = "+# to maximum Life", tier = 4 },
   { text = "#% increased Spell Critical Strike Chance" },
 ]
@@ -16,10 +16,10 @@ open_suffix = 1
 max_prefix = 1
 
 [stages.socketed]
-mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems" }]
+mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems", tier = "any" }]
 
 [stages.prefixes]
-mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems" }, { text = "+# to maximum Life", tier = 4 }]
+mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems", tier = "any" }, { text = "+# to maximum Life", tier = 4 }]
 
 [[steps]]
 do = ["buy:base", "alteration", "augmentation", "imprint", "annulment"]

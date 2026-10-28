@@ -127,6 +127,7 @@ pub enum Step {
         sides: Sides,
         tag: TagFilter,
         respect_lock: bool,
+        respect_bans: bool,
     },
     /// Add a mod, then remove another random one (Harvest "add X, remove another").
     Swap {
@@ -180,6 +181,7 @@ pub const UNVEIL_OFFERS: usize = 3;
 
 /// What an operation's `applies` may ask, answered by real items and solver states alike.
 pub trait View {
+    fn item_class(&self) -> &str;
     fn rarity(&self) -> Rarity;
     fn count(&self, side: Side) -> usize;
     fn limit(&self) -> usize;
@@ -187,7 +189,7 @@ pub trait View {
     fn fractured(&self) -> usize;
     fn has(&self, m: ModId) -> bool;
     /// Mods a `Remove` could take.
-    fn removable(&self, respect_lock: bool) -> usize;
+    fn removable(&self, respect_lock: bool, respect_bans: bool) -> usize;
     /// Could `m` be added now: its side has room and no mod shares its group?
     fn fits(&self, m: ModId) -> bool;
     /// Does a mod no reset removes (fractured) share a group with `m`?
@@ -310,8 +312,8 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                 draw(ctx, item, rng, pick);
             }
             Step::Fill(pick) => while item.affixes.len() < total && draw(ctx, item, rng, pick) {},
-            Step::Remove { sides, tag, respect_lock } => {
-                let options = removable(game, item, *sides, *tag, *respect_lock, None);
+            Step::Remove { sides, tag, respect_lock, respect_bans } => {
+                let options = removable(game, item, *sides, *tag, *respect_lock, *respect_bans, None);
                 if !options.is_empty() {
                     item.affixes.remove(options[rng.below(options.len())]);
                 }
@@ -319,13 +321,13 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
             Step::Swap { add, remove } => {
                 if draw(ctx, item, rng, add) {
                     let new = item.affixes.len() - 1;
-                    let options = removable(game, item, Sides::Both, *remove, true, Some(new));
+                    let options = removable(game, item, Sides::Both, *remove, true, false, Some(new));
                     if !options.is_empty() {
                         item.affixes.remove(options[rng.below(options.len())]);
                     }
                 }
             }
-            Step::RemoveCrafted => item.affixes.retain(|a| !a.crafted),
+            Step::RemoveCrafted => item.affixes.retain(|a| !a.crafted || a.fractured),
             Step::Influence(i) => item.kind.influences.0 |= 1 << *i as u8,
             Step::Eldritch(side) => item.eldritch = *side,
             Step::Fracture => {
@@ -336,9 +338,8 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                     })
                     .collect();
                 if !options.is_empty() {
-                    // A fractured bench craft is no longer removable.
                     let a = &mut item.affixes[options[rng.below(options.len())]];
-                    (a.fractured, a.crafted) = (true, false);
+                    a.fractured = true;
                 }
             }
             Step::Veil(sides) => {
@@ -368,14 +369,28 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
 }
 
 /// Indices of mods a removal may take.
-fn removable(game: &Game, item: &Item, sides: Sides, tag: TagFilter, respect_lock: bool, except: Option<usize>) -> Vec<usize> {
+fn removable(
+    game: &Game,
+    item: &Item,
+    sides: Sides,
+    tag: TagFilter,
+    respect_lock: bool,
+    respect_bans: bool,
+    except: Option<usize>,
+) -> Vec<usize> {
     let allowed = resolve(sides, item.eldritch);
     let locked = if respect_lock { item.locked(game) } else { [false; 2] };
+    let banned = if respect_bans { banned_tags(game, |m| item.affixes.iter().any(|a| a.id == m)) } else { Vec::new() };
     (0..item.affixes.len())
         .filter(|&i| {
             let a = item.affixes[i];
             let def = game.def(a.id);
-            Some(i) != except && !a.fractured && allowed[def.side as usize] && !locked[def.side as usize] && tag_ok(def, tag)
+            Some(i) != except
+                && !a.fractured
+                && allowed[def.side as usize]
+                && !locked[def.side as usize]
+                && tag_ok(def, tag)
+                && !banned.iter().any(|t| def.tags.contains(t))
         })
         .collect()
 }
@@ -541,6 +556,9 @@ fn roll_count(ctx: &Ctx, item: &Item, rng: &mut Rng) -> usize {
 }
 
 impl View for (&Game, &Item) {
+    fn item_class(&self) -> &str {
+        &self.0.bases[self.1.kind.base.0 as usize].class
+    }
     fn rarity(&self) -> Rarity {
         self.1.rarity
     }
@@ -559,8 +577,8 @@ impl View for (&Game, &Item) {
     fn has(&self, m: ModId) -> bool {
         self.1.affixes.iter().any(|a| a.id == m)
     }
-    fn removable(&self, respect_lock: bool) -> usize {
-        removable(self.0, self.1, Sides::Both, None, respect_lock, None).len()
+    fn removable(&self, respect_lock: bool, respect_bans: bool) -> usize {
+        removable(self.0, self.1, Sides::Both, None, respect_lock, respect_bans, None).len()
     }
     fn fits(&self, m: ModId) -> bool {
         self.1.open(self.0, self.0.def(m).side) > 0 && !self.1.blocks(self.0, m)
