@@ -119,16 +119,19 @@ fn recombination_reuses_the_policy_with_its_real_partner_items() {
         let mut request = request(&game, 5.0);
         request.goal = Target::compile(&game, &guide.target("flat").unwrap()).unwrap();
         let partner = request.goal.witness(&game, request.kind).unwrap();
+        let mut base = Item::new(request.kind);
+        base.rarity = Rarity::Rare;
+        request.starts = vec![Arc::new(Stock::new("base", 5.0, base))];
         request.methods = vec![Method::Recombine("a+b".into(), Arc::new(Stock::new("donor", price, partner)))];
         request
     };
     let first = session.solve(make(3.0), 200_000).unwrap();
     let second = session.solve(make(3.0), 200_000).unwrap();
     assert!(Arc::ptr_eq(&first, &second));
-    assert!((first.solution.cost - 11.0).abs() < 1e-9);
+    assert!((first.solution.cost - 9.0 / 0.59).abs() < 1e-9);
     let different = session.solve(make(4.0), 200_000).unwrap();
     assert!(!Arc::ptr_eq(&first, &different));
-    assert!((different.solution.cost - 12.5).abs() < 1e-9);
+    assert!((different.solution.cost - 10.0 / 0.59).abs() < 1e-9);
     let followed = second.craft().follow(&second.solution, 500, 1);
     assert_eq!(followed.lost, 0);
     assert!((followed.mean - second.solution.cost).abs() < 4.0 * followed.error);

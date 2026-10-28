@@ -84,7 +84,8 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
     }
     // Mods sharing a group never sit together, recombined or not (poewiki, Recombinator).
     let pool = game.pool(kind);
-    let rolls = |m: &&ModId| !matches!(game.def(**m).source, Source::Natural | Source::Influence) || pool.mods.iter().any(|(id, _)| id == *m);
+    let rolls =
+        |m: &&ModId| !matches!(game.def(**m).source, Source::Natural | Source::Influence) || pool.mods.iter().any(|(id, _)| id == *m);
     let shares = |a: &Need, b: &Need| {
         let (a, b): (Vec<_>, Vec<_>) = (a.ok.iter().filter(rolls).collect(), b.ok.iter().filter(rolls).collect());
         let group = |x: &ModId, y: &ModId| x != y && game.def(*x).groups.iter().any(|g| game.def(*y).groups.contains(g));
@@ -254,6 +255,7 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
             );
         }
         let best = craft.solve(limit).map_err(|e| CheckError::Solve(format!("best for {item}"), e))?;
+        let solve_seconds = clock.elapsed().as_secs_f64() - times[0];
         println!(
             "  {item} best: {} policy states ({} items, {} continuations), {} explored, {} actions, {} outcomes, {:.3}s",
             best.states.len(),
@@ -262,9 +264,30 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
             best.explored,
             best.actions,
             best.outcomes,
-            clock.elapsed().as_secs_f64() - times[0]
+            solve_seconds
         );
         times.push(clock.elapsed().as_secs_f64());
+        if std::env::var_os("PONDER_BENCHMARK").is_some() {
+            let s = &best.stats;
+            println!(
+                "PONDER_BENCH\t{item}\t{last}\t{solve_seconds:.9}\t{:.17}\t{}\t{}\t{}\t{}\t{}\t{:.9}\t{:.9}\t{:.9}\t{:.9}\t{}\t{}\t{}\t{}\t{}",
+                best.cost,
+                best.explored,
+                best.states.len(),
+                best.actions,
+                best.outcomes,
+                s.attempts,
+                s.explore,
+                s.prune,
+                s.values,
+                s.separation,
+                s.solves,
+                s.newton,
+                s.checked,
+                s.violated,
+                s.streamed_outcomes
+            );
+        }
         if std::env::var("STATS").is_ok() {
             let mut found: Vec<(String, usize)> = best.stats.found.iter().map(|(&a, &n)| (craft.action_name(a), n)).collect();
             found.sort_by_key(|f| std::cmp::Reverse(f.1));
@@ -274,6 +297,28 @@ fn check(game: &Game, market: &Market, guide: &Guide, best_plan: bool) -> Result
         }
         let followed = craft.follow(&best, 500, 1_000_000);
         times.push(clock.elapsed().as_secs_f64());
+        if let Some(directory) = std::env::var_os("PONDER_INSPECT_DIR") {
+            let selected = std::env::var("PONDER_INSPECT_ITEM").map_or(last, |name| name == *item);
+            if selected {
+                let number = |name: &str, default: usize| -> Result<usize, CheckError> {
+                    std::env::var(name).map_or(Ok(default), |v| v.parse().map_err(|e| CheckError::Recipe(format!("{name}: {e}"))))
+                };
+                let options = ponder_solve::inspect::Options {
+                    runs: number("PONDER_INSPECT_SAMPLES", 2_000)?,
+                    max_steps: number("PONDER_INSPECT_STEPS", 100_000)?,
+                };
+                let state = std::env::var("PONDER_INSPECT_STATE")
+                    .ok()
+                    .map(|v| v.parse())
+                    .transpose()
+                    .map_err(|e| CheckError::Recipe(format!("PONDER_INSPECT_STATE: {e}")))?;
+                let report = ponder_plan::inspect::report(&craft, &best, options, number("PONDER_INSPECT_TOP", 20)?, state)
+                    .map_err(CheckError::Recipe)?;
+                let directory = PathBuf::from(directory);
+                std::fs::write(directory.join("policy.md"), report.markdown).map_err(|e| CheckError::Recipe(e.to_string()))?;
+                std::fs::write(directory.join("states.tsv"), report.states_tsv).map_err(|e| CheckError::Recipe(e.to_string()))?;
+            }
+        }
         if !last {
             products[item.as_str()][0].fill(guided.cost, simulated.items.clone());
             products[item.as_str()][1].fill(best.cost, followed.items.clone());
@@ -434,6 +479,9 @@ fn guides_cost_no_less_than_ponder() {
     let (mut active, mut failures) = (0, Vec::new());
     for path in files {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        if std::env::var("GUIDE_EXACT").is_ok_and(|g| name != g) {
+            continue;
+        }
         if std::env::var("GUIDE").is_ok_and(|g| !name.contains(&g)) {
             continue;
         }

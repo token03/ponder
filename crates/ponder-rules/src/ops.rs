@@ -412,25 +412,41 @@ fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
     let game = ctx.game;
     let (a, b) = (item.kind.ilvl as u16, other.kind.ilvl as u16);
     let ilvl = ((a + b) / 2 + 2).min(a.max(b)) as u8;
-    let mut pool: Vec<Affix> = item.affixes.drain(..).chain(other.affixes.iter().copied()).collect();
-    if rng.below(2) == 1 {
+    let other_heir = rng.below(2) == 1;
+    let pool: Vec<Affix> = item
+        .affixes
+        .drain(..)
+        .filter(|a| !a.fractured || !other_heir)
+        .chain(other.affixes.iter().copied().filter(|a| !a.fractured || other_heir))
+        .collect();
+    if other_heir {
         (item.kind, item.quality, item.eldritch) = (other.kind, other.quality, other.eldritch);
     }
     item.kind.ilvl = ilvl;
-    // Influenced mods need the influence the result kept.
-    pool.retain(|a| game.def(a.id).influence.is_none_or(|i| item.kind.influences.0 & 1 << i as u8 != 0));
+    let native = game.pool(item.kind);
     item.rarity = Rarity::Rare;
     let limit = item.limit(game);
-    for side in Side::BOTH {
+    let order = if rng.below(2) == 0 { Side::BOTH } else { [Side::Suffix, Side::Prefix] };
+    let mut exclusive_kept = false;
+    for side in order {
         let mut here: Vec<Affix> = pool.iter().copied().filter(|a| game.def(a.id).side == side).collect();
+        let exclusive: Vec<Affix> = here.iter().copied().filter(|a| game.def(a.id).recombine_exclusive).collect();
+        here.retain(|a| !game.def(a.id).recombine_exclusive);
+        if !exclusive.is_empty() {
+            here.push(exclusive[rng.below(exclusive.len())]);
+        }
         let table = recombine_kept(ctx, here.len());
         let keep = rng.pick(table.iter().map(|e| e.1)).map_or(0, |i| table[i].0 as usize).min(limit);
         let mut kept = 0;
         while kept < keep && !here.is_empty() {
             // A mod sharing a group with one already kept is discarded.
             let a = here.remove(rng.below(here.len()));
-            if !item.blocks(game, a.id) {
+            let def = game.def(a.id);
+            let eligible = !matches!(def.source, Source::Natural | Source::Influence) || native.mods.iter().any(|m| m.0 == a.id);
+            let exclusive = def.recombine_exclusive;
+            if eligible && !(exclusive && exclusive_kept) && !item.blocks(game, a.id) {
                 item.affixes.push(a);
+                exclusive_kept |= exclusive;
                 kept += 1;
             }
         }

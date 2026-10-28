@@ -11,13 +11,16 @@
 //! start's cost is affine in `w`, `a + b w` with `b` the chance of restarting, so Newton steps
 //! `w = a / (1 - b)` find the fixed point in a few solves of the same acyclic structure.
 //!
-//! Actions a model defers (wide ones that seldom pay) join a state only once the best policy
-//! reaches it, and the graph is solved again until the policy reaches no state missing any.
 
 use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hash;
 
 use rayon::prelude::*;
+
+mod ilu;
+pub mod inspect;
+
+pub type IndexedOutcomes = Box<[(f64, usize)]>;
 
 pub trait Model: Sync {
     type State: Clone + Eq + Hash + Send + Sync;
@@ -43,12 +46,39 @@ pub trait Model: Sync {
     }
     /// Usable actions with their costs; ids are the model's own.
     fn actions(&self, s: &Self::State) -> Vec<(usize, f64)>;
-    /// An action worth exploring only where the best policy goes (one with many outcomes that
-    /// rarely pays): the solver adds it to a state once the best policy reaches that state.
     fn defers(&self, _: &Self::State, _action: usize) -> bool {
         false
     }
     fn outcomes(&self, s: &Self::State, action: usize) -> Vec<(f64, Self::State)>;
+    fn for_each_outcome(&self, s: &Self::State, action: usize, emit: &mut dyn FnMut(f64, Self::State)) {
+        for (p, t) in self.outcomes(s, action) {
+            emit(p, t);
+        }
+    }
+    fn prepare_expectations<'a>(
+        &'a self,
+        _states: &[Self::State],
+        _value: &'a (dyn Fn(&Self::State) -> f64 + Sync),
+    ) -> impl Fn(&Self::State, usize) -> Option<f64> + Sync + 'a {
+        |_, _| None
+    }
+
+    fn prepare_transitions<'a>(
+        &'a self,
+        _states: &[Self::State],
+        _index: &'a (dyn Fn(&Self::State) -> Option<usize> + Sync),
+    ) -> impl Fn(&Self::State, usize) -> Option<IndexedOutcomes> + Sync + 'a {
+        |_, _| None
+    }
+
+    fn discover_successors(
+        &self,
+        _states: &[&Self::State],
+        _action: usize,
+        _missing: &(dyn Fn(&Self::State) -> bool + Sync),
+    ) -> Vec<Self::State> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug)]
@@ -78,6 +108,14 @@ pub struct Stats {
     pub values: f64,
     /// Newton steps on the worth of starting over.
     pub newton: usize,
+    pub solves: usize,
+    pub checked: usize,
+    pub bounded: usize,
+    pub prepared: usize,
+    pub streamed_outcomes: usize,
+    pub violated: usize,
+    pub separation: f64,
+    pub discovered: usize,
     /// Rounds of expansion, and states expanded on reaching them (see [`Model::bound`]).
     pub rounds: usize,
     pub expanded: usize,
@@ -97,7 +135,40 @@ pub enum Error {
 struct Edge {
     action: usize,
     cost: f64,
-    to: Box<[(f64, usize)]>,
+    to: Transitions<usize>,
+}
+
+impl Edge {
+    fn outcomes(&self) -> &[(f64, usize)] {
+        self.to.outcomes()
+    }
+
+    fn constant(&self) -> f64 {
+        if matches!(self.to, Transitions::Deferred) { f64::INFINITY } else { self.cost }
+    }
+}
+
+enum Transitions<S> {
+    Known(Box<[(f64, S)]>),
+    Optimistic,
+    Deferred,
+}
+
+impl<S> Transitions<S> {
+    fn outcomes(&self) -> &[(f64, S)] {
+        match self {
+            Self::Known(to) => to,
+            _ => &[],
+        }
+    }
+
+    fn pending(&self) -> bool {
+        !matches!(self, Self::Known(_))
+    }
+
+    fn optimistic(&self) -> bool {
+        matches!(self, Self::Optimistic)
+    }
 }
 
 /// Where a state's value comes from: `a + b w`, with `w` the value of restarting.
@@ -138,7 +209,7 @@ fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, k
     // A bound on the start's worth is a better first guess than its cheapest action.
     let first = start.iter().flat_map(|(_, s)| model.actions(s)).map(|a| a.1).fold(f64::INFINITY, f64::min);
     let bound: f64 = start.iter().map(|(p, s)| p * model.bound(s).unwrap_or(0.0)).sum();
-    let mut ceiling = 2.0 * first.max(bound).clamp(0.5, 1e9);
+    let mut ceiling = (2.0 * first.clamp(0.5, 1e9)).max(bound.clamp(0.0, 1e9) * (1.0 + 1e-9));
     loop {
         match solve_within(model, start, limit, ceiling, keep_all, &mut graph, &mut stats) {
             Ok((solution, w)) if w < ceiling => return Ok(Solution { stats, ..solution }),
@@ -150,7 +221,9 @@ fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, k
 }
 
 /// The actions of a state with their costs and outcomes.
-type Expansion<S> = Vec<(usize, f64, Vec<(f64, S)>)>;
+type Expansion<S> = Vec<(usize, f64, Transitions<S>)>;
+
+const EXPANSION_BATCH: usize = 256;
 
 /// How a state enters the graph.
 enum Entry<S> {
@@ -159,6 +232,38 @@ enum Entry<S> {
     /// Left unexpanded, worth its bound.
     Tip(f64),
     New(Expansion<S>),
+}
+
+enum Update<S> {
+    Tip(usize, Expansion<S>),
+    Deferred(usize, Expansion<S>),
+    Discover(usize, usize, Vec<S>),
+    Linked(usize, Vec<Edge>),
+}
+
+impl<S> Update<S> {
+    fn state(&self) -> usize {
+        match self {
+            Self::Tip(s, _) | Self::Deferred(s, _) | Self::Discover(s, _, _) | Self::Linked(s, _) => *s,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Checks {
+    actions: usize,
+    bounded: usize,
+    prepared: usize,
+    outcomes: usize,
+    violated: usize,
+}
+
+fn expand_deferred<M: Model>(model: &M, state: &M::State, edges: &[Edge]) -> Expansion<M::State> {
+    edges
+        .iter()
+        .filter(|e| e.to.pending())
+        .map(|e| (e.action, e.cost, Transitions::Known(model.outcomes(state, e.action).into_boxed_slice())))
+        .collect()
 }
 
 /// The states explored so far and their actions under `ceiling`.
@@ -229,12 +334,26 @@ fn solve_within<M: Model>(
     stats: &mut Stats,
 ) -> Result<(Solution<M::State>, f64), Error> {
     stats.attempts += 1;
+    let separating = model.restarts_anywhere() && !model.gives_up();
     // Actions in [`from`, `ceiling`): a state's own, or those a higher ceiling adds; deferred ones
     // only, all of them, or all but those.
     let actions_from = |s: &M::State, from: f64, deferred: Option<bool>| -> Expansion<M::State> {
         let mut actions = model.actions(s);
-        actions.retain(|a| a.1 >= from && a.1 < ceiling && deferred.is_none_or(|d| model.defers(s, a.0) == d));
-        actions.into_iter().map(|(a, cost)| (a, cost, model.outcomes(s, a))).collect()
+        actions.retain(|a| a.1 >= from && a.1 < ceiling && (deferred != Some(true) || model.defers(s, a.0)));
+        actions
+            .into_iter()
+            .map(|(a, cost)| {
+                let lazy = deferred == Some(false) && model.defers(s, a);
+                let to = if !lazy {
+                    Transitions::Known(model.outcomes(s, a).into_boxed_slice())
+                } else if separating {
+                    Transitions::Deferred
+                } else {
+                    Transitions::Optimistic
+                };
+                (a, cost, to)
+            })
+            .collect()
     };
     let expand = |s: &M::State| actions_from(s, f64::NEG_INFINITY, Some(false));
     let Graph { states, index, edges, end, tip, fixed, complete, ceiling: explored_under, worth, dropped, given_up, found } = graph;
@@ -249,15 +368,24 @@ fn solve_within<M: Model>(
     let starts: Vec<(f64, usize)> =
         start.iter().map(|(p, s)| intern(s, states, index, limit).map(|i| (*p, i))).collect::<Result<_, _>>()?;
     // The edges of an expansion, numbering the states it finds.
-    let mut link = |out: Expansion<M::State>,
-                    states: &mut Vec<M::State>,
-                    index: &mut HashMap<M::State, usize>|
+    let link = |out: Expansion<M::State>,
+                states: &mut Vec<M::State>,
+                index: &mut HashMap<M::State, usize>,
+                found: &mut std::collections::BTreeMap<usize, usize>|
      -> Result<Vec<Edge>, Error> {
         let mut successors = Vec::new();
         for (action, cost, to) in out {
             let known = states.len();
-            let to =
-                to.iter().filter(|o| o.0 > 0.0).map(|(p, t)| intern(t, states, index, limit).map(|i| (*p, i))).collect::<Result<_, _>>()?;
+            let to = match to {
+                Transitions::Known(to) => Transitions::Known(
+                    to.iter()
+                        .filter(|o| o.0 > 0.0)
+                        .map(|(p, t)| intern(t, states, index, limit).map(|i| (*p, i)))
+                        .collect::<Result<_, _>>()?,
+                ),
+                Transitions::Optimistic => Transitions::Optimistic,
+                Transitions::Deferred => Transitions::Deferred,
+            };
             if states.len() > known {
                 *found.entry(action).or_default() += states.len() - known;
             }
@@ -269,31 +397,62 @@ fn solve_within<M: Model>(
     if let Some(from) = raise {
         let open: Vec<usize> = (0..edges.len()).filter(|&s| !end[s]).collect();
         let more: Vec<(usize, Expansion<M::State>)> =
-            open.par_iter().map(|&s| (s, actions_from(&states[s], from, (!complete[s]).then_some(false)))).collect();
+            open.par_iter().map(|&s| (s, actions_from(&states[s], from, (separating || !complete[s]).then_some(false)))).collect();
         for (s, out) in more {
-            let new = link(out, states, index)?;
+            let new = link(out, states, index, found)?;
             edges[s].extend(new);
         }
     }
-    // Expanded tips the best policy reached, to join the graph.
-    let mut reached: Vec<(usize, Expansion<M::State>)> = Vec::new();
+    let mut reached: Vec<Update<M::State>> = Vec::new();
     // The last round's policy (as action ids) and worth of starting over, to start from.
     let mut acted: Vec<usize> = Vec::new();
     let mut warm = None;
     // Values at the last solve, extended over states found since.
     let mut known: Vec<f64> = Vec::new();
-    loop {
+    let mut seed: Vec<Affine> = Vec::new();
+    'search: loop {
         stats.rounds += 1;
         let clock = std::time::Instant::now();
-        let mut fresh: Vec<usize> = reached.iter().map(|r| r.0).collect();
+        let mut fresh: Vec<usize> = reached.iter().map(Update::state).collect();
         let entered = edges.len();
-        for (s, out) in reached.drain(..) {
-            edges[s] = link(out, states, index)?;
-            (end[s], tip[s], fixed[s]) = (false, false, None);
+        if separating && !reached.is_empty() {
+            for (s, e) in dropped.drain(..) {
+                edges[s].push(e);
+            }
+        }
+        for update in reached.drain(..) {
+            match update {
+                Update::Linked(s, new) => {
+                    edges[s].retain(|e| !e.to.pending() || !new.iter().any(|a| a.action == e.action));
+                    edges[s].extend(new);
+                    complete[s] = edges[s].iter().all(|e| !e.to.pending());
+                }
+                Update::Discover(_, action, new) => {
+                    let known = states.len();
+                    for state in new {
+                        intern(&state, states, index, limit)?;
+                    }
+                    let count = states.len() - known;
+                    *found.entry(action).or_default() += count;
+                    stats.discovered += count;
+                }
+                Update::Tip(s, out) => {
+                    edges[s] = link(out, states, index, found)?;
+                    (end[s], tip[s], fixed[s]) = (false, false, None);
+                }
+                Update::Deferred(s, out) => {
+                    edges[s].retain(|e| !e.to.pending() || !out.iter().any(|a| a.0 == e.action));
+                    edges[s].extend(link(out, states, index, found)?);
+                    complete[s] = edges[s].iter().all(|e| !e.to.pending());
+                    if !separating {
+                        acted[s] = usize::MAX;
+                    }
+                }
+            }
         }
         // Enter new states in batches, the model's work in parallel, numbering in order.
         while edges.len() < states.len() {
-            let batch = edges.len()..states.len().min(edges.len() + rayon::current_num_threads());
+            let batch = edges.len()..states.len().min(edges.len() + EXPANSION_BATCH);
             let entries: Vec<Entry<M::State>> = states[batch.clone()]
                 .par_iter()
                 .map(|s| {
@@ -312,7 +471,7 @@ fn solve_within<M: Model>(
                 let (value, unexpanded, out) = match entry {
                     Entry::Fixed(value) => (Some(value), false, Vec::new()),
                     Entry::Tip(bound) => (Some(Affine { a: bound, b: 0.0 }), true, Vec::new()),
-                    Entry::New(out) => (None, false, link(out, states, index)?),
+                    Entry::New(out) => (None, false, link(out, states, index, found)?),
                 };
                 end.push(value.is_some());
                 complete.push(false);
@@ -323,41 +482,45 @@ fn solve_within<M: Model>(
         }
         let n = states.len();
         fresh.extend((entered..n).filter(|&s| !end[s]));
-        // Before solving again, follow the best actions by the last values (states found since
-        // at their bounds, unexpanded ones free) from what was just expanded to more tips.
         if let Some(w) = warm.filter(|_| !fresh.is_empty()) {
             known.extend((known.len()..n).map(|s| fixed[s].map_or(0.0, |f| f.at(w))));
-            let mut next: Vec<usize> = fresh
-                .iter()
-                .filter_map(|&s| edges[s].get(best(&edges[s], &known).1))
-                .flat_map(|e| e.to.iter().map(|o| o.1))
-                .filter(|&t| tip[t])
-                .collect();
-            next.sort_unstable();
-            next.dedup();
-            if !next.is_empty() {
-                reached = next.par_iter().map(|&s| (s, expand(&states[s]))).collect();
-                stats.expanded += reached.len();
+            for &s in fresh.iter().rev() {
+                known[s] = best(&edges[s], &known).0;
+            }
+            let (tips, pending) = discover(edges, fixed, tip, &starts, &mut known);
+            if !tips.is_empty() || !pending.is_empty() {
+                acted.resize(n, usize::MAX);
+                reached.extend(tips.par_iter().map(|&s| Update::Tip(s, expand(&states[s]))).collect::<Vec<_>>());
+                reached.extend(
+                    pending.par_iter().map(|&s| Update::Deferred(s, expand_deferred(model, &states[s], &edges[s]))).collect::<Vec<_>>(),
+                );
+                stats.expanded += tips.len();
+                stats.completed += pending.len();
                 stats.explore += clock.elapsed().as_secs_f64();
                 continue;
             }
         }
-        let outcomes = edges.iter().flatten().map(|e| e.to.len()).sum();
+        let outcomes = edges.iter().flatten().map(|e| e.outcomes().len()).sum();
         let actions = edges.iter().map(Vec::len).sum();
         stats.explore += clock.elapsed().as_secs_f64();
+        stats.solves += 1;
         let clock = std::time::Instant::now();
         // Keep only actions whose every outcome can still reach the goal (or a restart) and that
         // leave the state; a state is alive while some kept action path gets there.
         let mut alive = vec![true; n];
+        let all_reach = all_reach_terminal(edges, end);
         loop {
             for s in 0..n {
                 if !end[s] {
-                    let (keep, drop) = std::mem::take(&mut edges[s])
-                        .into_iter()
-                        .partition(|e: &Edge| e.to.iter().all(|&(_, t)| alive[t]) && e.to.iter().any(|&(_, t)| t != s));
+                    let (keep, drop) = std::mem::take(&mut edges[s]).into_iter().partition(|e: &Edge| {
+                        e.to.pending() || e.outcomes().iter().all(|&(_, t)| alive[t]) && e.outcomes().iter().any(|&(_, t)| t != s)
+                    });
                     edges[s] = keep;
                     dropped.extend(drop.into_iter().map(|e| (s, e)));
                 }
+            }
+            if all_reach {
+                break;
             }
             let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
             let mut seen = vec![usize::MAX; n];
@@ -366,8 +529,8 @@ fn solve_within<M: Model>(
                     into[t].push(s);
                 }
             }
-            let mut reach = end.clone();
-            let mut stack: Vec<usize> = (0..n).filter(|&s| end[s]).collect();
+            let mut reach: Vec<bool> = (0..n).map(|s| end[s] || edges[s].iter().any(|e| e.to.optimistic())).collect();
+            let mut stack: Vec<usize> = (0..n).filter(|&s| reach[s]).collect();
             while let Some(t) = stack.pop() {
                 for &s in &into[t] {
                     if !reach[s] {
@@ -393,15 +556,22 @@ fn solve_within<M: Model>(
         }
 
         let mut seen = vec![usize::MAX; n];
-        let order: Vec<Vec<usize>> =
-            components(&edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect::<Vec<_>>())
-                .into_iter()
-                .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
-                .filter(|c: &Vec<usize>| !c.is_empty())
-                .collect();
+        let adjacency: Vec<Vec<usize>> = edges.iter().enumerate().map(|(s, es)| successors(es, &mut seen, s).collect()).collect();
+        let order: Vec<Vec<usize>> = components(n, |s| adjacency[s].iter().copied())
+            .into_iter()
+            .map(|c| c.into_iter().filter(|&s| alive[s] && !end[s]).collect())
+            .filter(|c: &Vec<usize>| !c.is_empty())
+            .collect();
         stats.prune += clock.elapsed().as_secs_f64();
         let clock = std::time::Instant::now();
         let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
+        let rounds = if edges.iter().flatten().any(|e| matches!(e.to, Transitions::Deferred)) { ADMISSION_ROUNDS } else { ROUNDS };
+        let mut local = vec![usize::MAX; n];
+        for component in &order {
+            for (i, &s) in component.iter().enumerate() {
+                local[s] = i;
+            }
+        }
         acted.resize(n, usize::MAX);
         let mut choice: Vec<usize> =
             (0..n).map(|s| edges[s].iter().position(|e| !end[s] && e.action == acted[s]).unwrap_or(usize::MAX)).collect();
@@ -409,7 +579,8 @@ fn solve_within<M: Model>(
         // Start high so restarting looks dear; Newton steps then fall monotonically to the fixed
         // point. Or from the last round's worth, below it: any proper policy's worth is above, so
         // the first step lands above it too. Or from the last ceiling's, above it.
-        let mut w = if restarts { warm.or(*worth).unwrap_or(1e12) } else { 0.0 };
+        let initial = if separating { warm.or(*worth) } else { (*worth).or(warm) };
+        let mut w = if restarts { initial.unwrap_or(1e12) } else { 0.0 };
         let mut first = true;
         let mut solved = None;
         for _ in 0..200 {
@@ -417,7 +588,7 @@ fn solve_within<M: Model>(
             let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
             let mut stable = true;
             for component in &order {
-                stable &= solve_component(component, edges, &mut values, &mut choice, &mut affine, w);
+                stable &= solve_component(component, &local, edges, &mut values, &mut choice, &mut affine, &seed, w, rounds);
             }
             let at_start = starts
                 .iter()
@@ -433,6 +604,17 @@ fn solve_within<M: Model>(
                 continue;
             }
             if hopeless {
+                if separating {
+                    let pending: Vec<_> = (0..n).filter(|&s| edges[s].iter().any(|e| e.to.pending())).collect();
+                    if !pending.is_empty() {
+                        stats.values += clock.elapsed().as_secs_f64();
+                        let clock = std::time::Instant::now();
+                        reached = pending.par_iter().map(|&s| Update::Deferred(s, expand_deferred(model, &states[s], &edges[s]))).collect();
+                        stats.completed += pending.len();
+                        stats.explore += clock.elapsed().as_secs_f64();
+                        continue 'search;
+                    }
+                }
                 return Err(Error::Unreachable);
             }
             let next = if !restarts {
@@ -451,54 +633,157 @@ fn solve_within<M: Model>(
         }
         stats.values += clock.elapsed().as_secs_f64();
         let Some((at_start, w)) = solved else { return Err(Error::Unreachable) };
-        (warm, *worth) = (Some(w), Some(w));
+        seed.clone_from(&affine);
+        warm = Some(w);
         known = affine.iter().map(|f| f.at(w)).collect();
         acted = (0..n).map(|s| if choice[s] == usize::MAX { usize::MAX } else { edges[s][choice[s]].action }).collect();
-        let mut reachable = vec![false; n];
-        let mut stack = Vec::new();
-        for &(_, s) in &starts {
-            if !reachable[s] {
-                reachable[s] = true;
-                stack.push(s);
-            }
-        }
-        while let Some(s) = stack.pop() {
-            if choice[s] != usize::MAX && !end[s] && alive[s] {
-                for &(_, t) in &edges[s][choice[s]].to {
-                    if !reachable[t] {
-                        reachable[t] = true;
-                        stack.push(t);
-                    }
-                }
-            }
-        }
+        let mut reachable = policy_reach(edges, &choice, &starts);
         let tips: Vec<usize> = (0..n).filter(|&s| reachable[s] && tip[s]).collect();
         if !tips.is_empty() {
             let clock = std::time::Instant::now();
-            reached = tips.par_iter().map(|&s| (s, expand(&states[s]))).collect();
+            reached = tips.par_iter().map(|&s| Update::Tip(s, expand(&states[s]))).collect();
             stats.expanded += reached.len();
             stats.explore += clock.elapsed().as_secs_f64();
             continue;
         }
-        // The best policy's states get their deferred actions; solve again if any had some.
-        let pending: Vec<usize> = (0..n).filter(|&s| reachable[s] && !end[s] && !complete[s]).collect();
+        let pending: Vec<usize> =
+            (0..n).filter(|&s| reachable[s] && choice[s] != usize::MAX && edges[s][choice[s]].to.optimistic()).collect();
         let clock = std::time::Instant::now();
-        let more: Vec<(usize, Expansion<M::State>)> =
-            pending.par_iter().map(|&s| (s, actions_from(&states[s], f64::NEG_INFINITY, Some(true)))).collect();
-        let mut added = false;
-        for (s, out) in more {
-            complete[s] = true;
-            if !out.is_empty() {
-                let new = link(out, states, index)?;
-                edges[s].extend(new);
-                added = true;
-            }
-        }
+        reached = pending.par_iter().map(|&s| Update::Deferred(s, expand_deferred(model, &states[s], &edges[s]))).collect();
         stats.completed += pending.len();
         stats.explore += clock.elapsed().as_secs_f64();
-        if added {
+        if !pending.is_empty() {
             continue;
         }
+        if separating && edges.iter().flatten().any(|e| matches!(e.to, Transitions::Deferred)) {
+            let clock = std::time::Instant::now();
+            let inspect = |s: usize| w < ceiling || reachable[s];
+            let finite = known.iter().all(|v| v.is_finite() && *v >= 0.0);
+            let lookup = |t: &M::State| index.get(t).map_or_else(|| model.bound(t).filter(|v| v.is_finite()).unwrap_or(0.0), |&t| known[t]);
+            let evaluate = finite.then(|| model.prepare_expectations(states, &lookup));
+            let mut link_states = Vec::new();
+            if let Some(evaluate) = &evaluate {
+                let mut candidates = std::collections::BTreeMap::<usize, Vec<usize>>::new();
+                for s in 0..n {
+                    if end[s] || !inspect(s) {
+                        continue;
+                    }
+                    let mut materialize = false;
+                    for edge in edges[s].iter().filter(|e| matches!(e.to, Transitions::Deferred) && e.cost < known[s]) {
+                        match evaluate(&states[s], edge.action) {
+                            Some(future) if edge.cost + future < known[s] - 1e-10 * known[s].abs().max(1.0) => {
+                                candidates.entry(edge.action).or_default().push(s);
+                                materialize = true;
+                            }
+                            None => materialize = true,
+                            _ => {}
+                        }
+                    }
+                    if materialize {
+                        link_states.push(s);
+                    }
+                }
+                let mut updates = Vec::new();
+                let missing = |t: &M::State| !index.contains_key(t) && !model.is_goal(t);
+                for (action, sources) in candidates {
+                    let inputs: Vec<_> = sources.iter().map(|&s| &states[s]).collect();
+                    let new = model.discover_successors(&inputs, action, &missing);
+                    if !new.is_empty() {
+                        updates.push(Update::Discover(sources[0], action, new));
+                    }
+                }
+                if !updates.is_empty() {
+                    stats.separation += clock.elapsed().as_secs_f64();
+                    reached = updates;
+                    continue;
+                }
+            }
+            let lookup_index = |t: &M::State| index.get(t).copied();
+            let link_states: Vec<_> = link_states.into_iter().map(|s| states[s].clone()).collect();
+            let transitions = (!link_states.is_empty()).then(|| model.prepare_transitions(&link_states, &lookup_index));
+            let (mut updates, checks) = (0..n)
+                .into_par_iter()
+                .fold(
+                    || (Vec::new(), Checks::default()),
+                    |(mut updates, mut checks), s| {
+                        if end[s] || !inspect(s) {
+                            return (updates, checks);
+                        }
+                        let actions = edges[s].iter().filter(|e| matches!(e.to, Transitions::Deferred)).map(|e| (e.action, e.cost));
+                        let mut selected = None;
+                        for (action, cost) in actions {
+                            checks.actions += 1;
+                            if finite && cost >= known[s] {
+                                checks.bounded += 1;
+                                continue;
+                            }
+                            let mut value = cost;
+                            let mut terms = 0;
+                            let nonempty = if let Some(future) = evaluate.as_ref().and_then(|evaluate| evaluate(&states[s], action)) {
+                                value += future;
+                                checks.prepared += 1;
+                                true
+                            } else {
+                                model.for_each_outcome(&states[s], action, &mut |p, t| {
+                                    terms += 1;
+                                    if p > 0.0 {
+                                        value += p * lookup(&t);
+                                    }
+                                });
+                                terms > 0
+                            };
+                            checks.outcomes += terms;
+                            if !finite || (nonempty && value < known[s] - 1e-10 * known[s].abs().max(1.0)) {
+                                checks.violated += 1;
+                                if selected.is_none_or(|(_, _, best)| value < best) {
+                                    selected = Some((action, cost, value));
+                                }
+                            }
+                        }
+                        if let Some((action, cost, _)) = selected {
+                            if let Some(to) = transitions.as_ref().and_then(|link| link(&states[s], action)) {
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::Known(to) }]));
+                                return (updates, checks);
+                            }
+                            let out = model.outcomes(&states[s], action);
+                            let linked: Option<Box<[_]>> =
+                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(t).map(|&t| (*p, t))).collect();
+                            if let Some(to) = linked {
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::Known(to) }]));
+                            } else {
+                                updates.push(Update::Deferred(s, vec![(action, cost, Transitions::Known(out.into_boxed_slice()))]));
+                            }
+                        }
+                        (updates, checks)
+                    },
+                )
+                .reduce(
+                    || (Vec::new(), Checks::default()),
+                    |(mut left, mut a), (mut right, b)| {
+                        left.append(&mut right);
+                        a.actions += b.actions;
+                        a.bounded += b.bounded;
+                        a.prepared += b.prepared;
+                        a.outcomes += b.outcomes;
+                        a.violated += b.violated;
+                        (left, a)
+                    },
+                );
+            stats.checked += checks.actions;
+            stats.bounded += checks.bounded;
+            stats.prepared += checks.prepared;
+            stats.streamed_outcomes += checks.outcomes;
+            stats.violated += checks.violated;
+            stats.separation += clock.elapsed().as_secs_f64();
+            updates.sort_by_key(Update::state);
+            stats.completed += updates.iter().filter(|u| matches!(u, Update::Deferred(_, _) | Update::Linked(_, _))).count();
+            stats.expanded += updates.iter().filter(|u| matches!(u, Update::Tip(_, _))).count();
+            if !updates.is_empty() {
+                reached = updates;
+                continue;
+            }
+        }
+        *worth = Some(w);
         stats.outcomes += outcomes;
         stats.found = found.clone();
         let given_up = given_up.iter().map(|&s| states[s].clone()).collect();
@@ -533,8 +818,118 @@ fn solve_within<M: Model>(
     }
 }
 
+fn all_reach_terminal(edges: &[Vec<Edge>], end: &[bool]) -> bool {
+    let mut reached: Vec<_> = edges
+        .iter()
+        .enumerate()
+        .map(|(s, out)| end[s] || out.iter().rev().any(|e| e.to.optimistic() || matches!(e.outcomes(), [(_, t)] if end[*t])))
+        .collect();
+    for s in (0..edges.len()).rev() {
+        if !reached[s]
+            && edges[s].iter().any(|e| e.to.optimistic() || !e.outcomes().is_empty() && e.outcomes().iter().all(|&(_, t)| reached[t]))
+        {
+            reached[s] = true;
+        }
+    }
+    reached.into_iter().all(|r| r)
+}
+
+fn policy_reach(edges: &[Vec<Edge>], choice: &[usize], starts: &[(f64, usize)]) -> Vec<bool> {
+    let mut seen = vec![false; edges.len()];
+    let mut stack = Vec::new();
+    for &(_, s) in starts {
+        if !seen[s] {
+            seen[s] = true;
+            stack.push(s);
+        }
+    }
+    while let Some(s) = stack.pop() {
+        if let Some(edge) = edges[s].get(choice[s]) {
+            for &(_, t) in edge.outcomes() {
+                if !seen[t] {
+                    seen[t] = true;
+                    stack.push(t);
+                }
+            }
+        }
+    }
+    seen
+}
+
+fn discover(
+    edges: &[Vec<Edge>],
+    fixed: &[Option<Affine>],
+    tip: &[bool],
+    starts: &[(f64, usize)],
+    values: &mut [f64],
+) -> (Vec<usize>, Vec<usize>) {
+    let walk = |values: &mut [f64], backup: bool| {
+        let mut tips = Vec::new();
+        let mut pending = Vec::new();
+        let mut seen = vec![false; edges.len()];
+        let mut stack = Vec::new();
+        for &(_, s) in starts {
+            if !seen[s] {
+                seen[s] = true;
+                stack.push((s, false));
+            }
+        }
+        while let Some((s, leave)) = stack.pop() {
+            if leave {
+                values[s] = best(&edges[s], values).0;
+                continue;
+            }
+            if tip[s] {
+                tips.push(s);
+            }
+            if fixed[s].is_some() {
+                continue;
+            }
+            let Some(edge) = edges[s].get(best(&edges[s], values).1) else { continue };
+            if edge.to.optimistic() {
+                pending.push(s);
+            }
+            if backup {
+                stack.push((s, true));
+            }
+            for &(_, t) in edge.outcomes() {
+                if !seen[t] {
+                    seen[t] = true;
+                    stack.push((t, false));
+                }
+            }
+        }
+        (tips, pending)
+    };
+    for _ in 0..16 {
+        let (mut tips, mut pending) = walk(values, true);
+        let (next_tips, next_pending) = walk(values, false);
+        tips.extend(next_tips);
+        pending.extend(next_pending);
+        tips.sort_unstable();
+        tips.dedup();
+        pending.sort_unstable();
+        pending.dedup();
+        if !tips.is_empty() || !pending.is_empty() {
+            return (tips, pending);
+        }
+        let w: f64 = starts.iter().map(|&(p, s)| p * values[s]).sum();
+        let mut changed = false;
+        for (s, value) in fixed.iter().enumerate() {
+            if let Some(value) = value.filter(|f| f.b > 0.0) {
+                changed |= (values[s] - value.at(w)).abs() > 1e-10 * w.abs().max(1.0);
+                values[s] = value.at(w);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (Vec::new(), Vec::new())
+}
+
 fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl Iterator<Item = usize> + 'a {
-    edges.iter().flat_map(|e| e.to.iter().map(|o| o.1)).filter(move |&t| {
+    edges.iter().flat_map(|e| e.outcomes().iter().map(|o| o.1)).filter(move |&t| {
         let new = seen[t] != s;
         seen[t] = s;
         new
@@ -542,7 +937,7 @@ fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl It
 }
 
 fn q(e: &Edge, values: &[f64]) -> f64 {
-    e.cost + e.to.iter().map(|&(p, t)| p * values[t]).sum::<f64>()
+    e.constant() + e.outcomes().iter().map(|&(p, t)| p * values[t]).sum::<f64>()
 }
 
 /// The best action by current values; the lowest id wins ties.
@@ -567,8 +962,19 @@ fn best(edges: &[Edge], values: &[f64]) -> (f64, usize) {
 /// At most `ROUNDS` improvements per call, true if the policy came out stable: any proper policy's
 /// cost bounds the optimum from above, so Newton on `w` stays valid while policy iteration
 /// finishes over later calls, and at a huge first `w` the rounds are mostly spent on noise.
-fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], choice: &mut [usize], affine: &mut [Affine], w: f64) -> bool {
-    let local: HashMap<usize, usize> = states.iter().enumerate().map(|(i, &s)| (s, i)).collect();
+#[allow(clippy::too_many_arguments)]
+fn solve_component(
+    states: &[usize],
+    local: &[usize],
+    edges: &[Vec<Edge>],
+    values: &mut [f64],
+    choice: &mut [usize],
+    affine: &mut [Affine],
+    seed: &[Affine],
+    w: f64,
+    rounds: usize,
+) -> bool {
+    let position = |t: usize| states.get(local[t]).filter(|&&s| s == t).map(|_| local[t]);
     let mut chosen: Vec<usize> = states.iter().map(|&s| choice[s]).collect();
     if chosen.contains(&usize::MAX) {
         let mut ranked = vec![false; states.len()];
@@ -579,8 +985,26 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
                 if ranked[i] {
                     continue;
                 }
-                let exit = edges[s].iter().position(|e| e.to.iter().any(|&(_, t)| local.get(&t).is_none_or(|&j| ranked[j])));
-                if let Some(a) = exit {
+                let exits = |e: &Edge| e.to.optimistic() || e.outcomes().iter().any(|&(_, t)| position(t).is_none_or(|j| ranked[j]));
+                let action = if chosen[i] == usize::MAX {
+                    edges[s].iter().position(exits)
+                } else {
+                    edges[s].get(chosen[i]).filter(|e| exits(e)).map(|_| chosen[i])
+                };
+                if let Some(a) = action {
+                    chosen[i] = a;
+                    ranked[i] = true;
+                    progress = true;
+                }
+            }
+            if !progress {
+                let repair = states.iter().enumerate().filter(|(i, _)| !ranked[*i]).find_map(|(i, &s)| {
+                    edges[s]
+                        .iter()
+                        .position(|e| e.to.optimistic() || e.outcomes().iter().any(|&(_, t)| position(t).is_none_or(|j| ranked[j])))
+                        .map(|a| (i, a))
+                });
+                if let Some((i, a)) = repair {
                     chosen[i] = a;
                     ranked[i] = true;
                     progress = true;
@@ -593,9 +1017,9 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
     // evaluate (at a huge first `w`, rounding can pick an improper one).
     let mut kept = chosen.clone();
     let mut stable = true;
-    for _ in 0..ROUNDS {
+    for _ in 0..rounds {
         stable = false;
-        let Some(v) = evaluate(states, &local, edges, &chosen, affine) else {
+        let Some(v) = evaluate(states, local, edges, &chosen, affine, seed) else {
             stable = true;
             break;
         };
@@ -608,6 +1032,9 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
             .iter()
             .enumerate()
             .map(|(i, &s)| {
+                if edges[s].len() == 1 {
+                    return chosen[i];
+                }
                 let (v, a) = best(&edges[s], values);
                 let current = q(&edges[s][chosen[i]], values);
                 if v < current - 1e-10 * current.abs().max(1.0) { a } else { chosen[i] }
@@ -627,24 +1054,45 @@ fn solve_component(states: &[usize], edges: &[Vec<Edge>], values: &mut [f64], ch
 
 /// Policy improvements per component and Newton step.
 const ROUNDS: usize = 10;
+const ADMISSION_ROUNDS: usize = 3;
 
 /// Exact values of a fixed policy inside a component, as `a + b w`. The policy's own graph
 /// usually splits into much smaller components; each solves (I - P) x = r for the cost part
 /// (r = c + P_out a_out) and the restart part (r = P_out b_out) together, successors first.
 fn evaluate(
     states: &[usize],
-    local: &HashMap<usize, usize>,
+    local: &[usize],
     edges: &[Vec<Edge>],
     choice: &[usize],
     affine: &[Affine],
+    seed: &[Affine],
 ) -> Option<Vec<Affine>> {
     let chosen = |i: usize| &edges[states[i]][choice[i]];
-    let succ: Vec<Vec<usize>> =
-        (0..states.len()).map(|i| chosen(i).to.iter().filter_map(|(_, t)| local.get(t).copied()).collect()).collect();
+    let position = |t: usize| states.get(local[t]).filter(|&&s| s == t).map(|_| local[t]);
     let mut out = vec![Affine::INFINITE; states.len()];
     let mut place = vec![usize::MAX; states.len()];
-    for part in components(&succ) {
+    for part in components(states.len(), |i| chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t))) {
         let n = part.len();
+        if n == 1 {
+            let i = part[0];
+            let edge = chosen(i);
+            let mut value = Affine { a: edge.constant(), b: 0.0 };
+            let mut diagonal: f64 = 1.0;
+            for &(p, t) in edge.outcomes() {
+                if t == states[i] {
+                    diagonal -= p;
+                    continue;
+                }
+                let known = position(t).map_or(affine[t], |j| out[j]);
+                value.a += p * known.a;
+                value.b += p * known.b;
+            }
+            if diagonal.abs() < 1e-14 {
+                return None;
+            }
+            out[i] = Affine { a: value.a / diagonal, b: value.b / diagonal };
+            continue;
+        }
         for (k, &i) in part.iter().enumerate() {
             place[i] = k;
         }
@@ -654,14 +1102,14 @@ fn evaluate(
         let mut rb = vec![0.0; n];
         for (k, &i) in part.iter().enumerate() {
             let e = chosen(i);
-            ra[k] = e.cost;
-            for &(p, t) in &e.to {
-                let known = match local.get(&t) {
-                    Some(&j) if place[j] != usize::MAX && part.get(place[j]) == Some(&j) => {
+            ra[k] = e.constant();
+            for &(p, t) in e.outcomes() {
+                let known = match position(t) {
+                    Some(j) if place[j] != usize::MAX && part.get(place[j]) == Some(&j) => {
                         rows[k].push((place[j], p));
                         continue;
                     }
-                    Some(&j) => out[j],
+                    Some(j) => out[j],
                     None => affine[t],
                 };
                 ra[k] += p * known.a;
@@ -679,9 +1127,17 @@ fn evaluate(
             lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?
         } else {
             let start = |f: fn(&Affine) -> f64| {
-                part.iter().map(|&i| Some(f(&affine[states[i]])).filter(|v| v.is_finite()).unwrap_or(0.0)).collect()
+                part.iter()
+                    .map(|&i| {
+                        Some(f(&affine[states[i]]))
+                            .filter(|v| v.is_finite())
+                            .or_else(|| seed.get(states[i]).map(f).filter(|v| v.is_finite()))
+                            .unwrap_or(0.0)
+                    })
+                    .collect()
             };
-            let solve = |r: &[f64], x: Vec<f64>| gauss_seidel(&rows, r, bicgstab(&rows, r, x));
+            let factor = std::cell::OnceCell::new();
+            let solve = |r: &[f64], x: Vec<f64>| gauss_seidel(&rows, r, bicgstab(&rows, r, x, &factor));
             vec![solve(&ra, start(|f| f.a))?, solve(&rb, start(|f| f.b))?]
         };
         for (k, &i) in part.iter().enumerate() {
@@ -717,15 +1173,22 @@ fn gauss_seidel(rows: &[Vec<(usize, f64)>], r: &[f64], mut x: Vec<f64>) -> Optio
     None
 }
 
-/// Solves x = r + P x approximately by BiCGSTAB, preconditioned by each state's self-loop, for
-/// Gauss-Seidel to finish: slowly mixing chains (an item that leaves a loop once in 1e5 steps)
-/// take that many sweeps, but only about its square root in Krylov steps. Returns its best
-/// iterate, or `x` itself if it breaks down.
-fn bicgstab(rows: &[Vec<(usize, f64)>], b: &[f64], x: Vec<f64>) -> Vec<f64> {
+fn bicgstab(rows: &[Vec<(usize, f64)>], b: &[f64], x: Vec<f64>, factor: &std::cell::OnceCell<Option<ilu::Ilu>>) -> Vec<f64> {
     let n = rows.len();
     let d: Vec<f64> = rows.iter().enumerate().map(|(k, row)| 1.0 - row.iter().filter(|e| e.0 == k).map(|e| e.1).sum::<f64>()).collect();
     let apply = |x: &[f64]| -> Vec<f64> {
         rows.iter().enumerate().map(|(k, row)| x[k] - row.iter().map(|&(j, p)| p * x[j]).sum::<f64>()).collect()
+    };
+    let precondition = |r: &[f64]| {
+        if let Some(factor) = factor.get_or_init(|| ilu::Ilu::new(rows)) {
+            return factor.apply(r);
+        }
+        let mut x = vec![0.0; n];
+        for (k, row) in rows.iter().enumerate() {
+            let inflow: f64 = row.iter().filter(|e| e.0 < k).map(|&(j, p)| p * x[j]).sum();
+            x[k] = (r[k] + inflow) / d[k];
+        }
+        x
     };
     let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
     let norm = |a: &[f64]| a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
@@ -745,11 +1208,18 @@ fn bicgstab(rows: &[Vec<(usize, f64)>], b: &[f64], x: Vec<f64>) -> Vec<f64> {
         let beta = rho_next / rho * (alpha / omega);
         rho = rho_next;
         p = (0..n).map(|k| r[k] + beta * (p[k] - omega * v[k])).collect();
-        let y: Vec<f64> = (0..n).map(|k| p[k] / d[k]).collect();
+        let y = precondition(&p);
         v = apply(&y);
         alpha = rho / dot(&rhat, &v);
         let s: Vec<f64> = (0..n).map(|k| r[k] - alpha * v[k]).collect();
-        let z: Vec<f64> = (0..n).map(|k| s[k] / d[k]).collect();
+        if norm(&s) <= 1e-13 * scale && s.iter().all(|v| v.is_finite()) {
+            let next: Vec<_> = (0..n).map(|k| x[k] + alpha * y[k]).collect();
+            if next.iter().all(|v| v.is_finite()) {
+                best = next;
+            }
+            break;
+        }
+        let z = precondition(&s);
         let t = apply(&z);
         omega = dot(&t, &s) / dot(&t, &t);
         x = (0..n).map(|k| x[k] + alpha * y[k] + omega * z[k]).collect();
@@ -807,37 +1277,36 @@ fn lu_solve(n: usize, a: &mut [f64], rhs: &mut [&mut Vec<f64>]) -> Option<Vec<Ve
 
 /// Strongly connected components of a successor graph, successors before predecessors
 /// (Tarjan, iterative).
-fn components(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let n = succ.len();
+fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) -> I) -> Vec<Vec<usize>> {
     let (mut index, mut low, mut on) = (vec![usize::MAX; n], vec![0; n], vec![false; n]);
     let (mut stack, mut out, mut counter) = (Vec::new(), Vec::new(), 0);
     for root in 0..n {
         if index[root] != usize::MAX {
             continue;
         }
-        let mut call = vec![(root, 0usize)];
+        let mut call = vec![(root, successors(root))];
         index[root] = counter;
         low[root] = counter;
         counter += 1;
         stack.push(root);
         on[root] = true;
-        while let Some(&mut (v, ref mut i)) = call.last_mut() {
-            if let Some(&w) = succ[v].get(*i) {
-                *i += 1;
+        while let Some((v, next)) = call.last_mut() {
+            let v = *v;
+            if let Some(w) = next.next() {
                 if index[w] == usize::MAX {
                     index[w] = counter;
                     low[w] = counter;
                     counter += 1;
                     stack.push(w);
                     on[w] = true;
-                    call.push((w, 0));
+                    call.push((w, successors(w)));
                 } else if on[w] {
                     low[v] = low[v].min(index[w]);
                 }
             } else {
                 call.pop();
-                if let Some(&(parent, _)) = call.last() {
-                    low[parent] = low[parent].min(low[v]);
+                if let Some((parent, _)) = call.last() {
+                    low[*parent] = low[*parent].min(low[v]);
                 }
                 if low[v] == index[v] {
                     let mut comp = Vec::new();
@@ -902,7 +1371,7 @@ pub fn ends<M: Model>(model: &M, solution: &Solution<M::State>, start: &[(f64, M
             row
         })
         .collect();
-    let guess = bicgstab(&rows, &seed, vec![0.0; rows.len()]);
+    let guess = bicgstab(&rows, &seed, vec![0.0; rows.len()], &std::cell::OnceCell::new());
     let x = gauss_seidel(&rows, &seed, guess.clone()).unwrap_or(guess);
     let goals: Vec<(f64, usize)> =
         (0..order.len()).filter(|&k| model.is_goal(&solution.states[order[k]])).map(|k| (x[k], order[k])).collect();

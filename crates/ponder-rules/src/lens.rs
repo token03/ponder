@@ -13,6 +13,7 @@
 //! exactly, merging equal states after every step. Unveil offers are drawn by class, removing a
 //! class's average mod weight per offer (exact for single-mod classes).
 
+use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,10 @@ use crate::ops::{
     Ctx, Operation, Pick, Pool, Sides, Step, SupplyRef, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
 };
 use crate::target::{Target, matches};
+
+mod side;
+mod transitions;
+pub use side::{SideRelaxation, SideState};
 
 /// Most classes a lens has: states hold their counts inline, so making one allocates nothing.
 pub const CLASSES: usize = 40;
@@ -48,6 +53,8 @@ enum Origin {
 struct Class {
     side: Side,
     origin: Origin,
+    exclusive: bool,
+    native: bool,
     /// Veiled mods (for unveil offers).
     veiled: usize,
     tracked: bool,
@@ -115,12 +122,70 @@ impl Relaxation {
 
 static ANY: Pick = Pick::ANY;
 
-/// (side, tracked groups, needs served, read tags, origin, fixed mod, unveil rank, pools rolling it,
-/// relaxed blocker).
-type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32, bool);
+type Key = (Side, Vec<GroupId>, u128, u32, Origin, Option<ModId>, u8, u32, bool, bool, bool);
 type Samples = Arc<[(f64, Vec<u8>)]>;
-type SampleKey = (Vec<(usize, u8)>, Vec<(usize, u64)>);
+type SampleKey = (Vec<(usize, u8)>, Vec<(usize, u64)>, bool, u8);
 type SampleCache = HashMap<SampleKey, Samples>;
+type SideKey = [u8; 3];
+type Header = (u8, Option<Side>);
+type SelectionKernel = [Vec<Vec<(f64, usize)>>; 4];
+
+struct RecombinationTables {
+    donor: RecombinationTable,
+    heirs: HashMap<Header, RecombinationTable>,
+}
+
+impl RecombinationTables {
+    fn get(&self, lens: &Lens<'_>, state: &State) -> Option<f64> {
+        let donor = self.donor.get(lens, state)?;
+        let heir = self.heirs.get(&(state.influences, state.eldritch))?.get(lens, state)?;
+        Some((donor + heir) / 2.0)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Heir {
+    input: Option<Header>,
+    output: Header,
+    fractured: bool,
+}
+
+struct RecombinationTable {
+    heir: Heir,
+    inputs: [HashMap<SideKey, usize>; 2],
+    values: Vec<f64>,
+}
+
+struct RecombinationKernel {
+    inputs: [Vec<SideKey>; 2],
+    donors: [Vec<SideKey>; 2],
+    donor_ids: [HashMap<SideKey, usize>; 2],
+    donor_keys: Vec<(f64, [SideKey; 2])>,
+    rows: [SelectionKernel; 2],
+    outputs: [Vec<SideKey>; 2],
+}
+
+impl RecombinationTable {
+    fn get(&self, lens: &Lens<'_>, state: &State) -> Option<f64> {
+        if self.heir.input.is_some_and(|input| (state.influences, state.eldritch) != input) {
+            return None;
+        }
+        let keys = lens.side_keys(state, self.heir.fractured)?;
+        let p = self.inputs[0].get(&keys[0])?;
+        let s = self.inputs[1].get(&keys[1])?;
+        Some(self.values[p * self.inputs[1].len() + s])
+    }
+}
+
+struct Recombination<'a> {
+    probability: f64,
+    influences: u8,
+    eldritch: Option<Side>,
+    first: Side,
+    pools: [&'a [(usize, u8)]; 2],
+    samples: [Samples; 2],
+    exclusive: bool,
+}
 /// Expands one (state, rolled count) into weighted successors.
 type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
@@ -177,6 +242,7 @@ impl<'g> Lens<'g> {
             }
         }
         let inputs: Vec<&Item> = source.1.iter().chain(partners.iter().flat_map(|p| p.0.items())).collect();
+        let exclusive = |m: ModId| !partners.is_empty() && game.def(m).recombine_exclusive;
         let mut picks: Vec<&Pick> = Vec::new();
         let mut filters: Vec<TagFilter> = Vec::new();
         let mut forced: BTreeSet<ModId> = BTreeSet::new();
@@ -233,6 +299,9 @@ impl<'g> Lens<'g> {
             .collect();
 
         let pool = game.pool(kind);
+        let native = |m: ModId| {
+            partners.is_empty() || !matches!(game.def(m).source, Source::Natural | Source::Influence) || pool.mods.iter().any(|p| p.0 == m)
+        };
         let rolls: Vec<(ModId, f64)> = pool
             .mods
             .iter()
@@ -279,14 +348,18 @@ impl<'g> Lens<'g> {
                 0
             };
             let rank = if relaxed && junk { 0 } else { rank };
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by, blocker(m))).or_default().push(m);
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by, blocker(m), exclusive(m), native(m)))
+                .or_default()
+                .push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
             let def = game.def(m);
             let fixed = (def.source == Source::Crafted || game.veils.contains(&m)).then_some(m);
             let group = tracked(m);
             let origin = fixed.map_or(Origin::Natural(def.influence), |_| Origin::Fixed);
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0, blocker(m))).or_default().push(m);
+            keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0, blocker(m), exclusive(m), native(m)))
+                .or_default()
+                .push(m);
         }
 
         assert!(keys.len() <= CLASSES, "at most {CLASSES} classes per lens");
@@ -294,7 +367,7 @@ impl<'g> Lens<'g> {
         let mut class_of = HashMap::default();
         let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::default();
         let mut blockers = Vec::new();
-        for ((side, group, serves, tags, origin, fixed, rank, _, blocks), mods) in keys {
+        for ((side, group, serves, tags, origin, fixed, rank, _, blocks, exclusive, native), mods) in keys {
             let idx = classes.len();
             for g in group.iter().filter(|_| !blocks) {
                 group_classes.entry(*g).or_default().push(idx);
@@ -308,6 +381,8 @@ impl<'g> Lens<'g> {
             classes.push(Class {
                 side,
                 origin,
+                exclusive,
+                native,
                 veiled: mods.iter().filter(|m| game.def(**m).source == Source::Veiled).count(),
                 tracked: (!group.is_empty() && !blocks) || fixed.is_some(),
                 crafted: fixed.is_some_and(|m| game.def(m).source == Source::Crafted),
@@ -528,11 +603,21 @@ impl<'g> Lens<'g> {
             return true;
         }
         let TargetLens { target, offset, .. } = &self.targets[t];
+        if state.influences & target.influences.0 != target.influences.0 {
+            return false;
+        }
         target.needs.iter().enumerate().all(|(i, need)| {
             let serves = |c: usize| self.classes[c].serves & (1 << (offset + i)) != 0;
             let have: usize = fixed.iter().filter(|&&c| serves(c)).map(|&c| state.counts[c + n] as usize).sum();
             have >= need.count as usize
-                || (!need.fractured && (0..n).any(|c| serves(c) && !fixed.iter().any(|f| self.classes[c].conflicts.contains(f))))
+                || (!need.fractured
+                    && (0..n).any(|c| {
+                        let available = match self.classes[c].origin {
+                            Origin::Natural(Some(influence)) => state.influences & (1 << influence as u8) != 0,
+                            _ => true,
+                        };
+                        serves(c) && available && !fixed.iter().any(|f| self.classes[c].conflicts.contains(f))
+                    }))
         })
     }
 
@@ -547,9 +632,15 @@ impl<'g> Lens<'g> {
             next.into_iter().map(|((s, t), p)| (p, s, t)).collect::<Vec<_>>()
         };
         for step in steps {
+            if matches!(step, Step::RecombineBonus) && ctx.assumptions.recombine_bonus == 0.0 {
+                continue;
+            }
             if let Step::Fill(pick) = step {
                 // One draw at a time, merging in between: at most six affixes.
                 for _ in 0..6 {
+                    if dist.iter().all(|(_, s, total)| self.view(s).total() as u8 >= *total) {
+                        break;
+                    }
                     dist = merge(dist, &|s, total, emit| {
                         if (self.view(&s).total() as u8) < total { self.draw(s, total, pick, emit) } else { emit(1.0, s, total) }
                     });
@@ -568,6 +659,282 @@ impl<'g> Lens<'g> {
             true
         });
         out
+    }
+
+    pub fn for_each_outcome(&self, ctx: &Ctx, steps: &[Step], state: &State, emit: &mut dyn FnMut(f64, State)) {
+        if let [step @ Step::Recombine(_), tail @ ..] = steps
+            && tail.iter().all(|s| matches!(s, Step::RecombineBonus) && ctx.assumptions.recombine_bonus == 0.0)
+        {
+            self.step(ctx, step, *state, 0, &mut |p, t, _| emit(p, t));
+        } else {
+            for (p, t) in self.run(ctx, steps, state) {
+                emit(p, t);
+            }
+        }
+    }
+
+    pub fn prepare_expectations<'a, F: Fn(&State) -> f64 + Sync + 'a>(
+        &'a self,
+        ctx: &'a Ctx<'g>,
+        states: &[State],
+        value: F,
+    ) -> impl Fn(&State, &[Step]) -> Option<f64> + Sync + 'a + use<'a, 'g, F> {
+        let tables: Vec<_> = self
+            .partners
+            .iter()
+            .map(|(_, partner)| {
+                let header = partner.first()?.1;
+                let output = (header.influences, header.eldritch);
+                let donor = self.recombination_table(ctx, states, partner, &value, Heir { input: None, output, fractured: false })?;
+                let headers: BTreeSet<_> = states.iter().map(|s| (s.influences, s.eldritch)).collect();
+                let heirs = headers
+                    .into_iter()
+                    .filter_map(|header| {
+                        let heir = Heir { input: Some(header), output: header, fractured: true };
+                        self.recombination_table(ctx, states, partner, &value, heir).map(|table| (header, table))
+                    })
+                    .collect();
+                Some(RecombinationTables { donor, heirs })
+            })
+            .collect();
+        move |state, steps| {
+            let [Step::Recombine(partner), tail @ ..] = steps else { return None };
+            if tail.iter().any(|s| !matches!(s, Step::RecombineBonus) || ctx.assumptions.recombine_bonus != 0.0) {
+                return None;
+            }
+            let partner = self.partners.iter().position(|(supply, _)| supply == partner).expect("partner read by an operation");
+            tables[partner].as_ref()?.get(self, state)
+        }
+    }
+
+    fn side_keys(&self, state: &State, fractured: bool) -> Option<[SideKey; 2]> {
+        let n = self.classes.len();
+        let mut keys = [[u8::MAX; 3]; 2];
+        let mut counts = [0; 2];
+        for c in 0..if fractured { 2 * n } else { n } {
+            let class = &self.classes[c % n];
+            let side = class.side as usize;
+            for _ in 0..state.counts[c] {
+                *keys[side].get_mut(counts[side])? = c as u8;
+                counts[side] += 1;
+            }
+        }
+        Some(keys)
+    }
+
+    pub fn recombination_successors(&self, ctx: &Ctx, states: &[State], steps: &[Step]) -> Vec<State> {
+        let [Step::Recombine(partner), tail @ ..] = steps else { return Vec::new() };
+        if tail.iter().any(|s| !matches!(s, Step::RecombineBonus) || ctx.assumptions.recombine_bonus != 0.0) {
+            return Vec::new();
+        }
+        let partner = &self.partners.iter().find(|(supply, _)| supply == partner).expect("partner read by an operation").1;
+        let Some((_, header)) = partner.first() else { return Vec::new() };
+        let donor = Heir { input: None, output: (header.influences, header.eldritch), fractured: false };
+        let headers: BTreeSet<_> = states.iter().map(|s| (s.influences, s.eldritch)).collect();
+        let heirs =
+            std::iter::once(donor).chain(headers.into_iter().map(|header| Heir { input: Some(header), output: header, fractured: true }));
+        let mut out = BTreeSet::new();
+        for heir in heirs {
+            let Some(kernel) = self.recombination_kernel(ctx, states, partner, heir) else { continue };
+            let ids = kernel.inputs.each_ref().map(|keys| keys.iter().enumerate().map(|(i, &key)| (key, i)).collect::<HashMap<_, _>>());
+            let mut pairs = vec![Vec::new(); ids[0].len()];
+            for state in states.iter().filter(|s| heir.input.is_none_or(|header| (s.influences, s.eldritch) == header)) {
+                if let Some(keys) = self.side_keys(state, heir.fractured) {
+                    pairs[ids[0][&keys[0]]].push(ids[1][&keys[1]]);
+                }
+            }
+            for row in &mut pairs {
+                row.sort_unstable();
+                row.dedup();
+            }
+            let mut joint = vec![BTreeSet::new(); kernel.donors[0].len()];
+            for &(q, keys) in &kernel.donor_keys {
+                if q > 0.0 {
+                    joint[kernel.donor_ids[0][&keys[0]]].insert(kernel.donor_ids[1][&keys[1]]);
+                }
+            }
+            let words = kernel.outputs[1].len().div_ceil(64);
+            let mut support = vec![vec![0_u64; words]; kernel.outputs[0].len()];
+            for (prefix_mode, suffix_mode) in [(1, 0), (2, 3), (0, 1), (3, 2)] {
+                for (d, suffix_donors) in joint.iter().enumerate().filter(|(_, donors)| !donors.is_empty()) {
+                    let mut suffix = vec![vec![0_u64; words]; ids[1].len()];
+                    for (s, row) in suffix.iter_mut().enumerate() {
+                        for &donor in suffix_donors {
+                            for &(q, t) in &kernel.rows[1][suffix_mode][s * kernel.donors[1].len() + donor] {
+                                if q > 0.0 {
+                                    row[t / 64] |= 1 << (t % 64);
+                                }
+                            }
+                        }
+                    }
+                    let mut combined = vec![0_u64; words];
+                    for (p, row) in pairs.iter().enumerate() {
+                        combined.fill(0);
+                        for &s in row {
+                            for (word, &bits) in combined.iter_mut().zip(&suffix[s]) {
+                                *word |= bits;
+                            }
+                        }
+                        for &(q, t) in &kernel.rows[0][prefix_mode][p * kernel.donors[0].len() + d] {
+                            if q > 0.0 {
+                                for (word, &bits) in support[t].iter_mut().zip(&combined) {
+                                    *word |= bits;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (p, row) in support.iter().enumerate() {
+                for (word, &bits) in row.iter().enumerate() {
+                    let mut bits = bits;
+                    while bits != 0 {
+                        let s = word * 64 + bits.trailing_zeros() as usize;
+                        out.insert(self.recombination_state(&kernel.outputs[0][p], &kernel.outputs[1][s], heir.output));
+                        bits &= bits - 1;
+                    }
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    fn recombination_kernel(&self, ctx: &Ctx, states: &[State], partner: &[(f64, State)], heir: Heir) -> Option<RecombinationKernel> {
+        let header = partner.first()?.1;
+        let n = self.classes.len();
+        let mut donor_keys = Vec::new();
+        for &(q, state) in partner {
+            if (state.influences, state.eldritch) != (header.influences, header.eldritch) || state.counts[n..2 * n].iter().any(|&c| c > 0) {
+                return None;
+            }
+            donor_keys.push((q, self.side_keys(&state, false)?));
+        }
+        let keys: Vec<_> = states
+            .iter()
+            .filter(|s| heir.input.is_none_or(|header| (s.influences, s.eldritch) == header))
+            .filter_map(|s| self.side_keys(s, heir.fractured))
+            .collect();
+        let inputs = [0, 1].map(|side| keys.iter().map(|keys| keys[side]).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+        if inputs.iter().any(Vec::is_empty) {
+            return None;
+        }
+        let donors =
+            [0, 1].map(|side| donor_keys.iter().map(|(_, keys)| keys[side]).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+        let donor_ids = [0, 1].map(|side| donors[side].iter().enumerate().map(|(i, &key)| (key, i)).collect::<HashMap<_, _>>());
+        let limit = self.view(&State { rarity: Rarity::Rare, ..header }).limit();
+        let kernel = |side: usize| {
+            let mut outputs = Vec::new();
+            let mut index = HashMap::default();
+            let mut rows: SelectionKernel = std::array::from_fn(|_| Vec::new());
+            for input in &inputs[side] {
+                for donor in &donors[side] {
+                    let mut counts = [0; 2 * CLASSES];
+                    for &c in input.iter().chain(donor).filter(|&&c| c != u8::MAX) {
+                        counts[c as usize] += 1;
+                    }
+                    let pool: Vec<_> = counts.into_iter().enumerate().filter(|&(_, count)| count > 0).collect();
+                    for (mode, (excluded, selected)) in
+                        [(false, None), (false, Some(false)), (false, Some(true)), (true, None)].into_iter().enumerate()
+                    {
+                        let samples = self.kept(ctx, &pool, limit, excluded, heir.output.0);
+                        let mut row = Vec::new();
+                        for (p, chosen) in samples.iter() {
+                            let exclusive = pool.iter().zip(chosen).any(|(&(c, _), &count)| count > 0 && self.classes[c % n].exclusive);
+                            if selected.is_some_and(|selected| selected != exclusive) {
+                                continue;
+                            }
+                            let mut key = [u8::MAX; 3];
+                            let mut size = 0;
+                            for (&(c, _), &count) in pool.iter().zip(chosen) {
+                                for _ in 0..count {
+                                    *key.get_mut(size)? = c as u8;
+                                    size += 1;
+                                }
+                            }
+                            let id = *index.entry(key).or_insert_with(|| {
+                                outputs.push(key);
+                                outputs.len() - 1
+                            });
+                            row.push((*p, id));
+                        }
+                        rows[mode].push(row);
+                    }
+                }
+            }
+            Some((rows, outputs))
+        };
+        let (prefix, prefixes) = kernel(0)?;
+        let (suffix, suffixes) = kernel(1)?;
+        let cells = prefixes.len().checked_mul(suffixes.len())?;
+        if cells > states.len().saturating_mul(64) {
+            return None;
+        }
+        Some(RecombinationKernel { inputs, donors, donor_ids, donor_keys, rows: [prefix, suffix], outputs: [prefixes, suffixes] })
+    }
+
+    fn recombination_state(&self, prefix: &SideKey, suffix: &SideKey, header: Header) -> State {
+        let mut state = State { rarity: Rarity::Rare, counts: [0; 2 * CLASSES], influences: header.0, eldritch: header.1 };
+        for &c in prefix.iter().chain(suffix).filter(|&&c| c != u8::MAX) {
+            state.counts[c as usize] += 1;
+        }
+        self.settled(state)
+    }
+
+    fn recombination_table(
+        &self,
+        ctx: &Ctx,
+        states: &[State],
+        partner: &[(f64, State)],
+        value: &(impl Fn(&State) -> f64 + Sync),
+        heir: Heir,
+    ) -> Option<RecombinationTable> {
+        let RecombinationKernel { inputs, donors, donor_ids, donor_keys, rows: [prefix, suffix], outputs: [prefixes, suffixes] } =
+            self.recombination_kernel(ctx, states, partner, heir)?;
+        let matrix: Vec<_> = prefixes
+            .par_iter()
+            .flat_map_iter(|p| suffixes.iter().map(move |s| value(&self.recombination_state(p, s, heir.output))))
+            .collect();
+        let width = inputs[1].len();
+        let mut values = vec![0.0; inputs[0].len() * width];
+        for (prefix_mode, suffix_mode) in [(1, 0), (2, 3), (0, 1), (3, 2)] {
+            let right: Vec<Vec<f64>> = (0..donors[1].len())
+                .into_par_iter()
+                .map(|donor| {
+                    prefixes
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(p, _)| {
+                            let matrix = &matrix;
+                            let suffix = &suffix[suffix_mode];
+                            let donors = &donors;
+                            let suffixes = &suffixes;
+                            (0..width).map(move |s| {
+                                suffix[s * donors[1].len() + donor].iter().map(|&(q, t)| q * matrix[p * suffixes.len() + t]).sum()
+                            })
+                        })
+                        .collect()
+                })
+                .collect();
+            values.par_chunks_mut(width).enumerate().for_each(|(p, row)| {
+                let mut left: Vec<HashMap<usize, f64>> = vec![HashMap::default(); donors[1].len()];
+                for &(q, keys) in &donor_keys {
+                    let d = donor_ids[0][&keys[0]];
+                    let s = donor_ids[1][&keys[1]];
+                    for &(r, t) in &prefix[prefix_mode][p * donors[0].len() + d] {
+                        *left[s].entry(t).or_default() += 0.5 * q * r;
+                    }
+                }
+                for (s, weights) in left.iter().enumerate() {
+                    for (&t, &q) in weights {
+                        for (v, &r) in row.iter_mut().zip(&right[s][t * width..(t + 1) * width]) {
+                            *v += q * r;
+                        }
+                    }
+                }
+            });
+        }
+        let inputs = inputs.map(|keys| keys.into_iter().enumerate().map(|(i, key)| (key, i)).collect());
+        Some(RecombinationTable { heir, inputs, values })
     }
 
     fn step(&self, ctx: &Ctx, step: &Step, mut s: State, total: u8, emit: &mut dyn FnMut(f64, State, u8)) {
@@ -760,61 +1127,152 @@ impl<'g> Lens<'g> {
     /// implicits the result takes), each side keeps a uniform sample of the pooled affixes,
     /// dropping any that conflicts with one kept.
     fn recombine(&self, ctx: &Ctx, s: &State, total: u8, partner: &[(f64, State)], emit: &mut dyn FnMut(f64, State, u8)) {
+        let mut outcomes = HashMap::<([SideKey; 2], Header), f64>::default();
+        self.recombine_parts(ctx, s, partner, &mut |part| {
+            self.combine(&part, &mut |p, sides| {
+                *outcomes.entry((sides, (part.influences, part.eldritch))).or_default() += part.probability * p;
+            });
+        });
+        for ((sides, header), p) in outcomes {
+            emit(p, self.recombination_state(&sides[0], &sides[1], header), total);
+        }
+    }
+
+    fn combine(&self, part: &Recombination<'_>, emit: &mut dyn FnMut(f64, [SideKey; 2])) {
+        let n = self.classes.len();
+        let selections = [0, 1].map(|side| {
+            part.samples[side]
+                .iter()
+                .filter(|(_, chosen)| {
+                    side != 0
+                        || part.pools[0].iter().zip(chosen).any(|(&(c, _), &count)| count > 0 && self.classes[c % n].exclusive)
+                            == part.exclusive
+                })
+                .map(|&(p, ref chosen)| {
+                    let mut key = [u8::MAX; 3];
+                    let mut size = 0;
+                    let pool = part.pools[side];
+                    for (&(c, _), &count) in pool.iter().zip(chosen) {
+                        for _ in 0..count {
+                            key[size] = c as u8;
+                            size += 1;
+                        }
+                    }
+                    (p, key)
+                })
+                .collect::<Vec<_>>()
+        });
+        for &(p, leading) in &selections[0] {
+            for &(q, trailing) in &selections[1] {
+                let sides = if part.first == Side::Prefix { [leading, trailing] } else { [trailing, leading] };
+                emit(p * q, sides);
+            }
+        }
+    }
+
+    fn recombine_parts(&self, ctx: &Ctx, s: &State, partner: &[(f64, State)], emit: &mut dyn FnMut(Recombination<'_>)) {
         let n = self.classes.len();
         let rare = State { rarity: Rarity::Rare, ..*s };
         let limit = self.view(&rare).limit();
         for (q, o) in partner {
-            let heirs = if (s.influences, s.eldritch) == (o.influences, o.eldritch) { vec![s] } else { vec![s, o] };
+            let heirs = if (s.influences, s.eldritch, &s.counts[n..2 * n]) == (o.influences, o.eldritch, &o.counts[n..2 * n]) {
+                vec![s]
+            } else {
+                vec![s, o]
+            };
             for heir in &heirs {
                 let q = q / heirs.len() as f64;
-                let allowed = |c: usize| match self.classes[c % n].origin {
-                    Origin::Natural(Some(i)) => heir.influences & 1 << i as u8 != 0,
-                    _ => true,
-                };
-                let sides = Side::BOTH.map(|side| {
-                    let pool: Vec<(usize, u8)> = (0..2 * n)
-                        .filter(|&c| self.classes[c % n].side == side && allowed(c))
-                        .map(|c| (c, s.counts[c] + o.counts[c]))
+                let pools = Side::BOTH.map(|side| {
+                    (0..2 * n)
+                        .filter(|&c| self.classes[c % n].side == side)
+                        .map(|c| (c, if c < n { s.counts[c] + o.counts[c] } else { heir.counts[c] }))
                         .filter(|e| e.1 > 0)
-                        .collect();
-                    let kept = self.kept(ctx, &pool, limit);
-                    (pool, kept)
+                        .collect::<Vec<_>>()
                 });
-                for (p, prefix) in sides[0].1.iter() {
-                    for (r, suffix) in sides[1].1.iter() {
-                        let mut counts = [0; 2 * CLASSES];
-                        for ((pool, _), chosen) in sides.iter().zip([prefix, suffix]) {
-                            for (&(c, _), &count) in pool.iter().zip(chosen) {
-                                counts[c] = count;
-                            }
-                        }
-                        let t = self.settled(State { rarity: heir.rarity, influences: heir.influences, eldritch: heir.eldritch, counts });
-                        emit(q * p * r, t, total);
+                let coupled = pools.iter().all(|pool| pool.iter().any(|&(c, _)| self.classes[c % n].exclusive));
+                for first in 0..if coupled { 2 } else { 1 } {
+                    let second = 1 - first;
+                    let leading = self.kept(ctx, &pools[first], limit, false, heir.influences);
+                    let has_exclusive = pools[first].iter().any(|&(c, _)| self.classes[c % n].exclusive);
+                    for exclusive in [false, true].into_iter().take(if has_exclusive { 2 } else { 1 }) {
+                        let trailing = self.kept(ctx, &pools[second], limit, exclusive, heir.influences);
+                        emit(Recombination {
+                            probability: q / if coupled { 2.0 } else { 1.0 },
+                            influences: heir.influences,
+                            eldritch: heir.eldritch,
+                            first: Side::BOTH[first],
+                            pools: [&pools[first], &pools[second]],
+                            samples: [leading.clone(), trailing],
+                            exclusive,
+                        });
                     }
                 }
             }
         }
     }
 
-    fn kept(&self, ctx: &Ctx, pool: &[(usize, u8)], limit: usize) -> Samples {
-        let size = pool.iter().map(|e| e.1 as usize).sum();
+    fn kept(&self, ctx: &Ctx, pool: &[(usize, u8)], limit: usize, excluded: bool, influences: u8) -> Samples {
+        let n = self.classes.len();
+        let exclusive = |c: usize| self.classes[c % n].exclusive;
+        let eligible = |c: usize| {
+            let class = &self.classes[c % n];
+            class.native
+                && match class.origin {
+                    Origin::Natural(Some(i)) => influences & 1 << i as u8 != 0,
+                    _ => true,
+                }
+        };
+        let exclusive_count: u8 = pool.iter().filter(|e| exclusive(e.0)).map(|e| e.1).sum();
+        let size = pool.iter().filter(|e| !exclusive(e.0)).map(|e| e.1 as usize).sum::<usize>() + usize::from(exclusive_count > 0);
         let table = crate::ops::recombine_kept(ctx, size);
-        let key = (pool.to_vec(), table.iter().map(|&(k, w)| ((k as usize).min(limit), w.to_bits())).collect());
+        let key = (pool.to_vec(), table.iter().map(|&(k, w)| ((k as usize).min(limit), w.to_bits())).collect(), excluded, influences);
         if let Some(out) = self.samples.lock().unwrap().get(&key) {
             return out.clone();
         }
         let all: f64 = table.iter().map(|e| e.1).sum();
         let mut mixed = HashMap::<Vec<u8>, f64>::default();
-        for &(k, w) in table {
-            for (p, chosen) in self.sample(pool, (k as usize).min(limit)) {
-                *mixed.entry(chosen).or_default() += w / all * p;
+        let variants: Vec<_> = if excluded || exclusive_count == 0 {
+            vec![(
+                1.0,
+                pool.iter().map(|&(c, count)| (c, if !eligible(c) || (excluded && exclusive(c)) { 0 } else { count })).collect::<Vec<_>>(),
+            )]
+        } else {
+            pool.iter()
+                .enumerate()
+                .filter(|(_, e)| exclusive(e.0))
+                .map(|(i, e)| {
+                    (
+                        e.1 as f64 / exclusive_count as f64,
+                        pool.iter()
+                            .enumerate()
+                            .map(|(j, &(c, count))| {
+                                (
+                                    c,
+                                    if !eligible(c) {
+                                        0
+                                    } else if exclusive(c) {
+                                        u8::from(i == j)
+                                    } else {
+                                        count
+                                    },
+                                )
+                            })
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        for (probability, variant) in variants {
+            for &(k, w) in table {
+                for (p, chosen) in self.sample(&variant, (k as usize).min(limit)) {
+                    *mixed.entry(chosen).or_default() += probability * w / all * p;
+                }
             }
         }
         let mut out: Vec<_> = mixed.into_iter().map(|(s, p)| (p, s)).collect();
         out.sort_by(|a, b| a.1.cmp(&b.1));
         let out: Samples = out.into();
-        self.samples.lock().unwrap().insert(key, out.clone());
-        out
+        self.samples.lock().unwrap().entry(key).or_insert(out).clone()
     }
 
     /// Distinct affixes drawn uniformly from `pool` ((class, count) entries) until `keep` are

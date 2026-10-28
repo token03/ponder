@@ -14,8 +14,10 @@ Applications are built on that core, not baked into it:
 
 1. **Cost of an item.** The expected cost to make any finished or partial item, compared with
    buying it. This is the first application and the main acceptance test.
-2. **Recipes.** The cheapest method rendered as steps, stop conditions, fallbacks and per-step
-   costs, readable like the crafting guides.
+2. **Recipes.** Competitive methods rendered as short steps, stop conditions, ordinary
+   fallbacks and per-step costs, readable like the crafting guides. Prefer a simpler recipe
+   when its measured cost and risk are comparable; detailed recovery can be requested from
+   the actual item.
 3. **Profit.** Craft cost against sale price over thousands of candidate items from the ladder.
 4. **Anything else the model answers**: selling intermediates, buying partial items, finishing
    an item someone owns, comparing two recipes, how a patch changes a craft.
@@ -86,14 +88,19 @@ every operation.
    game data, changed only by declared modifiers (fossils, essences, metamods, Harvest, influence).
 4. **Random draws.** Every random addition is a weighted draw without replacement from the
    eligible pool, re-evaluated after each draw.
-5. **Fractured mods** are never removed or changed. Fracturing needs a rare with at least four
-   mods, on a base that isn't influenced or synthesised.
+5. **Fractured mods** survive rerolls and removals. Recombination only pools the fractured
+   affixes belonging to the selected input base. Fracturing needs a rare with at least four
+   mods, on a base that isn't influenced or synthesised. Fracturing ignores "Prefixes Cannot
+   Be Changed" and "Suffixes Cannot Be Changed"; neither lock protects an affix from its pick.
 6. **Crafted mods** obey the bench limit (one, or three with the multimod metamod). They are
    removed by "remove crafted mods" or a full reset.
 7. **Metamods** protect exactly what Craft of Exile's table says, operation by operation.
    Essences and fossils cannot be applied with a metamod present.
 8. **Information order.** You block before the outcome is drawn, then choose after seeing it.
    Unveils and Awakener previews are an observation followed by a choice, never one combined step.
+9. **Unpredictable recombination** accepts magic or rare inputs and retains at most one
+   exclusive modifier across the entire output. A natural tiered modifier forced by an
+   essence is not essence-exclusive. Adding influence requires an unfractured item.
 
 ## 5. Modelling rules
 
@@ -110,11 +117,12 @@ every operation.
 4. **Exact where cheap, sampled where not.** An operation may provide an exact outcome
    distribution. Otherwise its outcomes are estimated by sampling, and the plan is marked
    estimated.
-5. **Recombinator failures lose both inputs (for now).** Guides often reuse a failed output
-   ("if it kept the donor's mods, recombine again"). Salvage is the first refinement after
-   recombinators land; until then their costs are upper bounds on that point.
+5. **Unpredictable recombination consumes both inputs.** It produces a new item that may be
+   reused even when the goal was missed. A discovery recipe may use a simple priced fallback
+   and leave elaborate salvage to a recovery request; failure probability is still accounted.
 6. **Purchases are methods.** Buying a base, a partial item or the finished item competes with
    crafting it on equal terms. A missing market quote means "unknown", never "cheap".
+   An owned starting item is available once; restarting does not replenish it for free.
 7. **Selling ends a branch.** Selling an intermediate is a terminal method with negative cost.
    No cycle may earn money.
 
@@ -167,15 +175,28 @@ by repeating operations"), it finds the cheapest policy over the derived states:
 shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
 goal, and solves strongly connected components from the goal backwards with exact policy
 evaluation inside each; evaluation splits again by the components of the chosen policy's graph,
-so each linear solve is only as large as one loop: dense elimination up to 1500 states,
-Gauss-Seidel with self-loops eliminated beyond. A fixed policy (a guide recipe) may give up:
+so each linear solve is only as large as one loop: dense elimination for small components,
+preconditioned BiCGSTAB and Gauss-Seidel with self-loops eliminated for larger ones. A fixed policy (a guide recipe) may give up:
 states it can never finish restart instead, as a crafter abandons a bricked item. Starting over is a restart state worth the start's own value, found by
 Newton steps on the start's affine value, so buying fresh does not merge every state into one
 component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
 item after its reset, so their thousands of outcomes are stored once per hub rather than once
-per item. Recombining an item that holds junk is deferred: it joins a state only once the best
-policy reaches that state, and the graph is solved again until no state the policy reaches lacks
-it. Any wider focused search (iLAO\* and friends) is a later swap behind the same `Model` trait,
+per item. Recombining an item that holds junk can be deferred. With free restart and nonnegative
+costs, the solver obtains a feasible restricted policy, extends its finite values by zero on
+unknown states, and checks every omitted action at every known state, including states outside
+the policy. Violated Bellman inequalities cause admission and another solve. Passing every
+inequality certifies the realized start value. The rules layer batches recombination expectations
+using conditional prefix/suffix operators, preserving donor correlation, fractured inheritance
+and global exclusivity without adding solver states. Boolean support over actual input pairs
+discovers missing successors before parent actions are admitted; their ordinary continuations
+are priced first. Each round admits the best violated action per state and checks all remaining
+actions again. Already-interned successors are linked directly during parallel materialization.
+Recombination probabilities are aggregated by compact side selections and inherited attributes
+before constructing full item states; their joint distribution is preserved.
+Other models use optimistic terminal
+placeholders costing only the immediate action price, expanding their real outcomes when selected;
+their returned policy uses no unexpanded action. Both admission schemes require nonnegative
+continuation costs. Any wider focused search (iLAO\* and friends) is a later swap behind the same `Model` trait,
 adopted only if it wins on the full workload.
 
 **Simulator.** Runs a plan (ponder's policy or a guide recipe) on real items for validation and
@@ -247,8 +268,11 @@ caches.
 | Plain base price | 5c at any item level | Bases are not in the price file. Low. |
 | Bought stage prices | `price` on the guide stage | Rough market estimates, marked in each guide. Low. |
 | Recombinator price | 10 chaos each kind, when the price file has none | Guess. Low. |
-| Recombinator kept affixes | Per side, by pooled count n: n=1 keeps 0/1 at 1:2; 2 keeps 1/2 at 2:1; 3 keeps 1/2/3 at 3:5:2; 4 keeps 1/2/3 at 2:11:7; 5 keeps 2/3 at 1:1; 6+ keeps 2/3 at 3:7. Uniform picks; a pick sharing a group with a kept one is discarded | Craft of Exile's simulator. Medium. |
-| Recombinator bonus mod | 25% when the result has room: an exalt on the side with room (a magic result's empty side) | Craft of Exile's simulator; its rarer recombinator-only mods are not modelled. Medium. |
+| Recombinator kept affixes | Per side, by pooled count n: n=1 keeps 0/1 at 41:59; 2 keeps 1/2 at 2:1; 3 keeps 1/2/3 at 4:5:1; 4 keeps 1/2/3 at 1:6:3; 5 keeps 2/3 at 43:57; 6+ keeps 2/3 at 3:7 | User-supplied current wiki's empirical estimates. Medium; these are estimated distributions, not verified exact game constants. |
+| Recombinator selection | Uniform selection within eligible ordinary candidates, skipping conflicting groups. Non-native ordinary modifiers count before selection but cannot survive on an ineligible heir. | Community model; modifier weighting in the current game is not fully known. Medium/low. |
+| Recombinator exclusives | At most one globally. Each side's exclusive candidates form one count slot, with one candidate selected uniformly among those pooled; either side is processed first at 50/50. | Global cap: user-supplied wiki and original empirical research, high. Count collapse: [post-3.26 experiments](https://www.reddit.com/r/pathofexile/comments/1ldc3lz/326_recomb_psas_a_few_useful_tipsconfirmations/), medium. Side-order and candidate weighting remain modelling assumptions after 3.26. |
+| Recombinator crafted classification | A crafted modifier with an ordinary natural/influenced counterpart in the same data family is non-exclusive; other crafted families are exclusive. Essence-only, veiled, fossil/drop-only and elevated modifiers are exclusive. | Data-derived classification; the full crafted exception list remains incompletely verified. Medium/low. |
+| Recombinator bonus mod | Disabled by default | Current Unpredictable Recombination does not use the old Sentinel bonus roll. The numerical hook remains available to existing assumption-based tests. |
 | Recombinator heir | Base, influences, quality and Eldritch implicits from either item at even odds; item level two above the floor of the mean, at most the higher input's; influenced mods need the heir's influence | Craft of Exile's simulator; item level from [poewiki](https://www.poewiki.net/wiki/Recombinator). Medium. |
 | Fracturing | One uniform pick among all affixes but veiled ones, crafted included; a fractured craft is permanent | User (3.29). High. |
 | "Cannot Be Changed" refill | New mods may land on either side when it has room | Game behaviour as commonly reported. Medium. |

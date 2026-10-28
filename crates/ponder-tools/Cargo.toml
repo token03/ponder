@@ -1,0 +1,13 @@
+[package]
+name = "ponder-tools"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+blake3.workspace = true

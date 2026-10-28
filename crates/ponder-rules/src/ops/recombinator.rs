@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::{Cost, Ctx, Operation, Step, Supply, SupplyRef, View};
+use crate::goal::Rarity;
 
 pub struct Recombinator {
     name: String,
@@ -38,8 +39,8 @@ impl Operation for Recombinator {
         self.name.clone()
     }
 
-    fn applies(&self, _: &Ctx, _: &dyn View) -> bool {
-        true
+    fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
+        item.rarity() != Rarity::Normal && self.partner().items().iter().all(|i| i.rarity != Rarity::Normal)
     }
 
     fn steps(&self) -> &[Step] {

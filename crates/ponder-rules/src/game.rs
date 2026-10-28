@@ -28,6 +28,7 @@ pub struct ModDef {
     pub key: String,
     pub side: Side,
     pub source: Source,
+    pub recombine_exclusive: bool,
     pub groups: Vec<GroupId>,
     /// Tags fossils, Harvest and metamods read (`implicit_tags`).
     pub tags: Vec<TagId>,
@@ -121,6 +122,12 @@ impl Game {
             pools: Mutex::default(),
         };
         let mut group_ids: BTreeMap<String, GroupId> = BTreeMap::new();
+        let natural_families: std::collections::BTreeSet<&str> = repoe
+            .mods
+            .iter()
+            .filter(|(key, m)| matches!(source_of(key, m), Some(Source::Natural | Source::Influence)))
+            .map(|(_, m)| m.family.as_str())
+            .collect();
         for (key, m) in &repoe.mods {
             let side = match m.generation_type.as_str() {
                 "prefix" => Side::Prefix,
@@ -146,6 +153,11 @@ impl Game {
                 key: key.clone(),
                 side,
                 source,
+                recombine_exclusive: match source {
+                    Source::Natural | Source::Influence => false,
+                    Source::Crafted => !natural_families.contains(m.family.as_str()),
+                    _ => true,
+                },
                 groups,
                 tags: m.implicit_tags.iter().map(|t| game.tag(t)).collect(),
                 level: m.required_level,

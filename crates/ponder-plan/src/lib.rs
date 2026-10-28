@@ -2,6 +2,8 @@
 //! crafts feed each other through supplies.
 
 pub mod craft;
+pub mod inspect;
+mod lower;
 pub mod market;
 pub mod recipe;
 pub mod session;

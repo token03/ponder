@@ -7,9 +7,10 @@ use std::sync::Arc;
 use ponder_rules::item::Item;
 use ponder_rules::lens::{Lens, Relaxation, State};
 use ponder_rules::ops::{Ctx, Operation, Step, Supply};
-use ponder_solve::Model;
+use ponder_solve::{IndexedOutcomes, Model};
 use rayon::prelude::*;
 
+use crate::lower::SideBound;
 use crate::market::Market;
 
 /// A solver state of a craft.
@@ -40,9 +41,11 @@ pub struct Craft<'a> {
     continuations: Vec<usize>,
     start_states: Vec<Vec<(f64, State)>>,
     upper_bound: f64,
+    nonnegative: bool,
     finishes: Vec<usize>,
     /// The relaxed craft's values (see [`Craft::solve`]).
     relaxed: Option<(Relaxation, ponder_solve::Solution<Node>)>,
+    side_bound: Option<SideBound>,
 }
 
 impl<'a> Craft<'a> {
@@ -78,7 +81,14 @@ impl<'a> Craft<'a> {
                 })
             })
             .collect();
-        let hubs: Vec<_> = ops.iter().map(|(op, _)| hub(op.steps())).collect();
+        let hubs: Vec<_> = ops
+            .iter()
+            .map(|(op, _)| {
+                hub(op.steps()).filter(|&k| {
+                    ctx.assumptions.recombine_bonus != 0.0 || op.steps()[k..].iter().any(|s| !matches!(s, Step::RecombineBonus))
+                })
+            })
+            .collect();
         let continuations = (0..ops.len())
             .map(|i| {
                 hubs[i]
@@ -87,6 +97,7 @@ impl<'a> Craft<'a> {
             .collect();
         let start_states = starts.iter().map(|s| lens.project_items(s.items())).collect();
         let finishes = ops.iter().enumerate().filter(|(_, (op, _))| op.steps().iter().all(deterministic)).map(|(i, _)| i).collect();
+        let nonnegative = ops.iter().all(|(_, price)| *price >= 0.0) && starts.iter().all(|s| s.price() >= 0.0);
         let mut craft = Craft {
             ctx,
             lens,
@@ -98,8 +109,10 @@ impl<'a> Craft<'a> {
             continuations,
             start_states,
             upper_bound: f64::INFINITY,
+            nonnegative,
             finishes,
             relaxed: None,
+            side_bound: None,
         };
         craft.upper_bound = craft.repeat_bound();
         for (i, dominated) in craft.dominated.iter_mut().enumerate() {
@@ -115,6 +128,13 @@ impl<'a> Craft<'a> {
         let start = [(1.0, Node::Market)];
         match ponder_solve::solve(self, &start, limit) {
             Err(ponder_solve::Error::TooManyStates(n)) => {
+                if self.nonnegative
+                    && self.side_bound.is_none()
+                    && let Some(bound) = SideBound::new(self, limit)
+                {
+                    self.side_bound = Some(bound);
+                    return ponder_solve::solve(self, &start, limit);
+                }
                 let (lens, relaxation) = self.lens.relaxed();
                 let craft = Craft::priced(self.ctx, &lens, self.ops.clone(), self.starts.clone(), self.goal);
                 let relaxed = ponder_solve::solve_everywhere(&craft, &start, limit).map_err(|_| ponder_solve::Error::TooManyStates(n))?;
@@ -127,6 +147,10 @@ impl<'a> Craft<'a> {
 
     pub fn start_states(&self, i: usize) -> &[(f64, State)] {
         &self.start_states[i]
+    }
+
+    pub(crate) fn continuation(&self, i: usize) -> Option<usize> {
+        self.hubs[i]
     }
 
     /// Action id `i` names a purchase rather than an operation.
@@ -177,7 +201,7 @@ impl<'a> Craft<'a> {
     }
 
     fn repeat_bound(&self) -> f64 {
-        if self.ops.iter().any(|(_, price)| *price < 0.0) || self.starts.iter().any(|s| s.price() < 0.0) {
+        if !self.nonnegative {
             return f64::INFINITY;
         }
         let mut groups: Vec<usize> = Vec::new();
@@ -295,6 +319,9 @@ impl Model for Craft<'_> {
     }
 
     fn bound(&self, n: &Node) -> Option<f64> {
+        if let Some(bound) = &self.side_bound {
+            return Some(bound.value(n));
+        }
         let (relaxation, solution) = self.relaxed.as_ref()?;
         let relaxed = match n {
             Node::Item(s) => Node::Item(relaxation.state(s)),
@@ -330,10 +357,9 @@ impl Model for Craft<'_> {
         }
     }
 
-    /// Recombining has hundreds of outcomes. An item holding only what the goal needs is worth
-    /// recombining anywhere; one also holding junk only where the best policy takes it.
     fn defers(&self, n: &Node, i: usize) -> bool {
-        matches!(n, Node::Item(s) if !self.lens.clean(s))
+        self.nonnegative
+            && matches!(n, Node::Item(s) if !self.lens.clean(s))
             && self.ops.get(i).is_some_and(|op| op.0.steps().iter().any(|s| matches!(s, Step::Recombine(_))))
     }
 
@@ -349,6 +375,99 @@ impl Model for Craft<'_> {
             },
             (Node::Hub(_, s), None) => self.nodes(self.finish_operation(s, i).into_iter()),
             _ => Vec::new(),
+        }
+    }
+
+    fn for_each_outcome(&self, n: &Node, i: usize, emit: &mut dyn FnMut(f64, Node)) {
+        if let Node::Item(s) = n
+            && i < self.ops.len()
+            && self.hubs[i].is_none()
+        {
+            self.lens.for_each_outcome(self.ctx, self.ops[i].0.steps(), s, &mut |p, t| {
+                let node = if self.lens.holds(self.goal, &t) {
+                    Node::Goal
+                } else if self.lens.viable(self.goal, &t) {
+                    Node::Item(t)
+                } else {
+                    Node::Restart
+                };
+                emit(p, node);
+            });
+        } else {
+            for (p, t) in self.outcomes(n, i) {
+                emit(p, t);
+            }
+        }
+    }
+
+    fn prepare_expectations<'a>(
+        &'a self,
+        states: &[Node],
+        value: &'a (dyn Fn(&Node) -> f64 + Sync),
+    ) -> impl Fn(&Node, usize) -> Option<f64> + Sync + 'a {
+        let items: Vec<_> = states
+            .iter()
+            .filter_map(|n| match n {
+                Node::Item(s) => Some(*s),
+                _ => None,
+            })
+            .collect();
+        let evaluate = self.lens.prepare_expectations(self.ctx, &items, move |t| {
+            let node = if self.lens.holds(self.goal, t) {
+                Node::Goal
+            } else if self.lens.viable(self.goal, t) {
+                Node::Item(*t)
+            } else {
+                Node::Restart
+            };
+            value(&node)
+        });
+        move |n, i| match n {
+            Node::Item(s) if i < self.ops.len() && self.hubs[i].is_none() => evaluate(s, self.ops[i].0.steps()),
+            _ => None,
+        }
+    }
+
+    fn discover_successors(&self, states: &[&Node], i: usize, missing: &(dyn Fn(&Node) -> bool + Sync)) -> Vec<Node> {
+        if i >= self.ops.len() || self.hubs[i].is_some() {
+            return Vec::new();
+        }
+        let items: Vec<_> = states.iter().filter_map(|s| if let Node::Item(s) = s { Some(*s) } else { None }).collect();
+        self.lens
+            .recombination_successors(self.ctx, &items, self.ops[i].0.steps())
+            .into_iter()
+            .filter_map(|s| {
+                let node = if self.lens.holds(self.goal, &s) {
+                    Node::Goal
+                } else if self.lens.viable(self.goal, &s) {
+                    Node::Item(s)
+                } else {
+                    Node::Restart
+                };
+                missing(&node).then_some(node)
+            })
+            .collect()
+    }
+
+    fn prepare_transitions<'a>(
+        &'a self,
+        states: &[Node],
+        index: &'a (dyn Fn(&Node) -> Option<usize> + Sync),
+    ) -> impl Fn(&Node, usize) -> Option<IndexedOutcomes> + Sync + 'a {
+        let items: Vec<_> = states.iter().filter_map(|n| if let Node::Item(s) = n { Some(*s) } else { None }).collect();
+        let link = self.lens.prepare_transitions(self.ctx, &items, move |t| {
+            let node = if self.lens.holds(self.goal, t) {
+                Node::Goal
+            } else if self.lens.viable(self.goal, t) {
+                Node::Item(*t)
+            } else {
+                Node::Restart
+            };
+            index(&node)
+        });
+        move |n, i| match n {
+            Node::Item(s) if i < self.ops.len() && self.hubs[i].is_none() => link(s, self.ops[i].0.steps()),
+            _ => None,
         }
     }
 }

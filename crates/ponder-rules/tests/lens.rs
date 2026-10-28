@@ -287,7 +287,7 @@ fn recombination_cache_tracks_keep_count_weights() {
     let mut second = first.clone();
     second.recombine_kept[1] = vec![(0, 2.0), (1, 1.0)];
     let state = lens.project(&item);
-    for (assumptions, expected) in [(&first, 2.0 / 3.0), (&second, 1.0 / 3.0), (&first, 2.0 / 3.0)] {
+    for (assumptions, expected) in [(&first, 0.59), (&second, 1.0 / 3.0), (&first, 0.59)] {
         let ctx = Ctx { game: &game, assumptions };
         let out = lens.run(&ctx, recombine.steps(), &state);
         let chance: f64 = out.iter().filter(|(_, s)| lens.holds(0, s)).map(|(p, _)| p).sum();
@@ -382,6 +382,33 @@ fn permanent_conflicts_are_pruned_only_when_they_cannot_be_removed() {
     let lens = Lens::new(&game, kind, vec![flat, fractured], &refs, &[&bad]);
     assert!(lens.viable(0, &lens.project(&bad)));
     assert!(lens.viable(1, &lens.project(&bad)));
+}
+
+#[test]
+fn fractured_items_cannot_gain_a_missing_influence_without_recombination() {
+    let game = Game::new(Repoe::load(&root().join("fixtures/repoe")).unwrap());
+    let guide: Guide =
+        toml::from_str(&std::fs::read_to_string(root().join("fixtures/guides/ama-327-hunter-attribute-belt.toml")).unwrap()).unwrap();
+    let kind = Kind { base: game.base(&guide.base_name()).unwrap(), ilvl: 86, influences: Influences::default() };
+    let target = Target::compile(&game, &guide.target("suffixes").unwrap()).unwrap();
+    let mut start = Target::compile(&game, &guide.target("attributes").unwrap()).unwrap();
+    start.min_mods = 0;
+    let mut item = start.witness(&game, kind).unwrap();
+    item.affixes[0].fractured = true;
+    let influence = parse(&game, "Belt", "influence-exalted:hunter", &[]).unwrap();
+    let assumptions = Assumptions::default();
+    let ctx = Ctx { game: &game, assumptions: &assumptions };
+    let lens = Lens::new(&game, kind, vec![target.clone()], &[influence.as_ref()], &[&item]);
+    assert!(!influence.applies(&ctx, &(&game, &item)));
+    assert!(!lens.viable(0, &lens.project(&item)));
+    item.affixes[0].fractured = false;
+    assert!(influence.applies(&ctx, &(&game, &item)));
+    assert!(lens.viable(0, &lens.project(&item)));
+    item.affixes[0].fractured = true;
+    let partner = Arc::new(Handful { items: vec![item.clone()] });
+    let recombine = Recombinator::new("Belt", "rescue", partner);
+    let lens = Lens::new(&game, kind, vec![target], &[influence.as_ref(), &recombine], &[&item]);
+    assert!(lens.viable(0, &lens.project(&item)));
 }
 
 #[test]
