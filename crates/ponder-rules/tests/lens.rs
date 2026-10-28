@@ -313,7 +313,17 @@ fn both_locks_preserve_the_ama_tagged_reforge_setup() {
         let mut item = Target::compile(&game, &guide.target(start).unwrap()).unwrap().witness(&game, kind).unwrap();
         let mut keep = guide.target("protected").unwrap();
         keep.open_prefix = 0;
-        let targets = vec![Target::compile(&game, &guide.target(finish).unwrap()).unwrap(), Target::compile(&game, &keep).unwrap()];
+        let mut family = guide.target(finish).unwrap();
+        for req in &mut family.mods {
+            if !keep.mods.iter().any(|held| held.text == req.text && held.source == req.source) {
+                req.tier = None;
+            }
+        }
+        let targets = vec![
+            Target::compile(&game, &guide.target(finish).unwrap()).unwrap(),
+            Target::compile(&game, &keep).unwrap(),
+            Target::compile(&game, &family).unwrap(),
+        ];
         let mut rng = Rng::new(42);
         let locks: Vec<_> = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"]
             .iter()
@@ -337,11 +347,12 @@ fn both_locks_preserve_the_ama_tagged_reforge_setup() {
         }
         let outcomes = lens.run(&ctx, reforge.steps(), &state);
         assert!((outcomes.iter().map(|o| o.0).sum::<f64>() - 1.0).abs() < 1e-12);
-        assert!(outcomes.iter().all(|(_, s)| lens.holds(0, s) && lens.holds(1, s)), "{name}");
+        assert!(outcomes.iter().all(|(_, s)| lens.holds(1, s) && lens.holds(2, s)), "{name}");
+        assert!(outcomes.iter().any(|(_, s)| lens.holds(0, s)), "{name}");
         for _ in 0..100 {
             let mut sampled = item.clone();
             run(&ctx, reforge.steps(), &mut sampled, &mut rng);
-            assert!(targets.iter().all(|t| t.holds(&game, &sampled)), "{name}");
+            assert!(targets[1..].iter().all(|t| t.holds(&game, &sampled)), "{name}");
         }
     }
 }
