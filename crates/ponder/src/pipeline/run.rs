@@ -10,15 +10,13 @@ use ponder_game::pob;
 use ponder_net::ladder::Lite;
 use rayon::prelude::*;
 
-use super::build::{ClusterOpts, GearOpts, add_fractures, build_gear, estimate_cluster, estimate_item};
+use super::build::{ClusterOpts, GearOpts, build_gear, estimate_cluster, estimate_item};
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
-use super::pivots::add_pivots;
-use super::solving::price_routes;
-use super::solving::solve_estimates;
+use super::solving::{in_pool, solve_estimates};
 use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
-use crate::demand::{self, Archetype};
-use crate::mine::{self, Candidate};
+use crate::candidate::{self, Archetype};
+use crate::pattern::{self, Pattern};
 
 /// What `run` is asked for (Python's keyword arguments).
 #[derive(Clone, Debug)]
@@ -27,28 +25,17 @@ pub struct RunOpts {
     pub max_targets: usize,
     pub min_builds: usize,
     pub top: usize,
-    pub fractures: bool,
     pub exact: bool,
     pub trade_lookup: bool,
     /// caps trade searches (cached answers are free)
     pub trade_budget: usize,
-    /// threads for solving; `Some(1)` solves inline
+    /// threads for solving; `Some(1)` processes products sequentially
     pub workers: Option<usize>,
 }
 
 impl Default for RunOpts {
     fn default() -> RunOpts {
-        RunOpts {
-            settle: 0,
-            max_targets: 6,
-            min_builds: 2,
-            top: 30,
-            fractures: false,
-            exact: false,
-            trade_lookup: false,
-            trade_budget: 40,
-            workers: None,
-        }
+        RunOpts { settle: 0, max_targets: 6, min_builds: 2, top: 30, exact: false, trade_lookup: false, trade_budget: 40, workers: None }
     }
 }
 
@@ -90,7 +77,7 @@ fn say(progress: Option<Progress>, msg: &str) {
 
 /// Load builds, match their rares to mod ids, and turn each rare into a craft: the target mods
 /// plus the group of bases that roll exactly the same mods. Crafts that several builds need are
-/// merged. Every craft gets the cheapest plan, and optionally fracture options and trade prices.
+/// merged. Every craft gets a native plan when supported, and optionally trade prices.
 pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progress: Option<Progress>) -> Result<Report> {
     let (table, prices_source) = cx.prices.load()?;
     let league = current_league(cx);
@@ -153,23 +140,19 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
     let mut extra: Vec<Estimate> = Vec::new();
     if infos.len() >= 2 {
         say(progress, "mining shared combinations");
-        for c in mine::mine(&matched, 2, 4, opts.min_builds, true).into_iter().take(opts.top) {
+        for c in pattern::mine(&matched, 2, 4, opts.min_builds, true).into_iter().take(opts.top) {
             let slot = shared_estimate(cx, &c, &estimates, &mut extra, &table, &league);
-            shared.push(Shared { candidate: c, estimate: slot });
+            shared.push(Shared { pattern: c, estimate: slot });
         }
     }
 
-    if opts.fractures {
-        for e in estimates.iter_mut() {
-            add_fractures(cx, e, &league, Some(&table), true);
-        }
-    }
-    price_routes(cx, db, &mut estimates, &table, &league, opts.workers, progress);
+    solve_estimates(cx, &mut estimates, &table, opts.workers, progress);
     solve_estimates(cx, &mut extra, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..estimates.len()).collect();
         order.sort_by(|&a, &b| cmp_priority(&estimates[a], &estimates[b]));
         price_on_trade(cx, &mut estimates, &order, &table, &league, opts.trade_budget, progress);
+        solve_estimates(cx, &mut estimates, &table, opts.workers, progress);
     }
     Ok(Report {
         builds: infos,
@@ -186,10 +169,10 @@ pub fn run(cx: &Context, db: &ModDB, sources: &[String], opts: &RunOpts, progres
 /// A cluster combination's estimate: the build's own when it has one, else a new one (kept in `extra`).
 fn shared_estimate(
     cx: &Context,
-    c: &Candidate,
+    c: &Pattern,
     estimates: &[Estimate],
     extra: &mut Vec<Estimate>,
-    table: &ponder_core::Prices,
+    table: &crate::gear::Prices,
     league: &str,
 ) -> Option<Slot> {
     let (size, tag) = c.item_class.split_once(" cluster: ")?;
@@ -230,60 +213,26 @@ pub fn ladder(
         }
     };
     say(progress, "matching ladder items");
-    let worn = demand::wear(db, &characters, None);
-    let clusters = demand::wear_clusters(&characters, None);
+    let items = crate::item::normalize(db, &characters);
+    let worn = items.gear;
+    let clusters = items.clusters;
     let group = opts.group.as_ref().map(|g| g.to_lowercase());
-    let found: Vec<Archetype> = demand::archetypes(&worn, opts.min_characters, 4, 2, 0.7)
+    let found: Vec<Archetype> = candidate::merge(&worn, opts.min_characters, 4, 2, 0.7)
         .into_iter()
         .filter(|a| group.as_ref().is_none_or(|g| a.group.to_lowercase().contains(g.as_str())))
         .collect();
-    let found_cl: Vec<demand::ClusterArchetype> = demand::cluster_archetypes(&clusters, opts.min_characters, 0.8)
+    let found_cl: Vec<candidate::Cluster> = candidate::clusters(&clusters, opts.min_characters, 0.8)
         .into_iter()
         .filter(|a| group.as_ref().is_none_or(|g| a.title().to_lowercase().contains(g.as_str())))
         .collect();
-    // The most worn overall, plus the top few of every base group, so niche
-    // groups (quivers, claws, shields...) get costed too, not just rings and boots.
-    let mut picked: Vec<usize> = Vec::new();
-    let mut per: HashMap<&str, usize> = HashMap::new();
-    for (i, a) in found.iter().enumerate() {
-        let n = per.entry(a.group.as_str()).or_insert(0);
-        if picked.len() < opts.gear_top || *n < opts.per_group {
-            picked.push(i);
-            *n += 1;
-        }
-    }
-    // ...and the most niche: 3+ mods worn together far more than chance (one build's item).
-    let chosen: HashSet<usize> = picked.iter().copied().collect();
-    let niche_of: Vec<f64> = found.iter().map(Archetype::niche).collect();
-    let mut by_niche: Vec<usize> = (0..found.len()).collect();
-    by_niche.sort_by(|&a, &b| niche_of[b].partial_cmp(&niche_of[a]).unwrap_or(std::cmp::Ordering::Equal));
-    let mut niches: Vec<usize> = Vec::new();
-    for i in by_niche {
-        let a = &found[i];
-        if niches.len() >= opts.niche {
-            break;
-        }
-        if chosen.contains(&i) || a.families.len() < 3 {
-            continue;
-        }
-        // Variants of one niche item (the same mods give or take one) are costed once.
-        let variant = niches.iter().any(|&j| {
-            let o = &found[j];
-            let shared = o.families.iter().filter(|f| a.families.contains(f)).count() as i64;
-            o.group == a.group && shared >= o.families.len().min(a.families.len()) as i64 - 1
-        });
-        if !variant {
-            niches.push(i);
-        }
-    }
-    picked.extend(niches);
+    let picked = candidate::select(&found, opts.gear_top, opts.per_group, opts.niche);
     say(progress, &format!("building {} gear crafts", picked.len()));
     let built: Vec<Option<Estimate>> =
         in_pool(opts.workers, || picked.par_iter().map(|&i| build_gear(cx, db, &found[i], &table, &league)).collect());
     let mut estimates: indexmap::IndexMap<Key, Estimate> = indexmap::IndexMap::new();
     for (&i, est) in picked.iter().zip(built) {
         let a = &found[i];
-        let Some(mut est) = est.filter(|e| e.error.is_none() && !estimates.contains_key(&e.key)) else {
+        let Some(mut est) = est.filter(|e| !estimates.contains_key(&e.key)) else {
             continue;
         };
         est.demand = a.characters;
@@ -304,19 +253,16 @@ pub fn ladder(
         }
         est.demand = a.characters;
         est.skills = a.skills.most_common().into_iter().take(3).map(|(s, _)| s.clone()).collect();
-        add_fractures(cx, &mut est, &league, Some(&table), true); // fractured bases are most of the cluster market's money
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
-    price_routes(cx, db, &mut out, &table, &league, opts.workers, progress);
+    solve_estimates(cx, &mut out, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..out.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(out[i].demand));
         price_on_trade(cx, &mut out, &order, &table, &league, opts.trade_budget, progress);
+        solve_estimates(cx, &mut out, &table, opts.workers, progress);
     }
-    // after pricing: a priced fractured base can change the recipe the pivots follow
-    say(progress, "finding pivots");
-    in_pool(opts.workers, || add_pivots(&mut out));
     Ok(LadderReport {
         characters: characters.len(),
         items: worn.len(),
@@ -328,14 +274,6 @@ pub fn ladder(
         league,
         divine: table.get("divine").copied().unwrap_or(0.0),
     })
-}
-
-/// Run `f` on a pool of `workers` threads, or on rayon's global pool.
-fn in_pool<T: Send>(workers: Option<usize>, f: impl FnOnce() -> T + Send) -> T {
-    match workers.filter(|w| *w > 0).and_then(|w| rayon::ThreadPoolBuilder::new().num_threads(w).build().ok()) {
-        Some(pool) => pool.install(f),
-        None => f(),
-    }
 }
 
 /// A text file listing links (one per line, # comments) stands for those links.
@@ -374,7 +312,7 @@ pub fn build_name(build: &pob::Build) -> String {
     format!("{who} lvl {}: {}", build.level, build.main_skill.as_deref().filter(|s| !s.is_empty()).unwrap_or("?"))
 }
 
-/// The newest league poe.ninja lists, else "Standard" (offline).
+/// The league of the saved prices, else "Standard" (offline).
 pub fn current_league(cx: &Context) -> String {
-    cx.prices.leagues().ok().and_then(|l| l.into_iter().next()).unwrap_or_else(|| "Standard".into())
+    cx.prices.cached_league().unwrap_or_else(|| "Standard".into())
 }

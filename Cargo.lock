@@ -750,18 +750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_plot"
-version = "0.38.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c34f8fe086d7e69ce558dcc85f7c7be593092525d01cb30caa560044bc2bbaa"
-dependencies = [
- "ahash",
- "egui",
- "emath",
- "nohash-hasher",
-]
-
-[[package]]
 name = "egui_tiles"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2396,9 +2384,11 @@ dependencies = [
  "faer",
  "flate2",
  "indexmap",
- "ponder-core",
  "ponder-game",
  "ponder-net",
+ "ponder-plan",
+ "ponder-rules",
+ "ponder-solve",
  "postcard",
  "rayon",
  "regex",
@@ -2415,10 +2405,8 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
- "egui_plot",
  "egui_tiles",
  "ponder",
- "ponder-core",
  "ponder-game",
  "ponder-net",
  "serde",
@@ -2438,26 +2426,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ponder-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "faer",
- "flate2",
- "rayon",
- "rustc-hash 2.1.3",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ponder-game"
 version = "0.1.0"
 dependencies = [
  "base64",
  "flate2",
  "indexmap",
- "ponder-core",
+ "rayon",
  "regex",
  "roxmltree",
  "serde",
@@ -2474,6 +2449,7 @@ dependencies = [
  "form_urlencoded",
  "indexmap",
  "percent-encoding",
+ "rayon",
  "serde",
  "serde_json",
  "ureq",
@@ -2507,6 +2483,7 @@ dependencies = [
 name = "ponder-solve"
 version = "0.1.0"
 dependencies = [
+ "faer",
  "rayon",
  "rustc-hash 2.1.3",
 ]

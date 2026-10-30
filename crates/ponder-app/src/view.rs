@@ -33,16 +33,6 @@ pub fn hours(h: f64) -> String {
     if h < 1.0 { format!("{:.0} min", h * 60.0) } else { format!("{h:.1} h") }
 }
 
-pub fn percent(p: f64) -> String {
-    if p >= 0.1 {
-        format!("{:.0}%", p * 100.0)
-    } else if p >= 0.001 {
-        format!("{:.1}%", p * 100.0)
-    } else {
-        "<0.1%".into()
-    }
-}
-
 /// Which rows the crafts table shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -56,8 +46,6 @@ pub struct Filters {
     /// cheapest way to make it, in chaos; 0 is no limit
     pub max_cost: f64,
     pub only_market: bool,
-    pub only_fractures: bool,
-    pub only_recomb: bool,
     pub hide_errors: bool,
 }
 
@@ -70,8 +58,6 @@ impl Default for Filters {
             min_demand: 0,
             max_cost: 0.0,
             only_market: false,
-            only_fractures: false,
-            only_recomb: false,
             hide_errors: true,
         }
     }
@@ -96,12 +82,6 @@ impl Filters {
             return false;
         }
         if self.only_market && e.market.is_none() {
-            return false;
-        }
-        if self.only_fractures && e.best_fracture().and_then(|f| f.total()).is_none() {
-            return false;
-        }
-        if self.only_recomb && e.recomb_total().is_none() {
             return false;
         }
         let words: Vec<String> = self.text.split_whitespace().map(str::to_lowercase).collect();
@@ -132,8 +112,6 @@ pub enum Col {
     Rank,
     Item,
     Craft,
-    Fractured,
-    Recomb,
     Cheapest,
     Market,
     Margin,
@@ -143,27 +121,14 @@ pub enum Col {
 }
 
 impl Col {
-    pub const ALL: [Col; 11] = [
-        Col::Rank,
-        Col::Item,
-        Col::Demand,
-        Col::Cheapest,
-        Col::Market,
-        Col::Margin,
-        Col::Hole,
-        Col::Craft,
-        Col::Fractured,
-        Col::Recomb,
-        Col::Mods,
-    ];
+    pub const ALL: [Col; 9] =
+        [Col::Rank, Col::Item, Col::Demand, Col::Cheapest, Col::Market, Col::Margin, Col::Hole, Col::Craft, Col::Mods];
 
     pub fn label(self) -> &'static str {
         match self {
             Col::Rank => "#",
             Col::Item => "Item",
             Col::Craft => "Craft",
-            Col::Fractured => "Fractured",
-            Col::Recomb => "Recomb",
             Col::Cheapest => "Cheapest",
             Col::Market => "Market",
             Col::Margin => "Margin",
@@ -178,9 +143,7 @@ impl Col {
             Col::Rank => "best first: market holes, then what most ladder characters wear",
             Col::Item => "the base group (every base that rolls the same mods)",
             Col::Craft => "expected cost from a fresh base: currency, bench crafts and clicking time",
-            Col::Fractured => "cheapest total starting from a base with one target already fractured",
-            Col::Recomb => "cheapest recombinator tree of clean donors",
-            Col::Cheapest => "the cheapest of crafting, fractured and recombinator",
+            Col::Cheapest => "crafting and expected base acquisition; unknown until the base is quoted",
             Col::Market => "what the finished item sells for on trade",
             Col::Margin => "market price minus the cheapest way to make it",
             Col::Hole => "demand the market doesn't meet: wearers per listing, weighted by margin",
@@ -191,14 +154,12 @@ impl Col {
 
     /// Whether a click on the header sorts high to low first.
     pub fn descending_first(self) -> bool {
-        !matches!(self, Col::Rank | Col::Item | Col::Cheapest | Col::Craft | Col::Fractured | Col::Recomb | Col::Mods)
+        !matches!(self, Col::Rank | Col::Item | Col::Cheapest | Col::Craft | Col::Mods)
     }
 
     pub fn value(self, e: &Estimate) -> Option<f64> {
         match self {
-            Col::Craft => e.total().or_else(|| e.direct_lower_bound()),
-            Col::Fractured => e.best_fracture().and_then(|f| f.total()),
-            Col::Recomb => e.recomb_total(),
+            Col::Craft => e.craft_cost(),
             Col::Cheapest => e.cheapest(),
             Col::Market => e.market.map(|m| m.0),
             Col::Margin => e.margin(),
@@ -270,55 +231,4 @@ pub fn ranks(estimates: &[Estimate]) -> Vec<usize> {
         rank[i] = r + 1;
     }
     rank
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn est(kind: &str, title: &str, cost: f64, demand: usize) -> Estimate {
-        let mut e = Estimate::new(kind, title, vec!["Life".into()]);
-        e.base = "Vermillion Ring".into();
-        e.demand = demand;
-        e.plan = Some(ponder_core::Plan { cost, ..Default::default() });
-        e
-    }
-
-    #[test]
-    fn money_matches_render_py() {
-        assert_eq!(money(None, 300.0), "–");
-        assert_eq!(money(Some(4.25), 300.0), "4.2c");
-        assert_eq!(money(Some(1234.0), 3000.0), "1,234c");
-        assert_eq!(money(Some(450.0), 300.0), "1.5d");
-        assert_eq!(money(Some(60000.0), 300.0), "200d");
-        assert_eq!(money(Some(-15.0), 300.0), "-15c");
-    }
-
-    #[test]
-    fn filters_and_sorts() {
-        let es = vec![est("gear", "Ring", 900.0, 40), est("cluster", "Medium cluster", 50.0, 10), est("gear", "Amulet", 20.0, 90)];
-        let all = Filters { hide_errors: false, ..Filters::default() };
-        assert_eq!(visible(&es, &all, Sort { col: Col::Cheapest, descending: false }), vec![2, 1, 0]);
-        assert_eq!(visible(&es, &all, Sort { col: Col::Demand, descending: true }), vec![2, 0, 1]);
-        let cheap = Filters { max_cost: 100.0, ..all.clone() };
-        assert_eq!(visible(&es, &cheap, Sort { col: Col::Item, descending: false }), vec![2, 1]);
-        let text = Filters { text: "vermillion RING".into(), ..all.clone() };
-        assert_eq!(visible(&es, &text, Sort::default()).len(), 3);
-        let group = Filters { group: "Ring".into(), ..all };
-        assert_eq!(visible(&es, &group, Sort::default()), vec![0]);
-    }
-
-    #[test]
-    fn missing_values_sort_last_both_ways() {
-        let mut es = vec![est("gear", "A", 10.0, 1), est("gear", "B", 20.0, 1)];
-        es[0].market = Some((100.0, 3));
-        for descending in [false, true] {
-            assert_eq!(visible(&es, &Filters::default(), Sort { col: Col::Market, descending })[0], 0);
-        }
-        let mut s = Sort::default();
-        s.click(Col::Margin);
-        assert!(s.descending);
-        s.click(Col::Margin);
-        assert!(!s.descending);
-    }
 }

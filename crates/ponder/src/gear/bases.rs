@@ -34,19 +34,19 @@ impl BaseGroup {
 
 /// Every prefix or suffix that can roll on a base with these tags at this item level, in `mods.json` order.
 ///
-/// Remembered per (domain, tags, level): recombinator planning asks for the same few bases thousands of times.
-pub fn pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<Mod> {
+/// Remembered per (domain, tags, level): demand mining repeatedly visits the same base groups.
+pub fn pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<PoolMod> {
     shared_pool(db, base_id, tags, item_level).as_ref().clone()
 }
 
-pub fn shared_pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Arc<Vec<Mod>> {
+pub fn shared_pool(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Arc<Vec<PoolMod>> {
     type Key = (DatabaseKey, String, BTreeSet<String>, i64);
-    static POOLS: Memo<Key, Arc<Vec<Mod>>> = Memo::new();
+    static POOLS: Memo<Key, Arc<Vec<PoolMod>>> = Memo::new();
     let key = (DatabaseKey::new(db), db.bases[base_id].domain.clone(), tags.clone(), item_level);
     POOLS.get_or_init(key, || Arc::new(pool_uncached(db, base_id, tags, item_level)))
 }
 
-fn pool_uncached(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<Mod> {
+fn pool_uncached(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, item_level: i64) -> Vec<PoolMod> {
     let domain = &db.bases[base_id].domain;
     let mut out = Vec::new();
     for (mod_id, m) in db.mods.iter() {

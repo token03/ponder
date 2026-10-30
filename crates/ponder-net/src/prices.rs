@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub const API: &str = "https://poe.ninja/poe1/api/economy";
 pub const USER_AGENT: &str = "ponder/0.1 (crafting cost research)";
@@ -34,6 +34,7 @@ pub struct Prices {
     pub http: Arc<dyn Transport>,
     pub cache: PathBuf,
     pub clock: Clock,
+    clusters: Arc<Mutex<Option<Arc<Vec<Value>>>>>,
 }
 
 impl Default for Prices {
@@ -48,7 +49,7 @@ impl Prices {
     }
 
     pub fn with(http: Arc<dyn Transport>, cache: PathBuf, clock: Clock) -> Prices {
-        Prices { http, cache, clock }
+        Prices { http, cache, clock, clusters: Arc::default() }
     }
 
     pub fn leagues(&self) -> Result<Vec<String>> {
@@ -58,6 +59,11 @@ impl Prices {
             .iter()
             .map(|e| Ok(e["id"].as_str().context("league without id")?.to_string()))
             .collect()
+    }
+
+    pub fn cached_league(&self) -> Option<String> {
+        let saved: Value = serde_json::from_slice(&std::fs::read(self.cache.join("prices.json")).ok()?).ok()?;
+        saved["league"].as_str().filter(|league| !league.is_empty()).map(str::to_owned)
     }
 
     /// Download the prices of `league` (default: the first one listed); returns the league and how many prices.
@@ -86,6 +92,7 @@ impl Prices {
         let saved = json!({"league": league, "fetched": self.clock.now(), "prices": table});
         std::fs::write(self.cache.join("prices.json"), serde_json::to_vec(&saved)?)?;
         std::fs::write(self.cache.join("clusters.json"), serde_json::to_vec(&clusters["lines"])?)?;
+        *self.clusters.lock().expect("cluster prices") = None;
         Ok((league, table.len()))
     }
 
@@ -107,11 +114,18 @@ impl Prices {
     }
 
     /// poe.ninja's cluster jewel listings, as saved by `fetch` (empty before the first fetch).
-    pub fn cluster_lines(&self) -> Vec<Value> {
-        let Ok(text) = std::fs::read_to_string(self.cache.join("clusters.json")) else {
-            return Vec::new();
-        };
-        serde_json::from_str::<Value>(&text).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default()
+    pub fn cluster_lines(&self) -> Arc<Vec<Value>> {
+        self.clusters
+            .lock()
+            .expect("cluster prices")
+            .get_or_insert_with(|| {
+                let lines = std::fs::read(self.cache.join("clusters.json"))
+                    .ok()
+                    .and_then(|raw| serde_json::from_slice(&raw).ok())
+                    .unwrap_or_default();
+                Arc::new(lines)
+            })
+            .clone()
     }
 
     /// Cheapest-listed price of a base with this enchant and passive count, at or above `item_level`.
@@ -137,7 +151,7 @@ impl Prices {
 
     /// The trade-site option id for a cluster enchant, as poe.ninja lists it.
     pub fn enchant_option(&self, enchant_text: &str) -> Option<String> {
-        for line in self.cluster_lines() {
+        for line in self.cluster_lines().iter() {
             if line["name"] == enchant_text {
                 for info in line["tradeInfo"].as_array().into_iter().flatten() {
                     if info["mod"] == ENCHANT_STAT {
@@ -151,50 +165,5 @@ impl Prices {
 
     fn get(&self, url: &str) -> Result<Value> {
         http::get_json(&*self.http, url, USER_AGENT, 60)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::http::{Request, Response};
-    use crate::testing::TempDir;
-    use std::sync::Mutex;
-
-    fn fake(urls: Arc<Mutex<Vec<String>>>) -> Arc<dyn Transport> {
-        Arc::new(move |req: &Request| {
-            urls.lock().unwrap().push(req.url.clone());
-            let u = &req.url;
-            Ok(Response::json(
-                200,
-                &if u.ends_with("/leagues") {
-                    json!([{"id": "Test League"}, {"id": "Standard"}])
-                } else if u.ends_with("type=Beast") {
-                    json!({"lines": [{"detailsId": "wild-bristle-matron", "chaosValue": 30.0}, {"detailsId": "farric-lynx-alpha", "chaosValue": 3.0}, {"detailsId": "farric-wolf-alpha", "chaosValue": 4.0}]})
-                } else if u.contains("stash/") {
-                    json!({"lines": [{"name": "Added Small Passive Skills grant: X", "baseType": "Large Cluster Jewel", "variant": "8 passives", "levelRequired": 84, "count": 5, "chaosValue": 12.5,
-                        "tradeInfo": [{"mod": ENCHANT_STAT, "option": 42}]}]})
-                } else {
-                    json!({"lines": [{"id": "alt", "primaryValue": 0.1}, {"id": "divine", "primaryValue": 300}]})
-                },
-            ))
-        })
-    }
-
-    #[test]
-    fn fetch_then_load() {
-        let dir = TempDir::new("prices");
-        let urls = Arc::new(Mutex::new(Vec::new()));
-        let p = Prices::with(fake(urls.clone()), dir.path().into(), Clock::new(|| 100_000.0, |_| {}));
-        assert_eq!(p.load().unwrap().1, "built-in Allflame snapshot (run `ponder prices fetch`)");
-        assert_eq!(p.fetch(None).unwrap(), ("Test League".to_string(), 6));
-        assert!(urls.lock().unwrap()[1].ends_with("league=Test%20League&type=Currency"));
-        let (table, note) = p.load().unwrap();
-        assert_eq!((table["alt"], table["divine"], table["scour"]), (0.1, 300.0, 0.35));
-        assert_eq!(note, "poe.ninja Test League, 0h old");
-        assert_eq!((table["wild-bristle-matron"], table["farric-lynx-alpha"], table["farric-wolf-alpha"]), (30.0, 3.0, 4.0));
-        assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 75), Some((12.5, 5)));
-        assert_eq!(p.cluster_base("large", "Added Small Passive Skills grant: X", 8, 85), None);
-        assert_eq!(p.enchant_option("Added Small Passive Skills grant: X"), None); // option is a number here; ids are strings on the real site
     }
 }

@@ -1,21 +1,23 @@
-pub(super) struct Ilu {
-    rows: Vec<Row>,
-}
+use crate::linear::{SparseMatrix, SparseRows};
 
-struct Row {
-    lower: Vec<(usize, f64)>,
-    upper: Vec<(usize, f64)>,
-    diagonal: f64,
+pub(super) struct Ilu {
+    lower: SparseRows,
+    upper: SparseRows,
+    diagonal: Vec<f64>,
 }
 
 impl Ilu {
-    pub(super) fn new(probabilities: &[Vec<(usize, f64)>]) -> Option<Self> {
+    pub(super) fn new(probabilities: &SparseMatrix) -> Option<Self> {
         let n = probabilities.len();
-        let mut rows: Vec<Row> = Vec::with_capacity(n);
+        let mut lower = SparseRows::new(n);
+        let mut upper = SparseRows::new(n);
+        let mut diagonal = Vec::with_capacity(n);
         let mut work = vec![0.0; n];
         let mut marked = vec![usize::MAX; n];
-        for (i, source) in probabilities.iter().enumerate() {
-            let mut columns: Vec<_> = source.iter().map(|&(j, _)| j).chain(std::iter::once(i)).collect();
+        let mut columns = Vec::new();
+        for (i, source) in probabilities.rows().enumerate() {
+            columns.clear();
+            columns.extend(source.iter().map(|&(j, _)| j).chain(std::iter::once(i)));
             columns.sort_unstable();
             columns.dedup();
             for &j in &columns {
@@ -26,38 +28,40 @@ impl Ilu {
             for &(j, p) in source {
                 work[j] -= p;
             }
-            let mut lower = Vec::new();
             for j in columns.iter().copied().take_while(|&j| j < i) {
-                let multiplier = work[j] / rows[j].diagonal;
+                let multiplier = work[j] / diagonal[j];
                 if multiplier == 0.0 {
                     continue;
                 }
-                lower.push((j, multiplier));
-                for &(k, value) in &rows[j].upper {
+                lower.push(j, multiplier);
+                for &(k, value) in upper.row(j) {
                     if marked[k] == i {
                         work[k] -= multiplier * value;
                     }
                 }
             }
-            let diagonal = work[i];
-            if !diagonal.is_finite() || diagonal < 1e-14 {
+            let pivot = work[i];
+            if !pivot.is_finite() || pivot < 1e-14 {
                 return None;
             }
-            let upper = columns.into_iter().filter(|&j| j > i && work[j] != 0.0).map(|j| (j, work[j])).collect();
-            rows.push(Row { lower, upper, diagonal });
+            for &j in columns.iter().filter(|&&j| j > i && work[j] != 0.0) {
+                upper.push(j, work[j]);
+            }
+            lower.finish_row();
+            upper.finish_row();
+            diagonal.push(pivot);
         }
-        Some(Self { rows })
+        Some(Self { lower, upper, diagonal })
     }
 
-    pub(super) fn apply(&self, rhs: &[f64]) -> Vec<f64> {
-        let mut x = rhs.to_vec();
-        for (i, row) in self.rows.iter().enumerate() {
-            let inflow: f64 = row.lower.iter().map(|&(j, value)| value * x[j]).sum();
+    pub(super) fn apply(&self, rhs: &[f64], x: &mut [f64]) {
+        x.copy_from_slice(rhs);
+        for (i, row) in self.lower.rows().enumerate() {
+            let inflow: f64 = row.iter().map(|&(j, value)| value * x[j]).sum();
             x[i] -= inflow;
         }
-        for (i, row) in self.rows.iter().enumerate().rev() {
-            x[i] = (x[i] - row.upper.iter().map(|&(j, value)| value * x[j]).sum::<f64>()) / row.diagonal;
+        for (i, row) in self.upper.rows().enumerate().rev() {
+            x[i] = (x[i] - row.iter().map(|&(j, value)| value * x[j]).sum::<f64>()) / self.diagonal[i];
         }
-        x
     }
 }

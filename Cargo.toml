@@ -9,7 +9,6 @@ license = "MIT"
 rust-version = "1.99"
 
 [workspace.dependencies]
-ponder-core = { path = "crates/ponder-core" }
 ponder-game = { path = "crates/ponder-game" }
 ponder-net = { path = "crates/ponder-net" }
 ponder = { path = "crates/ponder" }
@@ -40,7 +39,10 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
-[profile.dev.package.ponder-core]
+[profile.dev.package.ponder-solve]
+opt-level = 3
+
+[profile.dev.package.ponder-game]
 opt-level = 3
 
 [profile.dev.package.ponder-app]

@@ -224,8 +224,6 @@ fn filters(ui: &mut Ui, s: &mut State) {
         ui.end_row();
     });
     ui.checkbox(&mut f.only_market, "priced on trade");
-    ui.checkbox(&mut f.only_fractures, "has a fractured-base option");
-    ui.checkbox(&mut f.only_recomb, "has a recombinator tree");
     ui.checkbox(&mut f.hide_errors, "hide failed estimates");
     if *f != before {
         s.refilter();
@@ -245,19 +243,6 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for msg in self.state.jobs.drain() {
             self.state.handle(msg);
-        }
-        // a pasted item lands in the Finish box even when it isn't focused
-        let pasted = ctx.input(|i| {
-            i.events.iter().find_map(|e| match e {
-                egui::Event::Paste(t) if t.contains("Rarity:") => Some(t.clone()),
-                _ => None,
-            })
-        });
-        if let Some(t) = pasted
-            && ctx.memory(|m| m.focused().is_none())
-        {
-            self.state.finish_text = t;
-            self.reveal(Pane::Finish);
         }
         self.keys(ctx);
         if self.state.jobs.busy() {

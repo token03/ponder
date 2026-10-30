@@ -114,7 +114,17 @@ pub struct Unveil {
 
 impl Unveil {
     pub fn new(game: &Game, arg: &str) -> Option<Unveil> {
-        let templates = KEEPS.iter().find(|(n, _)| *n == arg)?.1;
+        let direct;
+        let templates = if let Some((_, templates)) = KEEPS.iter().find(|(name, _)| *name == arg) {
+            *templates
+        } else {
+            let id = game.mod_id(arg)?;
+            if game.def(id).source != Source::Veiled {
+                return None;
+            }
+            direct = [game.def(id).template.as_str()];
+            &direct
+        };
         let prefs: Vec<Vec<ModId>> = templates
             .iter()
             .map(|t| game.with_template(t).iter().copied().filter(|m| game.def(*m).source == Source::Veiled).collect::<Vec<_>>())

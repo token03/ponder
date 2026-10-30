@@ -9,3 +9,4 @@ description = "Stochastic shortest paths over enumerated states. Knows nothing a
 [dependencies]
 rustc-hash.workspace = true
 rayon.workspace = true
+faer.workspace = true

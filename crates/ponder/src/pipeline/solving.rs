@@ -1,383 +1,121 @@
-//! Solving: one problem through the plan cache, or all of them in parallel with rayon.
-
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ponder_core::{self as craft, Plan, Prices, Problem};
-use ponder_game::mods::ModDB;
+use anyhow::{Result, anyhow};
+use ponder_plan::{
+    market::Market,
+    session::{Method, Session},
+};
+use ponder_rules::ops::{self, Ctx};
 use rayon::prelude::*;
 
-use super::cache::plan_key;
-use super::context::{Context, Progress};
-use super::finish::Finish;
-use super::types::{Estimate, Fracture};
+use super::{
+    cache::PLAN_VERSION,
+    context::{Context, Progress},
+    types::Estimate,
+};
+use crate::candidate::Candidate;
+use crate::gear::Prices;
+use crate::plan::Summary;
 
-pub fn continuation(
-    cx: &Context,
-    problem: &Problem,
-    initial: std::sync::Arc<craft::Distribution>,
-    known: Option<&Plan>,
-    table: &Prices,
-) -> Result<Plan, craft::SolveError> {
-    let raw = serde_json::to_vec(&(initial.to_vec(), initial.bounds())).expect("continuation key serialises");
-    let key = format!("{}-{}", plan_key(problem, table, &cx.settings), blake3::hash(&raw).to_hex());
-    cx.plans.get_or_solve(&key, || {
-        let problem = problem.fresh_transition_cache();
-        let followed = known.map(|plan| craft::follow_from(&problem, initial.clone(), &plan.policy, table, &cx.settings));
-        match followed {
-            Some(Ok(plan)) => Ok(plan),
-            _ => craft::solve_from(&problem, initial, table, &cx.settings),
-        }
-    })
+pub(super) fn in_pool<T: Send>(workers: Option<usize>, work: impl FnOnce() -> T + Send) -> T {
+    if let Some(workers) = workers {
+        rayon::ThreadPoolBuilder::new().num_threads(workers.max(1)).build().expect("worker pool").install(work)
+    } else {
+        work()
+    }
 }
 
-pub fn acquired_continuation(
-    cx: &Context,
-    problem: &Problem,
-    initial: std::sync::Arc<craft::Distribution>,
-    preserved: craft::Preservation,
-    recovery: craft::Recovery,
-    known: Option<&Plan>,
-    table: &Prices,
-) -> Result<Plan, craft::SolveError> {
-    let usage: std::collections::BTreeMap<_, _> = recovery.usage.iter().collect();
-    let raw = serde_json::to_vec(&(
-        initial.to_vec(),
-        initial.bounds(),
-        preserved.targets,
-        preserved.filler,
-        recovery.cost,
-        recovery.hours,
-        usage,
-        recovery.initial.to_vec(),
-        recovery.initial.bounds(),
-        &recovery.sale,
-    ))
-    .expect("acquisition key serialises");
-    let key = format!("{}-acquisition-{}", plan_key(problem, table, &cx.settings), blake3::hash(&raw).to_hex());
-    cx.plans.get_or_solve(&key, || {
-        let private = problem.fresh_transition_cache();
-        let direct = known
-            .filter(|plan| initial.iter().all(|(_, state)| plan.to_finish(problem, state).is_some()))
-            .and_then(|plan| craft::follow_from(&private, initial.clone(), &plan.policy, table, &cx.settings).ok());
-        let staged = craft::solve_after_acquisition(&private, initial, preserved, recovery, table, &cx.settings);
-        let plan = match (staged, direct) {
-            (Ok(staged), Some(direct)) if direct.cost < staged.cost => direct,
-            (Ok(staged), _) => staged,
-            (Err(error @ craft::SolveError::InvalidRecovery(_)), _) => return Err(error),
-            (Err(_), Some(direct)) => direct,
-            (Err(error), None) => return Err(error),
-        };
-        Ok(plan)
-    })
-}
-
-/// Plans solved during this process, by plan key: products that share a donor (or a
-/// preparation stage) wait for one solve instead of each running it.
-#[derive(Default)]
-pub struct SharedSolves {
-    cells: std::sync::Mutex<rustc_hash::FxHashMap<String, SharedPlan>>,
-}
-
-type SharedPlan = std::sync::Arc<std::sync::OnceLock<Result<std::sync::Arc<Plan>, String>>>;
-
-impl SharedSolves {
-    /// The plan for `problem` at these prices: from this process, the plan cache, or a fresh solve.
-    pub fn solve(&self, cx: &Context, problem: &Problem, table: &Prices) -> Result<std::sync::Arc<Plan>, String> {
-        let key = plan_key(problem, table, &cx.settings);
-        let cell = self.cells.lock().expect("shared solves").entry(key.clone()).or_default().clone();
-        cell.get_or_init(|| {
-            cx.plans
-                .get_or_solve(&key, || craft::solve(&problem.fresh_transition_cache(), table, &cx.settings))
-                .map(std::sync::Arc::new)
-                .map_err(|error| error.to_string())
+fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64) -> Result<Summary> {
+    let (game, _) = cx.rules()?;
+    let market = Market { prices: prices.clone(), chaos_per_hour: cx.settings.chaos_per_hour, base: base_price };
+    let request = crate::plan::prepare(game, problem, &market)?;
+    let avoid: Vec<_> = request.goal.needs.iter().flat_map(|need| &need.ok).flat_map(|&id| game.def(id).groups.iter().copied()).collect();
+    let class = &game.bases[request.kind.base.0 as usize].class;
+    let unpriced: Vec<String> = request
+        .methods
+        .iter()
+        .filter_map(|method| {
+            let Method::Named(name) = method else {
+                return None;
+            };
+            let operation = ops::parse(game, class, name, &avoid)?;
+            market.price(&operation.cost()).is_none().then(|| name.clone())
         })
-        .clone()
-    }
-
-    /// Forget everything (a new run, or prices changed).
-    pub fn clear(&self) {
-        self.cells.lock().expect("shared solves").clear();
-    }
+        .collect();
+    let mut session = Session::new(Ctx { game, assumptions: &cx.assumptions }, &market);
+    let plan = session.solve(request, None).map_err(|error| {
+        let message = match error {
+            ponder_plan::session::Error::Unsupported(reason) => reason,
+            ponder_plan::session::Error::Solve(ponder_solve::Error::Unreachable) => {
+                "No policy reaches this goal with the available priced operations".into()
+            }
+            ponder_plan::session::Error::Solve(ponder_solve::Error::TooManyStates(limit)) => {
+                format!("Search exceeded {limit} states")
+            }
+        };
+        if unpriced.is_empty() { anyhow!(message) } else { anyhow!("{message}; missing prices: {}", unpriced.join(", ")) }
+    })?;
+    let usage = plan.usage().map_err(|error| anyhow!(error))?;
+    let solution = &plan.policy;
+    Ok(Summary {
+        cost: solution.cost - usage.bases * base_price,
+        hours: usage.seconds / 3600.0,
+        bases: usage.bases,
+        states: solution.explored,
+        actions: solution.actions,
+        outcomes: solution.outcomes,
+        usage: usage.actions,
+        unpriced,
+    })
 }
 
-/// The three fields solving fills in, borrowed from an `Estimate`, a `Fracture` or a `Finish`.
-pub struct SolveSlot<'a> {
-    pub problem: &'a mut Option<Problem>,
-    pub plan: &'a mut Option<Plan>,
-    pub error: &'a mut Option<String>,
-}
-
-/// Something with a problem to solve: `Estimate`, `Fracture`, `Finish`, recombinator donors.
-pub trait Solvable: Send {
-    fn slot(&mut self) -> SolveSlot<'_>;
-}
-
-impl Solvable for Estimate {
-    fn slot(&mut self) -> SolveSlot<'_> {
-        SolveSlot { problem: &mut self.problem, plan: &mut self.plan, error: &mut self.error }
-    }
-}
-
-impl Solvable for Fracture {
-    fn slot(&mut self) -> SolveSlot<'_> {
-        SolveSlot { problem: &mut self.problem, plan: &mut self.plan, error: &mut self.error }
-    }
-}
-
-impl Solvable for Finish {
-    fn slot(&mut self) -> SolveSlot<'_> {
-        SolveSlot { problem: &mut self.problem, plan: &mut self.plan, error: &mut self.error }
-    }
-}
-
-/// Every estimate in `which` (indices) and its fractures, as slots.
-pub fn slots_of<'a>(estimates: &'a mut [Estimate], which: &[usize]) -> Vec<SolveSlot<'a>> {
-    let wanted: std::collections::HashSet<usize> = which.iter().copied().collect();
-    let mut out = Vec::new();
-    for (i, e) in estimates.iter_mut().enumerate() {
-        if wanted.contains(&i) {
-            let Estimate { problem, plan, error, fractures, .. } = e;
-            out.push(SolveSlot { problem, plan, error });
-            out.extend(fractures.iter_mut().map(|f| SolveSlot { problem: &mut f.problem, plan: &mut f.plan, error: &mut f.error }));
-        }
-    }
-    out
-}
-
-/// Solve one slot in place (from the plan cache when it has it).
-fn solve_slot(cx: &Context, slot: &mut SolveSlot, table: &Prices, key: Option<String>) {
-    let Some(problem) = slot.problem.as_ref() else {
+pub fn solve_one(cx: &Context, estimate: &mut Estimate, prices: &Prices) {
+    let Some(problem) = &estimate.candidate else {
         return;
     };
-    let key = key.unwrap_or_else(|| plan_key(problem, table, &cx.settings));
-    match cx.plans.get_or_solve(&key, || {
-        let problem = problem.fresh_transition_cache();
-        craft::solve(&problem, table, &cx.settings)
-    }) {
-        Ok(plan) => *slot.plan = Some(plan),
-        Err(error) => *slot.error = Some(error.to_string()),
-    }
-}
-
-/// Solve an Estimate, Fracture or Finish in place (from the plan cache when it has it).
-pub fn solve_one(cx: &Context, item: &mut dyn Solvable, table: &Prices) {
-    solve_slot(cx, &mut item.slot(), table, None);
-}
-
-fn load_slot(cx: &Context, slot: &mut SolveSlot<'_>, table: &Prices) -> Option<String> {
-    let problem = slot.problem.as_ref()?;
-    if slot.plan.is_some() || slot.error.is_some() {
-        return None;
-    }
-    let key = plan_key(problem, table, &cx.settings);
-    if let Some(plan) = cx.plans.get(&key) {
-        *slot.plan = Some(plan);
-        None
-    } else if let Some(error) = cx.plans.failure(&key) {
-        *slot.error = Some(error.to_string());
-        None
-    } else {
-        Some(key)
-    }
-}
-
-fn solve_below(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &mut Option<f64>, ceiling: Option<f64>) -> bool {
-    let started = std::time::Instant::now();
-    let label = slot.problem.as_ref().map(|p| (p.targets.len(), p.fixed.len()));
-    let dump = slot.problem.clone();
-    let searched = solve_below_inner(cx, slot, table, lower_bound, ceiling);
-    if std::env::var_os("PONDER_TRACE").is_some()
-        && let Some((targets, fixed)) = label
-    {
-        let secs = started.elapsed().as_secs_f64();
-        eprintln!("TRACE slot targets={targets} fixed={fixed} searched={searched} secs={secs:.3} pruned={}", lower_bound.is_some());
-        if secs > 4.0
-            && let Some(p) = dump
-        {
-            let _ = std::fs::create_dir_all("target/craft-cases");
-            let _ = std::fs::write(
-                format!("target/craft-cases/slow-{secs:.1}-{}.json", p.fingerprint()),
-                serde_json::to_vec(&p).unwrap_or_default(),
-            );
-        }
-    }
-    searched
-}
-
-fn solve_below_inner(cx: &Context, slot: SolveSlot<'_>, table: &Prices, lower_bound: &mut Option<f64>, ceiling: Option<f64>) -> bool {
-    let Some(problem) = slot.problem.as_ref() else { return false };
-    if slot.plan.is_some() {
-        *lower_bound = None;
-        return false;
-    }
-    if slot.error.is_some() {
-        return false;
-    }
-    // Finishing costs nothing at best: a route whose fixed costs alone exceed the best is skipped.
-    let free_at_best = problem.actions.iter().all(|action| craft::step_cost(action, table, &cx.settings) >= 0.0);
-    if free_at_best && ceiling.is_some_and(|ceiling| ceiling < 0.0) {
-        *lower_bound = Some(0.0);
-        return false;
-    }
-    let key = plan_key(problem, table, &cx.settings);
-    let mut searched = false;
-    let result = cx.plans.get_or_solve(&key, || {
-        searched = true;
-        craft::solve(&problem.fresh_transition_cache(), table, &cx.settings)
-    });
+    let result = (|| -> Result<Arc<Summary>> {
+        let (_, data_key) = cx.rules()?;
+        let sorted: BTreeMap<_, _> = prices.iter().collect();
+        let base_price = estimate.base_price.map_or(0.0, |price| price.0);
+        let key = blake3::hash(&serde_json::to_vec(&(
+            PLAN_VERSION,
+            problem.fingerprint().to_string(),
+            sorted,
+            cx.settings.chaos_per_hour,
+            base_price,
+            data_key.as_bytes(),
+            format!("{:?}", cx.assumptions),
+        ))?)
+        .to_hex()
+        .to_string();
+        cx.plans
+            .get_or_solve(&key, || solve(cx, problem, prices, base_price).map_err(|error| error.to_string()))
+            .map_err(|error| anyhow!(error))
+    })();
     match result {
         Ok(plan) => {
-            *slot.plan = Some(plan);
-            *lower_bound = None;
+            estimate.summary = Some(plan);
+            estimate.error = None;
         }
         Err(error) => {
-            if std::env::var_os("PONDER_TRACE").is_some() {
-                eprintln!("TRACE error {error}");
-            }
-            *slot.error = Some(error.to_string())
-        }
-    }
-    searched
-}
-
-/// Fractured variants first (dearest base first: the hard mod already on gives a cheap finish
-/// and an early best route), then the direct craft. A route whose base and bench crafts alone
-/// cost more than the best complete route so far is skipped. True when anything was searched
-/// rather than read from the plan cache.
-pub fn solve_direct_and_fractures(cx: &Context, estimate: &mut Estimate, table: &Prices) -> bool {
-    let mut searched = false;
-    let mut order: Vec<_> = (0..estimate.fractures.len()).collect();
-    order.sort_by(|&a, &b| {
-        estimate.fractures[b]
-            .base_cost()
-            .unwrap_or(f64::NEG_INFINITY)
-            .total_cmp(&estimate.fractures[a].base_cost().unwrap_or(f64::NEG_INFINITY))
-    });
-    for i in order {
-        let best = estimate.cheapest();
-        let fracture = &mut estimate.fractures[i];
-        let ceiling = best.zip(fracture.base_cost()).map(|(best, base)| best - base - fracture.bench_cost);
-        searched |= solve_below(
-            cx,
-            SolveSlot { problem: &mut fracture.problem, plan: &mut fracture.plan, error: &mut fracture.error },
-            table,
-            &mut fracture.craft_lower_bound,
-            ceiling,
-        );
-    }
-    let ceiling = estimate.cheapest().map(|best| best - estimate.bench_cost() - estimate.base_price.map_or(0.0, |b| b.0));
-    searched |= solve_below(
-        cx,
-        SolveSlot { problem: &mut estimate.problem, plan: &mut estimate.plan, error: &mut estimate.error },
-        table,
-        &mut estimate.craft_lower_bound,
-        ceiling,
-    );
-    searched
-}
-
-/// The direct craft and fractured variants of every estimate (see [`solve_direct_and_fractures`]).
-pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], table: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    let work = |estimate: &mut Estimate| {
-        let started = std::time::Instant::now();
-        if solve_direct_and_fractures(cx, estimate, table) {
-            report_solved(estimate, started, progress);
-        }
-    };
-    for_each_largest_first(estimates, workers, work);
-}
-
-pub(super) fn report_solved(estimate: &Estimate, started: std::time::Instant, progress: Option<Progress>) {
-    if let Some(progress) = progress {
-        let dominated = usize::from(estimate.craft_lower_bound.is_some())
-            + estimate.fractures.iter().filter(|fracture| fracture.craft_lower_bound.is_some()).count();
-        progress(&format!("solved {} ({:.2}s; {dominated} dominated alternatives)", estimate.title, started.elapsed().as_secs_f64()));
-    }
-}
-
-/// Run `work` on every estimate, biggest problems first so no core idles at the end.
-pub(super) fn for_each_largest_first(estimates: &mut [Estimate], workers: Option<usize>, work: impl Fn(&mut Estimate) + Sync + Send) {
-    let mut ordered: Vec<&mut Estimate> = estimates.iter_mut().collect();
-    ordered.sort_by_key(|estimate| std::cmp::Reverse((estimate.problem.as_ref().map_or(0, |p| p.targets.len()), estimate.fractures.len())));
-    if workers == Some(1) {
-        ordered.into_iter().for_each(work);
-    } else {
-        let mut run = || ordered.par_iter_mut().with_max_len(1).for_each(|estimate| work(estimate));
-        match workers.filter(|workers| *workers > 1).and_then(|workers| rayon::ThreadPoolBuilder::new().num_threads(workers).build().ok()) {
-            Some(pool) => pool.install(run),
-            None => run(),
+            estimate.summary = None;
+            estimate.error = Some(error.to_string());
         }
     }
 }
 
-/// Solve every item that has a problem but no plan yet, in parallel.
-///
-/// Each solve is independent CPU work, so they scale with cores. Biggest problems go first so
-/// no core idles at the end. `workers` caps the threads (`Some(1)` solves inline); `None` uses
-/// rayon's global pool.
-pub fn solve_all(cx: &Context, items: &mut [&mut dyn Solvable], table: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    let slots: Vec<SolveSlot> = items.iter_mut().map(|i| i.slot()).collect();
-    solve_slots(cx, slots, table, workers, progress);
-}
-
-/// `solve_all` over slots (see `slots_of`).
-pub fn solve_slots(cx: &Context, slots: Vec<SolveSlot>, table: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    let say = |m: &str| {
-        if let Some(p) = progress {
-            p(m)
-        }
-    };
-    let mut candidates: Vec<SolveSlot> =
-        slots.into_iter().filter(|s| s.problem.is_some() && s.plan.is_none() && s.error.is_none()).collect();
-    // Keys and cached plans first, in parallel: hashing a problem costs about what reading its plan does.
-    let keyed: Vec<Option<String>> = candidates.par_iter_mut().map(|s| load_slot(cx, s, table)).collect();
-    let mut todo: Vec<(SolveSlot, String)> = candidates.into_iter().zip(keyed).filter_map(|(s, key)| Some((s, key?))).collect();
-    todo.sort_by_key(|(s, _)| std::cmp::Reverse(s.problem.as_ref().map_or(0, |p| p.targets.len())));
-    let n = todo.len();
+pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>, progress: Option<Progress>) {
     let done = AtomicUsize::new(0);
-    let started = AtomicUsize::new(0);
-    let work = |(slot, key): &mut (SolveSlot, String)| {
-        let label =
-            slot.problem.as_ref().map(|p| p.targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(" + ")).unwrap_or_default();
-        let index = started.fetch_add(1, Ordering::Relaxed) + 1;
-        say(&format!("solving {index}/{n}: {label}"));
-        let before = std::time::Instant::now();
-        solve_slot(cx, slot, table, Some(std::mem::take(key)));
-        say(&format!("solved {}/{n}: {label} ({:.2}s)", done.fetch_add(1, Ordering::Relaxed) + 1, before.elapsed().as_secs_f64()));
-    };
-    if workers == Some(1) || n < 4 {
-        for (i, item) in todo.iter_mut().enumerate() {
-            say(&format!("solving {}/{n}", i + 1));
-            work(item);
-        }
-        return;
-    }
-    let mut run = || todo.par_iter_mut().with_max_len(1).for_each(work);
-    match workers.filter(|w| *w > 1).and_then(|w| rayon::ThreadPoolBuilder::new().num_threads(w).build().ok()) {
-        Some(pool) => pool.install(run),
-        None => run(),
-    }
-}
-
-pub fn price_routes(
-    cx: &Context,
-    db: &ModDB,
-    estimates: &mut [Estimate],
-    table: &Prices,
-    league: &str,
-    workers: Option<usize>,
-    progress: Option<Progress>,
-) {
-    if let Some(p) = progress {
-        p(&format!("pricing {} crafts: direct, fractured, protected, recombined and Awakener routes", estimates.len()));
-    }
-    for_each_largest_first(estimates, workers, |estimate| {
-        let started = std::time::Instant::now();
-        let searched = solve_direct_and_fractures(cx, estimate, table);
-        super::recombs::price_donor_routes(cx, db, estimate, table, league);
-        if searched {
-            report_solved(estimate, started, progress);
-        }
+    let total = estimates.len();
+    in_pool(workers, || {
+        estimates.par_iter_mut().for_each(|estimate| {
+            solve_one(cx, estimate, prices);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(say) = progress {
+                say(&format!("processed {n}/{total}: {}", estimate.title));
+            }
+        })
     });
-    cx.solves.clear();
 }

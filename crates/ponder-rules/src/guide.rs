@@ -1,4 +1,4 @@
-//! A human crafting recipe (`fixtures/guides/*.toml`): the acceptance oracle of SPEC.md §8.
+//! A human crafting recipe (`fixtures/guides/*.toml`): the acceptance oracle of docs/SPEC.md §8.
 //!
 //! A recipe is a small state machine. Each step applies its operations to one item, repeating
 //! until a goal holds; `max` bounds the attempts and `else` names the step to fall back to.

@@ -1,138 +1,43 @@
+use std::sync::Arc;
 use std::time::Instant;
 
-use ponder::pipeline::{self, Context, GearOpts};
-use ponder::{demand, pipeline::LadderOpts};
+use ponder::{
+    gear,
+    pipeline::{self, Cache, Context, LadderOpts},
+};
 use ponder_game::mods::ModDB;
 
-fn main() {
+fn main() -> anyhow::Result<()> {
+    let args: Vec<_> = std::env::args().collect();
     let started = Instant::now();
-    let db = ModDB::load().unwrap();
+    let db = ModDB::load()?;
     let mut cx = Context::real();
-    if let Some(path) = std::env::args().skip_while(|arg| arg != "--plan-cache").nth(1) {
-        cx.plans = pipeline::PlanCache::new(path);
+    if args.iter().any(|arg| arg == "--offline") {
+        let offline: Arc<dyn ponder_net::http::Transport> = Arc::new(|_: &ponder_net::http::Request| anyhow::bail!("network disabled"));
+        cx.http = offline.clone();
+        cx.prices.http = offline.clone();
+        cx.trade.http = offline.clone();
+        cx.ladder.http = offline;
     }
-    if std::env::args().any(|a| a == "--cold") {
-        cx.plans = pipeline::PlanCache::disabled();
+    if let Some(path) = args.windows(2).find(|args| args[0] == "--plan-cache").map(|args| &args[1]) {
+        cx.plans = Cache::new(path);
     }
-    let (table, _) = cx.prices.load().unwrap();
-    if let Some(needle) = std::env::args().skip_while(|arg| arg != "--dump-case").nth(1) {
-        let characters = cx.ladder.cached(None).unwrap();
-        let worn = demand::wear(&db, &characters, None);
-        std::fs::create_dir_all("target/craft-cases").unwrap();
-        for a in demand::archetypes(&worn, 5, 4, 2, 0.7).into_iter().filter(|a| a.families.iter().any(|f| f.contains(&needle))) {
-            let Some(m) = demand::archetype_match(&db, &a) else { continue };
-            let Ok(e) = pipeline::estimate_gear(&cx, &db, &m, &table, "Standard", &GearOpts { solve: false, ..Default::default() }) else {
-                continue;
-            };
-            let p = e.problem.as_ref().unwrap();
-            let key = p.fingerprint();
-            std::fs::write(format!("target/craft-cases/{key}.json"), serde_json::to_vec(p).unwrap()).unwrap();
-            println!("{key} {} {}", e.base, e.targets.join(" + "));
-        }
-        return;
+    if args.iter().any(|arg| arg == "--cold") {
+        cx.plans = Cache::disabled();
     }
-    if let Some(path) = std::env::args().skip_while(|arg| arg != "--solve-case").nth(1) {
-        let p: ponder_core::Problem = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let algorithm = match std::env::args().skip_while(|arg| arg != "--algorithm").nth(1).as_deref() {
-            Some("eager") | None => ponder_core::search::Algorithm::Eager,
-            Some("ilao") => ponder_core::search::Algorithm::Ilao,
-            Some("cg") => ponder_core::search::Algorithm::CgIlao,
-            Some(value) => panic!("unknown algorithm {value}"),
-        };
-        let plan = ponder_core::solve_with(&p, &table, &cx.settings, ponder_core::SolveOptions { algorithm, ..Default::default() });
-        println!("{:.3}s {:?}", started.elapsed().as_secs_f64(), plan.map(|p| (p.cost, p.states, p.search_work, p.usage)));
-        return;
-    }
-    if std::env::args().any(|a| a == "--builds") {
-        let characters = cx.ladder.cached(None).unwrap();
-        let worn = demand::wear(&db, &characters, None);
-        for a in demand::archetypes(&worn, 5, 4, 2, 0.7).into_iter().take(30) {
-            let Some(m) = demand::archetype_match(&db, &a) else {
-                continue;
-            };
-            let t = Instant::now();
-            let Ok(mut e) = pipeline::estimate_gear(&cx, &db, &m, &table, "Standard", &GearOpts { solve: false, ..Default::default() })
-            else {
-                continue;
-            };
-            let built = t.elapsed().as_secs_f64();
-            pipeline::add_fractures(&cx, &mut e, "Standard", Some(&table), false);
-            println!(
-                "{} build={built:.3}s fracture={:.3}s unveils={}",
-                a.group,
-                t.elapsed().as_secs_f64() - built,
-                e.problem.as_ref().unwrap().unveils.len()
-            );
-        }
+    let opts = if args.iter().any(|arg| arg == "--full") {
+        LadderOpts { workers: Some(4), ..Default::default() }
     } else {
-        let opts = if std::env::args().any(|a| a == "--full") {
-            LadderOpts::default()
-        } else {
-            LadderOpts { gear_top: 12, per_group: 0, niche: 0, cluster_top: 12, ..Default::default() }
-        };
-        let say = |message: &str| {
-            if std::env::args().any(|arg| arg == "--profile") || (!message.starts_with("solved") && !message.contains(':')) {
-                eprintln!("{:.3}s {message}", started.elapsed().as_secs_f64());
-            }
-        };
-        let report = pipeline::ladder(&cx, &db, None, &opts, Some(&say)).unwrap();
-        println!(
-            "estimates={} direct_failures={} unresolved={} elapsed={:.3}s",
-            report.estimates.len(),
-            report.estimates.iter().filter(|e| e.error.is_some()).count(),
-            report.estimates.iter().filter(|e| e.cheapest().is_none()).count(),
-            started.elapsed().as_secs_f64()
-        );
-        let mut routes = std::collections::BTreeMap::new();
-        for estimate in &report.estimates {
-            let route = match estimate.cheapest_route() {
-                Some(pipeline::CraftRoute::Craft) => "direct",
-                Some(pipeline::CraftRoute::Fracture(_)) => "fracture",
-                Some(pipeline::CraftRoute::Recomb) => "recombination",
-                Some(pipeline::CraftRoute::Awakener) => "awakener",
-                Some(pipeline::CraftRoute::Protected) => "protected",
-                None => "unresolved",
-            };
-            *routes.entry(route).or_insert(0usize) += 1;
-        }
-        println!("routes={routes:?}");
-        if let Some(path) = std::env::args().skip_while(|arg| arg != "--snapshot").nth(1) {
-            let estimates: Vec<_> = report
-                .estimates
-                .iter()
-                .map(|estimate| {
-                    serde_json::json!({
-                        "key": estimate.problem.as_ref().map(|problem| problem.fingerprint().to_string()),
-                        "title": estimate.title,
-                        "base": estimate.base,
-                        "cost": estimate.cheapest(),
-                        "currency_chaos": estimate.currency_cost(),
-                        "clicking_hours": estimate.clicking_hours(),
-                        "finishing_policy_risk": estimate.cheapest_plan().and_then(|(_, plan)| plan.risk),
-                        "usage": estimate.usage().into_iter().take(3).collect::<Vec<_>>(),
-                        "route": format!("{:?}", estimate.cheapest_route()),
-                        "direct_lower_bound": estimate.craft_lower_bound,
-                        "pruned_fractures": estimate.fractures.iter().filter(|fracture| fracture.craft_lower_bound.is_some()).count(),
-                    })
-                })
-                .collect();
-            std::fs::write(path, serde_json::to_vec_pretty(&estimates).unwrap()).unwrap();
-        }
-        for estimate in &report.estimates {
-            if let Some(error) = &estimate.error {
-                eprintln!(
-                    "{} {}: {error}; route={:?}; targets={}",
-                    estimate.title,
-                    estimate.base,
-                    estimate.cheapest_route(),
-                    estimate.targets.join(" + ")
-                );
-            }
-        }
-        if let Some(budget) = std::env::args().skip_while(|arg| arg != "--budget-seconds").nth(1) {
-            let budget: f64 = budget.parse().expect("budget must be a number of seconds");
-            assert!(budget.is_finite() && budget > 0.0, "budget must be positive and finite");
-            assert!(started.elapsed().as_secs_f64() <= budget, "startup exceeded the {budget}s budget");
-        }
+        LadderOpts { gear_top: 3, per_group: 0, niche: 0, cluster_top: 3, workers: Some(4), ..Default::default() }
+    };
+    let say = |message: &str| eprintln!("{:.3}s {message}", started.elapsed().as_secs_f64());
+    let report = pipeline::ladder(&cx, &db, None, &opts, Some(&say))?;
+    if let Some(path) = args.windows(2).find(|args| args[0] == "--snapshot").map(|args| &args[1]) {
+        std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
     }
+    println!(
+        "{}",
+        serde_json::json!({"estimates": report.estimates.len(), "solved": report.estimates.iter().filter(|estimate| estimate.summary.is_some()).count(), "quoted": report.estimates.iter().filter(|estimate| estimate.total().is_some()).count(), "elapsed_s": started.elapsed().as_secs_f64(), "chaos_per_hour": gear::Settings::default().chaos_per_hour})
+    );
+    Ok(())
 }

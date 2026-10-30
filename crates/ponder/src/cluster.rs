@@ -14,13 +14,12 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Mutex, OnceLock};
 
+use crate::gear::PoolMod;
 use anyhow::{Result, anyhow};
 use indexmap::IndexMap;
-use ponder_core::{Kind, Mod, Plan, Problem, Side, Target, solve};
 use ponder_game::data;
 
-use crate::actions::{self, loaded};
-use crate::gear::Pricing;
+use crate::gear::loaded;
 
 pub const SIZES: [(&str, &str); 3] = [
     ("small", "Metadata/Items/Jewels/JewelPassiveTreeExpansionSmall"),
@@ -101,7 +100,7 @@ pub fn notable_name(m: &data::Mod) -> String {
 }
 
 /// Every mod that can roll on this cluster, with its weight.
-pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
+pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<PoolMod> {
     let bases = loaded(data::base_items());
     let tags: BTreeSet<String> = bases[size_id(size)].tags.iter().cloned().chain([enchant.tag.clone()]).collect();
     let mut out = Vec::new();
@@ -118,24 +117,16 @@ pub fn pool(size: &str, enchant: &Enchant, item_level: i64) -> Vec<Mod> {
         }
         let notable = is_notable(m);
         let label = if notable { notable_name(m) } else { m.text_or_empty().replace('\n', " / ") };
-        out.push(Mod {
-            id: mod_id.to_string(),
-            side: if m.generation_type == "prefix" { Side::Prefix } else { Side::Suffix },
-            weight,
-            groups: m.groups.clone(),
-            notable,
-            label,
-            tags: m.implicit_tags.clone(),
-        });
+        out.push(PoolMod { id: mod_id.to_string(), weight, groups: m.groups.clone(), notable, label });
     }
     out
 }
 
 /// Tier of each non-notable mod in a pool: 1 is its group's highest-level roll. Mods are
 /// listed by group (in order of first appearance), each group's in pool order.
-pub fn tiers(mods: &[Mod]) -> IndexMap<String, i64> {
+pub fn tiers(mods: &[PoolMod]) -> IndexMap<String, i64> {
     let levels = loaded(data::mods());
-    let mut by_group: IndexMap<&str, Vec<&Mod>> = IndexMap::new();
+    let mut by_group: IndexMap<&str, Vec<&PoolMod>> = IndexMap::new();
     for m in mods {
         if !m.notable && !m.groups.is_empty() {
             by_group.entry(&m.groups[0]).or_default().push(m);
@@ -183,7 +174,7 @@ fn parse(name: &str) -> Result<(String, i64)> {
 }
 
 /// "HaveIncreasedEffect@1" -> "35% increased Effect"; tiers past 1 read "(T2+)".
-pub fn feature_label(name: &str, mods: &[Mod]) -> String {
+pub fn feature_label(name: &str, mods: &[PoolMod]) -> String {
     if !is_feature(name) {
         return name.to_string();
     }
@@ -191,7 +182,7 @@ pub fn feature_label(name: &str, mods: &[Mod]) -> String {
         return name.to_string();
     };
     let texts = loaded(data::mods());
-    let hits: Vec<Mod> = mods.iter().filter(|m| m.groups.first() == Some(&group)).cloned().collect();
+    let hits: Vec<PoolMod> = mods.iter().filter(|m| m.groups.first() == Some(&group)).cloned().collect();
     let ranked = if hits.is_empty() { IndexMap::new() } else { tiers(&hits) };
     let mod_id = ranked
         .iter()
@@ -208,143 +199,68 @@ pub fn feature_label(name: &str, mods: &[Mod]) -> String {
 }
 
 /// Targets for notable names and "Group@tier" small-passive mods.
-pub fn resolve(mods: &[Mod], names: &[String]) -> Result<Vec<Target>> {
-    let ranked = tiers(mods);
-    let mut out = Vec::new();
-    for name in names {
-        if !is_feature(name) {
-            let m = resolve_notables(mods, std::slice::from_ref(name))?.remove(0);
-            out.push(Target {
-                name: m.label.clone(),
-                side: m.side,
-                good: BTreeSet::from([m.id.clone()]),
-                groups: m.groups.iter().cloned().collect(),
-                notable: true,
-            });
-            continue;
-        }
-        let (group, tier) = parse(name)?;
-        let good: Vec<&Mod> =
-            mods.iter().filter(|m| m.groups.first() == Some(&group) && ranked.get(&m.id).copied().unwrap_or(99) <= tier).collect();
-        if good.is_empty() {
-            return Err(anyhow!("{name:?} can't roll here"));
-        }
-        out.push(Target {
-            name: feature_label(name, mods),
-            side: good[0].side,
-            good: good.iter().map(|m| m.id.clone()).collect(),
-            groups: good.iter().flat_map(|m| m.groups.iter().cloned()).collect(),
-            notable: false,
-        });
-    }
-    Ok(out)
-}
-
-/// Fill a passive jewel: one open slot takes any of `features` ("Group@tier" small-passive mods,
-/// what its wearers put there), the others any mod at all, so the jewel has all four. Features
-/// that can't roll here are skipped; with nothing to fill a slot, the jewel is only made full.
-pub fn add_filler(problem: &Problem, features: &[String]) -> Problem {
-    if features.is_empty() {
-        return problem.clone();
-    }
-    let mut p = problem.to_spec();
-    let wanted: BTreeSet<&String> = p.targets.iter().flat_map(|t| t.good.iter()).collect();
-    let mut filler = BTreeSet::new();
-    for f in features {
-        if let Ok(t) = resolve(&p.pool, std::slice::from_ref(f)) {
-            filler.extend(t[0].good.iter().filter(|m| !wanted.contains(m)).cloned());
-        }
-    }
-    let limit = problem.limit();
-    let open = |side: Side| {
-        let used = p.targets.iter().filter(|t| t.side == side).count() + p.fixed.iter().filter(|m| m.side == side).count();
-        let fillable = p.pool.iter().any(|m| m.side == side && filler.contains(&m.id));
-        if fillable { limit.saturating_sub(used) } else { 0 }
-    };
-    let (pre, suf) = (open(Side::Prefix), open(Side::Suffix));
-    p.min_mods = 2 * limit;
-    if pre + suf == 0 {
-        return p.compile();
-    }
-    p.filler = filler;
-    p.filler_sides = Some(if suf >= pre { (0, 1) } else { (1, 0) });
-    p.filler_need = 1;
-    p.compile()
-}
-
-/// Fractured mods: notables by name, small-passive mods at exactly their tier.
-pub fn resolve_fixed(mods: &[Mod], names: &[String]) -> Result<Vec<Mod>> {
-    let ranked = tiers(mods);
-    let mut out = Vec::new();
-    for name in names {
-        if !is_feature(name) {
-            out.extend(resolve_notables(mods, std::slice::from_ref(name))?);
-            continue;
-        }
-        let (group, tier) = parse(name)?;
-        let hit = mods.iter().find(|m| m.groups.first() == Some(&group) && ranked.get(&m.id) == Some(&tier));
-        out.push(hit.ok_or_else(|| anyhow!("{name:?} can't roll here"))?.clone());
-    }
-    Ok(out)
-}
-
-pub fn resolve_notables(mods: &[Mod], names: &[String]) -> Result<Vec<Mod>> {
-    let mut by_name: HashMap<String, &Mod> = HashMap::new();
-    for m in mods.iter().filter(|m| m.notable) {
-        by_name.insert(m.label.to_lowercase(), m);
-    }
-    names
-        .iter()
-        .map(|name| {
-            by_name.get(name.trim().to_lowercase().as_str()).map(|m| (*m).clone()).ok_or_else(|| {
-                let mut options: Vec<&str> = by_name.keys().map(String::as_str).collect();
-                options.sort_unstable();
-                anyhow!("notable {name:?} can't roll here; options: {}", options.join(", "))
-            })
-        })
-        .collect()
-}
-
-/// Cheapest plan for `need` of `notables`, over basic currency and Harvest reforges.
-///
-/// `fractured` notables are already on the base and survive every reroll.
-pub fn cost(
-    size: &str,
-    enchant: &str,
-    notables: &[String],
-    pricing: Pricing,
-    need: Option<usize>,
-    item_level: i64,
-    fractured: &[String],
-) -> Result<(Problem, Plan)> {
-    let p = problem(size, enchant, notables, need, item_level, fractured)?;
-    let plan = solve(&p, pricing.prices, pricing.settings)?;
-    Ok((p, plan))
-}
-
-/// The crafting problem `cost` solves, for solving elsewhere.
 pub fn problem(
     size: &str,
     enchant: &str,
-    notables: &[String],
-    need: Option<usize>,
+    names: &[String],
     item_level: i64,
     fractured: &[String],
-) -> Result<Problem> {
-    let mods = pool(size, &find_enchant(size, enchant)?, item_level);
-    let targets = resolve(&mods, notables)?;
-    let fixed = resolve_fixed(&mods, fractured)?;
-    let need = need.filter(|&n| n != 0).unwrap_or(targets.len());
-    let cap = notable_cap(size);
-    if targets.iter().filter(|t| t.notable).count() > cap {
-        return Err(anyhow!("a {size} cluster holds at most {cap} notables"));
+    filler: &[String],
+) -> Result<crate::candidate::Candidate> {
+    use crate::candidate::Need;
+    let enchant = find_enchant(size, enchant)?;
+    let mods = pool(size, &enchant, item_level);
+    let ranks = tiers(&mods);
+    let resolve = |name: &str| -> Result<BTreeSet<String>> {
+        let matches: BTreeSet<_> = if is_feature(name) {
+            let (group, tier) = parse(name)?;
+            mods.iter()
+                .filter(|m| m.groups.contains(&group) && ranks.get(&m.id).is_some_and(|rank| *rank <= tier))
+                .map(|m| m.id.clone())
+                .collect()
+        } else {
+            mods.iter().filter(|m| m.notable && m.label.eq_ignore_ascii_case(name)).map(|m| m.id.clone()).collect()
+        };
+        if matches.is_empty() {
+            return Err(anyhow!("{name:?} cannot roll on this cluster"));
+        }
+        Ok(matches)
+    };
+    let mut needs = names
+        .iter()
+        .map(|name| Ok(Need { name: name.clone(), mods: resolve(name)?, count: 1, fractured: false }))
+        .collect::<Result<Vec<_>>>()?;
+    let fixed = fractured
+        .iter()
+        .map(|name| {
+            let mut acceptable = resolve(name)?;
+            if is_feature(name) {
+                let (_, tier) = parse(name)?;
+                acceptable.retain(|id| ranks.get(id) == Some(&tier));
+            }
+            acceptable.into_iter().next().ok_or_else(|| anyhow!("missing fractured mod"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for id in &fixed {
+        if let Some(need) = needs.iter_mut().find(|need| need.mods.contains(id)) {
+            need.fractured = true;
+        } else {
+            needs.push(Need { name: id.clone(), mods: BTreeSet::from([id.clone()]), count: 1, fractured: true });
+        }
     }
-    let (harvest, profiles) = actions::harvest(&mods);
-    let mut all = actions::basic();
-    all.extend(harvest);
-    let mut p = ponder_core::ProblemSpec::new(mods, targets, need, all, Kind::Jewel);
-    p.notable_cap = cap;
-    p.fixed = fixed;
-    p.profiles = profiles.into();
-    Ok(p.compile())
+    if !filler.is_empty() {
+        let mut acceptable = BTreeSet::new();
+        for name in filler {
+            acceptable.extend(resolve(name)?);
+        }
+        needs.push(Need { name: format!("any of: {}", filler.join(", ")), mods: acceptable, count: 1, fractured: false });
+    }
+    Ok(crate::candidate::Candidate {
+        base: format!("{} Cluster Jewel [{}]", size[..1].to_uppercase() + &size[1..], enchant.tag),
+        item_level: u8::try_from(item_level)?,
+        influences: BTreeSet::new(),
+        needs,
+        fixed,
+        min_mods: if filler.is_empty() { 0 } else { 4 },
+    })
 }

@@ -1,16 +1,13 @@
-//! The pipeline: estimates, fractures, product tree, finishing items, plan cache.
+//! Ladder candidate, crafting estimates, market lookups and plan caching.
 
-pub mod actions;
+pub mod candidate;
 pub mod cluster;
 mod combinations;
-pub mod demand;
 pub mod gear;
 pub mod item;
-pub mod mine;
+pub mod pattern;
 pub mod pipeline;
+pub mod plan;
 pub mod pricing;
-pub mod recomb;
-
-pub mod awakener;
 
 mod memo;

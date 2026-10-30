@@ -160,7 +160,9 @@ impl Bench {
         } else {
             let templates: Vec<&str> = match NAMES.iter().find(|(n, _)| *n == name) {
                 Some((_, t)) => t.to_vec(),
-                None => vec![MORE.iter().find(|(n, _)| *n == name)?.1],
+                None => vec![MORE.iter().find(|(n, _)| *n == name).map(|(_, template)| *template).or_else(|| {
+                    game.mod_id(name).filter(|&id| game.def(id).source == Source::Crafted).map(|id| game.def(id).template.as_str())
+                })?],
             };
             // Per template, the highest-level craft for this class.
             templates
@@ -176,8 +178,9 @@ impl Bench {
         };
         let first = chosen.first()?.1;
         let cost = Cost { items: first.cost.iter().map(|(id, n)| (price_id(id), *n as f64)).collect(), seconds: 5.0 };
+        let name = if game.mod_id(name).is_some() { game.def(chosen[0].0).key.clone() } else { name.into() };
         let mods = chosen.iter().map(|c| c.0).collect();
-        Some(Bench::Craft { name: name.into(), steps: [Step::Craft(Arc::new(mods))], cost })
+        Some(Bench::Craft { name, steps: [Step::Craft(Arc::new(mods))], cost })
     }
 }
 

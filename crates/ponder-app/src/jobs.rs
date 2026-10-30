@@ -1,14 +1,13 @@
-//! Work off the UI thread: the ladder pipeline, trade lookups, finishing an item. Each job
+//! Work off the UI thread: the ladder pipeline and trade lookups. Each job
 //! runs on its own thread and reports back through one channel; the UI drains it every frame.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ponder::pipeline::{Estimate, Finish, LadderReport};
-use ponder_core::Prices;
-use ponder_game::mods::{ItemMatch, ModDB};
+use ponder::gear::Prices;
+use ponder::pipeline::{Estimate, LadderReport};
+use ponder_game::mods::ModDB;
 
 /// A finished ladder run, with what later jobs on it need.
 pub struct Loaded {
@@ -17,19 +16,21 @@ pub struct Loaded {
     pub took: Duration,
 }
 
-pub struct Finished {
-    pub item: ItemMatch,
-    pub group: String,
-    pub found: Vec<Finish>,
-}
-
 pub enum Msg {
     Status(String),
     Db(Result<Arc<ModDB>, String>),
     Ladder(Result<Box<Loaded>, String>),
+    LadderFetched {
+        characters: usize,
+        note: String,
+    },
     /// a job updated one estimate of run `run`
-    Estimate { run: u64, index: usize, estimate: Box<Estimate>, note: String },
-    Finished(Result<Box<Finished>, String>),
+    Estimate {
+        run: u64,
+        index: usize,
+        estimate: Box<Estimate>,
+        note: String,
+    },
 }
 
 /// Sends messages and wakes the UI so it draws them.
@@ -53,30 +54,35 @@ impl Reply {
 pub struct Jobs {
     reply: Reply,
     rx: Receiver<Msg>,
-    running: Arc<AtomicUsize>,
     names: Arc<Mutex<Vec<(String, Instant)>>>,
 }
 
 impl Jobs {
     pub fn new(ctx: egui::Context) -> Jobs {
         let (tx, rx) = channel();
-        Jobs { reply: Reply { tx, ctx }, rx, running: Arc::default(), names: Arc::default() }
+        Jobs { reply: Reply { tx, ctx }, rx, names: Arc::default() }
     }
 
     /// Run `work` on a new thread; whatever it returns is sent to the UI.
     pub fn spawn(&self, name: &str, work: impl FnOnce(&Reply) -> Msg + Send + 'static) {
         let reply = self.reply.clone();
-        let running = self.running.clone();
         let names = self.names.clone();
         let name = name.to_string();
-        running.fetch_add(1, Ordering::SeqCst);
-        names.lock().expect("job list").push((name.clone(), Instant::now()));
+        {
+            let mut pending = names.lock().expect("job list");
+            if pending.iter().any(|(pending, _)| pending == &name) {
+                return;
+            }
+            pending.push((name.clone(), Instant::now()));
+        }
         std::thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let msg = work(&reply);
+                let msg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&reply))).unwrap_or_else(|error| {
+                    let reason = error.downcast_ref::<String>().map(String::as_str).or_else(|| error.downcast_ref::<&str>().copied());
+                    Msg::Status(format!("{name} failed: {}", reason.unwrap_or("worker panicked")))
+                });
                 names.lock().expect("job list").retain(|(n, _)| *n != name);
-                running.fetch_sub(1, Ordering::SeqCst);
                 reply.send(msg);
             })
             .expect("spawn a job thread");
@@ -87,7 +93,7 @@ impl Jobs {
     }
 
     pub fn busy(&self) -> bool {
-        self.running.load(Ordering::SeqCst) > 0
+        !self.names.lock().expect("job list").is_empty()
     }
 
     pub fn is_running(&self, name: &str) -> bool {

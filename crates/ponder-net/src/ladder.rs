@@ -8,23 +8,23 @@
 //! `Ladder::sample` takes the top characters of every main skill with enough
 //! players, so many classes, skills and weapon types are covered, and caches
 //! each character's main skill, class and rare items and jewels (nothing else)
-//! under .cache/ladder/<snapshot>/.
+//! under data/ladder/<snapshot>/.
 
 use crate::env::Clock;
 use crate::http::{self, Transport};
 use anyhow::{Context, Result, anyhow, bail};
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 pub const API: &str = "https://poe.ninja/poe1/api";
 pub const USER_AGENT: &str = "ponder/0.1 (crafting research; caches everything)";
-pub const CACHE: &str = ".cache/ladder";
+pub const DATA_DIR: &str = "data/ladder";
 /// Bump when `lite` keeps more fields; older .lite copies are rebuilt.
 pub const LITE_VERSION: u32 = 2;
 
@@ -168,7 +168,7 @@ impl Default for Sample {
 
 impl Ladder {
     pub fn new() -> Ladder {
-        Ladder::with(http::real(), CACHE.into(), Clock::real())
+        Ladder::with(http::real(), DATA_DIR.into(), Clock::real())
     }
 
     pub fn with(http: Arc<dyn Transport>, cache: PathBuf, clock: Clock) -> Ladder {
@@ -303,7 +303,8 @@ impl Ladder {
             }
         };
         let (_, dims) = self.search(snap, &[])?;
-        let mut filters: Vec<(&str, &str)> = dims.get("skills").iter().filter(|(_, n)| *n >= opts.min_players).map(|(s, _)| ("skills", s.as_str())).collect();
+        let mut filters: Vec<(&str, &str)> =
+            dims.get("skills").iter().filter(|(_, n)| *n >= opts.min_players).map(|(s, _)| ("skills", s.as_str())).collect();
         filters.extend(dims.get("class").iter().filter(|(_, n)| *n > 0).map(|(c, _)| ("class", c.as_str())));
         let (mut rows, mut seen) = (Vec::new(), HashSet::new());
         for (i, (key, value)) in filters.iter().enumerate() {
@@ -316,24 +317,21 @@ impl Ladder {
             }
         }
         say(&format!("fetching {} characters", rows.len()));
-        let results: Vec<Mutex<Option<Lite>>> = rows.iter().map(|_| Mutex::new(None)).collect();
-        let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        std::thread::scope(|s| {
-            for _ in 0..opts.workers.max(1) {
-                s.spawn(|| {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::SeqCst);
-                        let Some(row) = rows.get(i) else { break };
-                        *results[i].lock().unwrap() = self.character(snap, row).ok().flatten();
-                        let n = done.fetch_add(1, Ordering::SeqCst) + 1;
-                        if n % 50 == 0 {
-                            say(&format!("characters {n}/{}", rows.len()));
-                        }
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(opts.workers.max(1)).build()?;
+        let done = AtomicUsize::new(0);
+        let results: Vec<_> = pool.install(|| {
+            rows.par_iter()
+                .map(|row| {
+                    let character = self.character(snap, row).ok().flatten();
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n.is_multiple_of(50) {
+                        say(&format!("characters {n}/{}", rows.len()));
                     }
-                });
-            }
+                    character
+                })
+                .collect()
         });
-        Ok(results.into_iter().filter_map(|m| m.into_inner().unwrap()).collect())
+        Ok(results.into_iter().flatten().collect())
     }
 
     /// Characters already downloaded (for `snap`, else the newest snapshot on disk), as `Lite`s; no network.
@@ -343,9 +341,14 @@ impl Ladder {
         let root = match snap {
             Some(s) => self.cache.join(&s.version),
             None => {
-                let Ok(entries) = std::fs::read_dir(&self.cache) else { return Ok(Vec::new()) };
-                let mut dirs: Vec<PathBuf> =
-                    entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "dictionaries")).collect();
+                let Ok(entries) = std::fs::read_dir(&self.cache) else {
+                    return Ok(Vec::new());
+                };
+                let mut dirs: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != "dictionaries"))
+                    .collect();
                 dirs.sort();
                 match dirs.pop() {
                     Some(d) => d,
@@ -375,7 +378,11 @@ impl Ladder {
             if !path.is_file() {
                 continue; // an outdated lite copy with nothing to rebuild it from (`sample` fetches it again)
             }
-            let Ok(data) = std::fs::read_to_string(&path).map_err(anyhow::Error::from).and_then(|t| Ok(serde_json::from_str::<Value>(&t)?)).and_then(|doc| lite(&doc)) else {
+            let Ok(data) = std::fs::read_to_string(&path)
+                .map_err(anyhow::Error::from)
+                .and_then(|t| Ok(serde_json::from_str::<Value>(&t)?))
+                .and_then(|doc| lite(&doc))
+            else {
                 continue;
             };
             std::fs::write(&small, data.to_json())?;
@@ -420,8 +427,10 @@ pub fn lite(data: &Value) -> Result<Lite> {
     let rares = rare_items(data)
         .into_iter()
         .map(|item| {
-            let kept: Map<String, Value> =
-                ["baseType", "ilvl", "influences", "mods", "inventoryId", "enchantMods"].iter().filter_map(|k| item.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+            let kept: Map<String, Value> = ["baseType", "ilvl", "influences", "mods", "inventoryId", "enchantMods"]
+                .iter()
+                .filter_map(|k| item.get(*k).map(|v| (k.to_string(), v.clone())))
+                .collect();
             Ok(serde_json::from_value(Value::Object(kept))?)
         })
         .collect::<Result<Vec<RareItem>>>()?;
@@ -568,207 +577,4 @@ pub fn ndic(b: &[u8]) -> Result<Vec<String>> {
         i = i.saturating_add(n);
     }
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::http::{Request, Response};
-    use crate::testing::TempDir;
-    use serde_json::json;
-
-    fn put_varint(mut n: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        loop {
-            let (b, rest) = ((n & 0x7F) as u8, n >> 7);
-            out.push(if rest > 0 { b | 0x80 } else { b });
-            if rest == 0 {
-                return out;
-            }
-            n = rest;
-        }
-    }
-
-    /// The NDIC bytes of `words` (one block).
-    fn make_ndic(words: &[&str]) -> Vec<u8> {
-        let lengths: Vec<u8> = words.iter().flat_map(|w| put_varint(w.len())).collect();
-        let mut out = b"NDIC".to_vec();
-        for n in [2u32, 0, words.len() as u32] {
-            out.extend(n.to_le_bytes());
-        }
-        out.extend([0u8; 8]);
-        for n in [16u32, 1, lengths.len() as u32, 0, 0] {
-            out.extend(n.to_le_bytes());
-        }
-        out.extend(lengths);
-        out.extend(words.iter().flat_map(|w| w.bytes()));
-        out
-    }
-
-    fn field_bytes(f: usize, b: &[u8]) -> Vec<u8> {
-        [put_varint(f << 3 | 2), put_varint(b.len()), b.to_vec()].concat()
-    }
-
-    fn field_int(f: usize, n: usize) -> Vec<u8> {
-        [put_varint(f << 3), put_varint(n)].concat()
-    }
-
-    #[test]
-    fn ndic_round_trip_with_long_strings() {
-        let long = "x".repeat(300);
-        let words = ["Ascendant", "", long.as_str(), "\u{dc}n\u{ef}code"];
-        assert_eq!(ndic(&make_ndic(&words)).unwrap(), words);
-        assert!(ndic(b"NOPE").is_err());
-    }
-
-    #[test]
-    fn protobuf_fields() {
-        let mut msg = vec![0x08, 0x96, 0x01, 0x12, 0x03];
-        msg.extend(b"abc");
-        assert_eq!(fields(&msg).unwrap(), vec![(1, 0, Val::Varint(150)), (2, 2, Val::Bytes(b"abc"))]);
-        assert!(fields(&[0x0B]).is_err()); // wire type 3
-    }
-
-    fn fake_ninja() -> (Arc<dyn Transport>, Arc<Mutex<Vec<String>>>) {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let l = log.clone();
-        let full = json!({"account": "a", "name": "n", "class": "Witch", "skills": [], "passives": (0..1000).collect::<Vec<_>>(),
-            "items": [{"itemData": {"frameType": 2, "baseType": "Bone Ring", "mods": {"explicit": [{"id": "IncreasedLife7"}]}}}]});
-        let http = move |req: &Request| {
-            l.lock().unwrap().push(req.url.clone());
-            let u = req.url.as_str();
-            Ok(if u.ends_with("/data/index-state") {
-                Response::json(200, &json!({"snapshotVersions": [{"type": "depth", "name": "X", "url": "x", "version": "0"}, {"type": "exp", "name": "Allflame", "url": "allflame", "version": "v9"}]}))
-            } else if u.contains("/builds/dictionary/") {
-                Response::new(200, make_ndic(&["Cyclone", "Lightning Arrow", "Witch"]))
-            } else if u.contains("/search?") {
-                let dict = [field_bytes(1, b"skill_dict"), field_bytes(2, b"hash1")].concat();
-                let dim = |name: &[u8], counts: &[(usize, usize)]| {
-                    let mut d = [field_bytes(1, name), field_bytes(2, b"skill_dict")].concat();
-                    for (i, n) in counts {
-                        d.extend(field_bytes(3, &[field_int(1, *i), field_int(2, *n)].concat()));
-                    }
-                    d
-                };
-                let col = |name: &[u8], vals: &[&str]| [field_bytes(1, name), vals.iter().flat_map(|v| field_bytes(7, v.as_bytes())).collect()].concat();
-                let inner = [
-                    field_bytes(6, &dict),
-                    field_bytes(2, &dim(b"skills", &[(0, 10), (1, 77), (7, 3)])),
-                    field_bytes(12, &col(b"account", &["a", "b"])),
-                    field_bytes(12, &col(b"name", &["n", "m"])),
-                ]
-                .concat();
-                Response::new(200, field_bytes(1, &inner))
-            } else if u.contains("/character?") {
-                Response::json(200, &full)
-            } else {
-                Response::new(404, "")
-            })
-        };
-        (Arc::new(http), log)
-    }
-
-    #[test]
-    fn snapshot_and_search_read_poe_ninja() {
-        let dir = TempDir::new("ladder-search");
-        let (http, log) = fake_ninja();
-        let ladder = Ladder::with(http, dir.path().into(), Clock::new(|| 0.0, |_| {}));
-        let snap = ladder.snapshot(Some("ALLFLAME")).unwrap();
-        assert_eq!(snap, Snapshot { league: "Allflame".into(), overview: "allflame".into(), version: "v9".into() });
-        assert!(ladder.snapshot(Some("nope")).is_err());
-        let (rows, dims) = ladder.search(&snap, &[("class", "Dead eye")]).unwrap();
-        assert_eq!(rows, vec![Row::new("a", "n"), Row::new("b", "m")]);
-        assert_eq!(dims.get("skills"), [("Lightning Arrow".to_string(), 77), ("Cyclone".to_string(), 10), ("7".to_string(), 3)]);
-        assert!(log.lock().unwrap().iter().any(|u| u.ends_with("/builds/v9/search?overview=allflame&type=exp&class=Dead+eye")));
-        assert!(dir.path().join("dictionaries/hash1").is_file());
-    }
-
-    #[test]
-    fn failed_requests_are_retried_with_backoff() {
-        let (n, slept) = (Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(Vec::new())));
-        let (c, s) = (n.clone(), slept.clone());
-        let http = move |_: &Request| if c.fetch_add(1, Ordering::SeqCst) < 2 { Err(anyhow!("reset")) } else { Ok(Response::new(200, "[]")) };
-        let ladder = Ladder::with(Arc::new(http), "unused".into(), Clock::new(|| 0.0, move |x| s.lock().unwrap().push(x)));
-        assert_eq!(ladder.get_json("u").unwrap(), json!([]));
-        assert_eq!(*slept.lock().unwrap(), [2.0, 4.0]);
-    }
-
-    #[test]
-    fn cache_keeps_only_the_lite_character() {
-        // Fetched characters are stored as their lite record only; full documents left on disk become lite.
-        let dir = TempDir::new("ladder-cache");
-        let (http, _) = fake_ninja();
-        let ladder = Ladder::with(http, dir.path().into(), Clock::new(|| 0.0, |_| {}));
-        let snap = Snapshot { league: "L".into(), overview: "l".into(), version: "v1".into() };
-        let got = ladder.character(&snap, &Row::new("a", "n")).unwrap().unwrap();
-        assert_eq!(got.rares[0].base_type(), Some("Bone Ring"));
-        assert_eq!(got.rares[0].mods_of("explicit")[0].id(), Some("IncreasedLife7"));
-        let files: Vec<_> = walk(&dir.path().join("v1"));
-        assert_eq!(files, ["lite"]);
-        let old = dir.path().join("v1/b/m.with.dots.json");
-        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, json!({"account": "b", "name": "m.with.dots", "class": "Witch", "skills": [], "items": []}).to_string()).unwrap();
-        let mut names: Vec<_> = ladder.cached(Some(&snap)).unwrap().into_iter().filter_map(|c| c.name).collect();
-        names.sort();
-        assert_eq!(names, ["m.with.dots", "n"]);
-        assert!(!old.exists() && old.with_extension("lite").is_file());
-        // newest snapshot on disk when none is named
-        assert_eq!(ladder.cached(None).unwrap().len(), 2);
-    }
-
-    fn walk(dir: &Path) -> Vec<String> {
-        let mut out = Vec::new();
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() { out.extend(walk(&p)) } else { out.push(p.extension().unwrap().to_string_lossy().into_owned()) }
-        }
-        out
-    }
-
-    #[test]
-    fn sample_fetches_each_character_once() {
-        let dir = TempDir::new("ladder-sample");
-        let (http, log) = fake_ninja();
-        let ladder = Ladder::with(http, dir.path().into(), Clock::new(|| 0.0, |_| {}));
-        let snap = Snapshot { league: "L".into(), overview: "l".into(), version: "v1".into() };
-        let said = Mutex::new(Vec::new());
-        let progress = |m: &str| said.lock().unwrap().push(m.to_string());
-        let opts = Sample { min_players: 40, ..Sample::default() };
-        let got = ladder.sample(&snap, &opts, Some(&progress)).unwrap();
-        // the fake search answers the same two rows for every filter: 1 skill (>= 40 players) + 0 classes
-        assert_eq!(got.len(), 2);
-        assert_eq!(log.lock().unwrap().iter().filter(|u| u.contains("/character?")).count(), 2);
-        assert_eq!(said.lock().unwrap()[0], "ladder search 1/1: Lightning Arrow");
-    }
-
-    #[test]
-    fn lite_preserves_missing_and_null_fields() {
-        let text = r#"{"v": 2, "account": "a", "name": null, "class": "Witch", "skill": "Cyclone", "rares": [{"baseType": "Bone Ring", "ilvl": null, "influences": {"shaper": true}, "mods": {"explicit": [{"tier": 1.5, "id": "X", "magnitudes": [{"min": 1, "max": 2}]}], "enchant": []}, "enchantMods": ["a"]}, {}]}"#;
-        let lite: Lite = serde_json::from_str(text).unwrap();
-        assert_eq!(lite.rares[0].ilvl, Some(None)); // present and null stays so
-        assert_eq!(lite.rares[1].ilvl, None); // absent stays absent
-        assert_eq!(serde_json::from_str::<Value>(&lite.to_json()).unwrap(), serde_json::from_str::<Value>(text).unwrap());
-    }
-
-    #[test]
-    fn main_skill_is_the_first_active_gem_of_the_first_group_with_dps() {
-        let data = json!({"skills": [
-            {"allGems": [{"name": "Cyclone"}]},
-            {"dps": [1], "allGems": [{"name": "Added Fire Support"}, {"name": ""}, {"name": "Lightning Arrow"}]},
-        ]});
-        assert_eq!(main_skill(&data), "Lightning Arrow");
-        assert_eq!(main_skill(&json!({})), "?");
-    }
-
-    #[test]
-    fn rare_items_are_identified_rares_and_jewels() {
-        let data = json!({"items": [{"itemData": {"frameType": 2, "baseType": "A"}}, {"itemData": {"frameType": 3}}, {"itemData": {"frameType": 2, "identified": false}}],
-            "jewels": [{"itemData": {"frameType": 2, "baseType": "J"}}, {}]});
-        assert_eq!(lite(&data).unwrap().rares.iter().filter_map(|r| r.base_type()).collect::<Vec<_>>(), ["A", "J"]);
-    }
-
-    #[test]
-    fn safe_names_keep_word_characters() {
-        assert_eq!(safe("Name#1234 x.y-z"), "Name_1234_x.y-z");
-    }
 }

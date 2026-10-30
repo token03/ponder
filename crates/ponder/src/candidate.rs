@@ -1,32 +1,20 @@
-//! What invested characters actually wear: mod and tier demand from ladder rares.
-//!
-//! Two views, both per base group (bases that roll the same mods, see `gear::group`):
-//!
-//! - `family_stats`: for each mod family, how many characters wear it, which
-//!   tiers, and the *tier lift*: the ladder's share at a tier or better divided
-//!   by the chance a roll of that family lands there. A lift far above 1 means
-//!   people paid for the top tiers (e.g. T1 ES on ES bases); near 1 means tier
-//!   barely matters to them.
-//! - `archetypes`: mod-family combinations that many characters share, with
-//!   resistances folded into one "resistances" token since they're filler.
-//!   These are the crafting candidates: "Gloves (ES): flat ES + %ES + res".
+//! Candidate mining and finished-item requirements.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use indexmap::IndexMap;
-use ponder_game::data;
-use ponder_game::item::split_lines;
-use ponder_game::mods::{IdMods, ItemMatch, ModDB, ModMatch};
-use ponder_net::ladder::{Lite, RareItem};
+use ponder_game::mods::{ItemMatch, ModDB, ModMatch};
+use ponder_game::{data, item::split_lines};
 use rayon::prelude::*;
 use regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use serde_json::Value;
 
 use crate::combinations::for_each as each_combination;
-use crate::mine::combinations;
+use crate::item::{Cluster as Jewel, Item};
+use crate::pattern::combinations;
+use serde::{Deserialize, Serialize};
 
 pub const RES: &str = "resistances";
 pub const NATURAL_LEVEL: i64 = 86;
@@ -128,15 +116,6 @@ fn tally<K: Hash + Eq + Clone, V: Hash + Eq + Clone>(map: &mut IndexMap<K, Count
 // -- worn items ----------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-pub struct Worn {
-    /// account/name
-    pub character: String,
-    pub skill: String,
-    pub match_: Arc<ItemMatch>,
-    pub group: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct FamilyStat {
     pub group: String,
     pub family: String,
@@ -217,7 +196,7 @@ impl Archetype {
         }
     }
 
-    /// Specific demand: mods worn together far more than chance (one build's item), with real volume.
+    /// Specific candidate: mods worn together far more than chance (one build's item), with real volume.
     pub fn niche(&self) -> f64 {
         self.lift.max(1.0).ln() * (self.characters as f64).sqrt()
     }
@@ -237,53 +216,7 @@ impl Archetype {
     }
 }
 
-/// Every rare gear item and jewel on `characters` (poe.ninja characters, as `Lite`), matched by mod id.
-///
-/// Characters are matched in parallel; the result is in character order.
-pub fn wear(db: &ModDB, characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>) -> Vec<Worn> {
-    let per_character: Vec<Vec<Worn>> = characters
-        .par_iter()
-        .map(|data| {
-            let who = format!("{}/{}", py_str(&data.account), py_str(&data.name));
-            let skill = match skill_of {
-                Some(f) => f(data),
-                None if data.skill.is_empty() => "?".to_string(), // `main_skill` of a character with no skill groups
-                None => data.skill.clone(),
-            };
-            let mut out = Vec::new();
-            for it in &data.rares {
-                let m = match_rare(db, it);
-                if m.base_id.is_none() || m.mods.is_empty() || m.item.base.ends_with("Cluster Jewel") {
-                    continue;
-                }
-                let group = group_label(db, &m);
-                out.push(Worn { character: who.clone(), skill: skill.clone(), match_: Arc::new(m), group });
-            }
-            out
-        })
-        .collect();
-    per_character.into_iter().flatten().collect()
-}
-
-fn py_str(s: &Option<String>) -> &str {
-    s.as_deref().unwrap_or("None")
-}
-
-/// A poe.ninja item's mods by id, matched against the database.
-fn match_rare(db: &ModDB, it: &RareItem) -> ItemMatch {
-    let influences = ponder_net::trade::influences(it.influences.as_ref().and_then(|v| v.as_ref()));
-    let ids = |kind: &str| -> Vec<String> { it.mods_of(kind).iter().map(|e| e.id().unwrap_or("").to_string()).collect() };
-    let mods = IdMods { explicit: ids("explicit"), fractured: ids("fractured"), crafted: ids("crafted") };
-    let ilvl = it.ilvl.flatten();
-    db.match_ids(it.base_type().unwrap_or(""), &mods, ilvl, &influences, "RARE", "", &BTreeMap::new())
-}
-
-/// The character's main skill: the first active gem of the first skill group with DPS numbers.
-pub fn main_skill(data: &Value) -> String {
-    ponder_net::ladder::main_skill(data)
-}
-
-pub fn family_stats(db: &ModDB, worn: &[Worn], min_characters: usize) -> Vec<FamilyStat> {
+pub fn family_stats(db: &ModDB, worn: &[Item], min_characters: usize) -> Vec<FamilyStat> {
     let mut stats: IndexMap<(&str, &str), FamilyStat> = IndexMap::new();
     let mut who: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
     let mut example: HashMap<&str, &ItemMatch> = HashMap::new();
@@ -411,7 +344,7 @@ impl indexmap::Equivalent<(String, String)> for PairRef<'_> {
 /// Mods are keyed by main stat (`stat_key`), resistances folded into one
 /// token. A combination is dropped when one bigger combination is worn by at
 /// least `implied` of its characters: it is mostly that one.
-pub fn archetypes(worn: &[Worn], min_characters: usize, max_size: usize, min_size: usize, implied: f64) -> Vec<Archetype> {
+pub fn merge(worn: &[Item], min_characters: usize, max_size: usize, min_size: usize, implied: f64) -> Vec<Archetype> {
     assert!(max_size <= 8, "combinations of more than 8 mods are not supported");
     // pass 1: who wears what (cheap), so pass 2 only details the survivors
     let keys_of: Vec<Vec<&'static str>> = worn.par_iter().map(|w| stat_keys(&w.match_)).collect();
@@ -663,7 +596,7 @@ static NUMBERS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(?-?\d+(\.\d+)?
 
 /// Readable names for an archetype's main stats ("+# to maximum Life", "resistances"): the text
 /// of a worn mod with that stat, a plain one when its wearers have one.
-pub fn archetype_names(db: &ModDB, a: &Archetype) -> Vec<String> {
+pub fn names(db: &ModDB, a: &Archetype) -> Vec<String> {
     a.families
         .iter()
         .map(|key| {
@@ -688,27 +621,7 @@ fn template(db: &ModDB, mod_id: &str) -> String {
 // -- cluster jewels ---------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WornCluster {
-    pub character: String,
-    pub skill: String,
-    /// small / medium / large
-    pub size: String,
-    /// e.g. "12% increased Fire Damage"
-    pub enchant: String,
-    /// the enchant's spawn tag, e.g. affliction_fire_damage
-    pub tag: String,
-    pub passives: i64,
-    pub item_level: i64,
-    /// notable names, sorted
-    pub notables: Vec<String>,
-    /// fractured notables and small-passive mods ("Group@tier") among them
-    pub fractured: Vec<String>,
-    /// small-passive mods as "Group@tier", sorted
-    pub mods: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ClusterArchetype {
+pub struct Cluster {
     pub size: String,
     pub enchant: String,
     pub tag: String,
@@ -729,9 +642,9 @@ pub struct ClusterArchetype {
     pub filler: Vec<String>,
 }
 
-impl ClusterArchetype {
-    pub fn new(size: &str, enchant: &str, tag: &str, notables: Vec<String>) -> ClusterArchetype {
-        ClusterArchetype {
+impl Cluster {
+    pub fn new(size: &str, enchant: &str, tag: &str, notables: Vec<String>) -> Cluster {
+        Cluster {
             size: size.into(),
             enchant: enchant.into(),
             tag: tag.into(),
@@ -766,124 +679,6 @@ impl ClusterArchetype {
     }
 }
 
-/// Every rare cluster jewel on `characters` with its enchant, passive count and notables.
-pub fn wear_clusters(characters: &[Lite], skill_of: Option<&(dyn Fn(&Lite) -> String + Sync)>) -> Vec<WornCluster> {
-    let ctx = ClusterCtx::new();
-    let per_character: Vec<Vec<WornCluster>> = characters
-        .par_iter()
-        .map(|c| {
-            let who = format!("{}/{}", py_str(&c.account), py_str(&c.name));
-            let skill = match skill_of {
-                Some(f) => f(c),
-                None if c.skill.is_empty() => "?".to_string(),
-                None => c.skill.clone(),
-            };
-            c.rares.iter().filter_map(|it| ctx.worn(&who, &skill, it)).collect()
-        })
-        .collect();
-    per_character.into_iter().flatten().collect()
-}
-
-const ENCHANT_PREFIX: &str = "Added Small Passive Skills grant: ";
-
-type TierTables = HashMap<(String, String), Arc<HashMap<String, i64>>>;
-
-/// Enchants by size and display text, and tier tables by (size, tag): computed once per `wear_clusters`.
-struct ClusterCtx {
-    mods: Arc<data::Mods>,
-    by_text: HashMap<&'static str, HashMap<BTreeSet<String>, (String, String)>>,
-    tiers: Mutex<TierTables>,
-}
-
-impl ClusterCtx {
-    fn new() -> ClusterCtx {
-        ClusterCtx {
-            mods: data::mods().unwrap_or_else(|e| panic!("{e}")),
-            by_text: cluster_enchants()
-                .into_iter()
-                .map(|(size, list)| {
-                    (size, list.into_iter().map(|(short, tag)| (short.split(", ").map(str::to_string).collect(), (short, tag))).collect())
-                })
-                .collect(),
-            tiers: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn tiers(&self, size: &str, tag: &str) -> Arc<HashMap<String, i64>> {
-        let key = (size.to_string(), tag.to_string());
-        if let Some(t) = self.tiers.lock().unwrap().get(&key) {
-            return t.clone();
-        }
-        let t = Arc::new(cluster_mod_tiers(size, tag));
-        self.tiers.lock().unwrap().entry(key).or_insert(t).clone()
-    }
-
-    fn worn(&self, who: &str, skill: &str, it: &RareItem) -> Option<WornCluster> {
-        let base = it.base_type().unwrap_or("");
-        if !base.ends_with("Cluster Jewel") {
-            return None;
-        }
-        let size = base.split_whitespace().next().unwrap_or("").to_lowercase();
-        let lines: BTreeSet<String> = it
-            .enchant_mods
-            .iter()
-            .flatten()
-            .flatten()
-            .flat_map(|text| split_lines(text))
-            .filter_map(|ln| ln.strip_prefix(ENCHANT_PREFIX)) // line order varies
-            .map(str::to_string)
-            .collect();
-        let (short, tag) = self.by_text.get(size.as_str())?.get(&lines)?;
-        let passives = it
-            .mods_of("enchant")
-            .iter()
-            .find_map(|m| m.0.get("stats").map(|s| s.get("local_jewel_expansion_passive_node_count").cloned()))
-            .flatten()
-            .filter(|v| v.as_f64().is_some_and(|n| n != 0.0))?;
-        let passives = passives.as_i64().or_else(|| passives.as_f64().map(|f| f as i64))?;
-        let (mut notables, mut fractured, mut small) = (Vec::new(), Vec::new(), Vec::new());
-        let tiers = self.tiers(&size, tag);
-        for source in ["explicit", "fractured"] {
-            for m in it.mods_of(source) {
-                let mod_ = m.id().and_then(|id| self.mods.get(id));
-                let is_notable = mod_.is_some_and(cluster_is_notable);
-                let added = match (mod_, m.id()) {
-                    (Some(md), _) if is_notable => {
-                        notables.push(cluster_notable_name(md));
-                        notables.last().cloned()
-                    }
-                    (Some(_), Some(id)) if tiers.contains_key(id) => {
-                        small.push(cluster_feature(id, tiers[id]));
-                        small.last().cloned()
-                    }
-                    _ => None,
-                };
-                if source == "fractured" {
-                    fractured.extend(added);
-                }
-            }
-        }
-        if (notables.is_empty() && small.is_empty()) || passives == 0 {
-            return None;
-        }
-        notables.sort();
-        fractured.sort();
-        small.sort();
-        Some(WornCluster {
-            character: who.to_string(),
-            skill: skill.to_string(),
-            size,
-            enchant: short.clone(),
-            tag: tag.clone(),
-            passives,
-            item_level: it.ilvl.flatten().unwrap_or(0),
-            notables,
-            fractured,
-            mods: small,
-        })
-    }
-}
-
 type ClusterKey<'a> = (&'a str, &'a str, Vec<&'a str>);
 
 /// Notable combinations per (size, enchant) that several characters wear.
@@ -892,10 +687,10 @@ type ClusterKey<'a> = (&'a str, &'a str, Vec<&'a str>);
 /// Fewer is a step on the way to one of those, not a product: the ladder wears 2-notable
 /// mediums thirty times as often as 1-notable ones. A combination is dropped when a bigger
 /// one covers `implied` of its characters.
-pub fn cluster_archetypes(worn: &[WornCluster], min_characters: usize, implied: f64) -> Vec<ClusterArchetype> {
+pub fn clusters(worn: &[Jewel], min_characters: usize, implied: f64) -> Vec<Cluster> {
     let (who, mut rec) = cluster_sets(worn, false);
     let mut out = keep(&who, &mut rec, min_characters, implied);
-    out.extend(passive_archetypes(worn, min_characters, implied));
+    out.extend(passives(worn, min_characters, implied));
     out.sort_by(|a, b| b.characters.cmp(&a.characters).then(b.notables.len().cmp(&a.notables.len())));
     out
 }
@@ -903,10 +698,10 @@ pub fn cluster_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
 /// Combos worn by enough characters, minus those a bigger combo covers `implied` of.
 fn keep<'a>(
     who: &IndexMap<ClusterKey<'a>, HashSet<&str>>,
-    rec: &mut HashMap<ClusterKey<'a>, ClusterArchetype>,
+    rec: &mut HashMap<ClusterKey<'a>, Cluster>,
     min_characters: usize,
     implied: f64,
-) -> Vec<ClusterArchetype> {
+) -> Vec<Cluster> {
     let keys: Vec<&ClusterKey> = who.iter().filter(|(_, v)| v.len() >= min_characters).map(|(k, _)| k).collect();
     let mut bigger: HashMap<(&str, &str), Vec<&ClusterKey>> = HashMap::new();
     for k in &keys {
@@ -936,7 +731,7 @@ pub const PASSIVE_MIN_MODS: usize = 2;
 /// Mods combine by group (any tier); each archetype then asks for the tier at
 /// least half its wearers have, so "GrantAttributes" worn at T1 by most
 /// becomes "GrantAttributes@1".
-pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: f64) -> Vec<ClusterArchetype> {
+pub fn passives(worn: &[Jewel], min_characters: usize, implied: f64) -> Vec<Cluster> {
     let (who, mut rec) = cluster_sets(worn, true);
     let mut out = keep(&who, &mut rec, min_characters, implied);
     for a in &mut out {
@@ -951,12 +746,9 @@ pub fn passive_archetypes(worn: &[WornCluster], min_characters: usize, implied: 
     out
 }
 
-fn cluster_sets(
-    worn: &[WornCluster],
-    passive: bool,
-) -> (IndexMap<ClusterKey<'_>, HashSet<&str>>, HashMap<ClusterKey<'_>, ClusterArchetype>) {
+fn cluster_sets(worn: &[Jewel], passive: bool) -> (IndexMap<ClusterKey<'_>, HashSet<&str>>, HashMap<ClusterKey<'_>, Cluster>) {
     let mut who: IndexMap<ClusterKey, HashSet<&str>> = IndexMap::new();
-    let mut rec: HashMap<ClusterKey, ClusterArchetype> = HashMap::new();
+    let mut rec: HashMap<ClusterKey, Cluster> = HashMap::new();
     for w in worn {
         if passive != w.notables.is_empty() || (passive && w.mods.len() < PASSIVE_MIN_MODS) {
             continue;
@@ -974,14 +766,14 @@ fn cluster_sets(
         if passive {
             names.sort_unstable();
         }
-        let minimum = if passive { PASSIVE_MIN_MODS } else { notable_cap(&w.size) };
+        let minimum = if passive { PASSIVE_MIN_MODS } else { crate::cluster::notable_cap(&w.size) };
         for size in minimum..=names.len() {
             for combo in combinations(&names, size) {
                 let combo: Vec<&str> = combo.into_iter().copied().collect();
                 let key = (w.size.as_str(), w.tag.as_str(), combo.clone());
                 let a = rec
                     .entry(key.clone())
-                    .or_insert_with(|| ClusterArchetype::new(&w.size, &w.enchant, &w.tag, combo.iter().map(|s| s.to_string()).collect()));
+                    .or_insert_with(|| Cluster::new(&w.size, &w.enchant, &w.tag, combo.iter().map(|s| s.to_string()).collect()));
                 a.items += 1;
                 a.full += (size == names.len()) as usize;
                 a.skills.add(w.skill.clone());
@@ -1036,15 +828,11 @@ fn is_filler(family: &str) -> bool {
     crate::gear::is_filler_family(family)
 }
 
-fn group_label(db: &ModDB, m: &ItemMatch) -> String {
-    crate::gear::group(db, m).label.clone()
-}
-
 fn pool_weights(db: &ModDB, base_id: &str, tags: &BTreeSet<String>, level: i64) -> Vec<(String, i64)> {
     crate::gear::pool(db, base_id, tags, level).iter().map(|m| (m.id.clone(), m.weight as i64)).collect()
 }
 
-pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
+pub fn representative(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
     let keys = finished_keys(a);
     let required: BTreeSet<&str> = keys.iter().map(String::as_str).collect();
     let useful = |m: &ModMatch| {
@@ -1081,29 +869,66 @@ pub fn archetype_match(db: &ModDB, a: &Archetype) -> Option<ItemMatch> {
     Some(out)
 }
 
-fn cluster_enchants() -> Vec<(&'static str, Vec<(String, String)>)> {
-    ["small", "medium", "large"]
-        .into_iter()
-        .map(|size| (size, crate::cluster::enchants(size).into_iter().map(|e| (e.short, e.tag)).collect()))
-        .collect()
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Need {
+    pub name: String,
+    pub mods: BTreeSet<String>,
+    pub count: u8,
+    pub fractured: bool,
 }
 
-fn cluster_mod_tiers(size: &str, tag: &str) -> HashMap<String, i64> {
-    crate::cluster::mod_tiers(size, tag).into_iter().collect()
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Candidate {
+    pub base: String,
+    pub item_level: u8,
+    pub influences: BTreeSet<String>,
+    pub needs: Vec<Need>,
+    pub fixed: Vec<String>,
+    pub min_mods: u8,
 }
 
-fn cluster_is_notable(m: &data::Mod) -> bool {
-    crate::cluster::is_notable(m)
+impl Candidate {
+    pub fn fingerprint(&self) -> blake3::Hash {
+        let needs: Vec<_> = self.needs.iter().map(|need| (&need.mods, need.count, need.fractured)).collect();
+        blake3::hash(
+            &serde_json::to_vec(&(&self.base, self.item_level, &self.influences, needs, &self.fixed, self.min_mods))
+                .expect("crafting request serializes"),
+        )
+    }
 }
 
-fn cluster_notable_name(m: &data::Mod) -> String {
-    crate::cluster::notable_name(m)
-}
-
-fn cluster_feature(mod_id: &str, tier: i64) -> String {
-    crate::cluster::feature(mod_id, tier)
-}
-
-fn notable_cap(size: &str) -> usize {
-    crate::cluster::notable_cap(size)
+pub fn select(groups: &[Archetype], top: usize, per_group: usize, niche: usize) -> Vec<usize> {
+    let mut picked: Vec<usize> = Vec::new();
+    let mut per: HashMap<&str, usize> = HashMap::new();
+    for (i, a) in groups.iter().enumerate() {
+        let n = per.entry(a.group.as_str()).or_insert(0);
+        if picked.len() < top || *n < per_group {
+            picked.push(i);
+            *n += 1;
+        }
+    }
+    let chosen: HashSet<usize> = picked.iter().copied().collect();
+    let niche_of: Vec<f64> = groups.iter().map(Archetype::niche).collect();
+    let mut by_niche: Vec<usize> = (0..groups.len()).collect();
+    by_niche.sort_by(|&a, &b| niche_of[b].partial_cmp(&niche_of[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut niches: Vec<usize> = Vec::new();
+    for i in by_niche {
+        let a = &groups[i];
+        if niches.len() >= niche {
+            break;
+        }
+        if chosen.contains(&i) || a.families.len() < 3 {
+            continue;
+        }
+        let variant = niches.iter().any(|&j| {
+            let o = &groups[j];
+            let shared = o.families.iter().filter(|f| a.families.contains(f)).count() as i64;
+            o.group == a.group && shared >= o.families.len().min(a.families.len()) as i64 - 1
+        });
+        if !variant {
+            niches.push(i);
+        }
+    }
+    picked.extend(niches);
+    picked
 }

@@ -1,4 +1,4 @@
-//! Game data (repoe), item parsing and mod matching, currency actions, craft problems.
+//! Game data (repoe), item parsing and mod matching.
 
 pub mod data;
 pub mod item;

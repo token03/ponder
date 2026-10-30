@@ -261,7 +261,7 @@ fn guides_name_real_things() {
 
 #[test]
 fn curated_ama_references_have_equivalent_guides() {
-    let book = std::fs::read_to_string(root().join("docs/crafting-ama-recipes.md")).unwrap();
+    let book = std::fs::read_to_string(root().join("docs/RESEARCH.md")).unwrap();
     let guides = guides();
     for reference in book.lines().filter_map(|line| line.strip_prefix("**Reference:** `").and_then(|s| s.split('`').next())) {
         assert!(guides.iter().any(|(name, _)| name == reference), "missing guide for {reference}");

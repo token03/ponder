@@ -10,15 +10,9 @@ use std::collections::BTreeSet;
 
 #[test]
 fn normalize_and_ranges() {
-    assert_eq!(
-        normalize("+(100-114) to maximum Life"),
-        "+# to maximum life"
-    );
+    assert_eq!(normalize("+(100-114) to maximum Life"), "+# to maximum life");
     assert_eq!(normalize("+105 to maximum Life"), "+# to maximum life");
-    assert_eq!(
-        template_ranges("Adds (5-7) to (11-13) Fire Damage"),
-        [(5.0, 7.0), (11.0, 13.0)]
-    );
+    assert_eq!(template_ranges("Adds (5-7) to (11-13) Fire Damage"), [(5.0, 7.0), (11.0, 13.0)]);
     assert_eq!(template_ranges("(-10--5)% to X"), [(-10.0, -5.0)]);
 }
 
@@ -45,10 +39,7 @@ fn tiers_and_sources() {
     ));
     let by_text = |t: &str| m.mods.iter().find(|x| x.lines[0].text == t).unwrap();
     let life = by_text("+135 to maximum Life");
-    assert_eq!(
-        (life.kind.as_str(), life.source, life.tier),
-        ("prefix", "natural", Some(1))
-    );
+    assert_eq!((life.kind.as_str(), life.source, life.tier), ("prefix", "natural", Some(1)));
     assert_eq!(by_text("+44% to Lightning Resistance").tier, Some(2));
     assert_eq!(by_text("+23% to Lightning Resistance").source, "crafted");
     assert!(m.unmatched.is_empty());
@@ -67,11 +58,8 @@ fn hybrid_mod_is_matched_as_one() {
 #[test]
 fn influence_mod_needs_influence() {
     common::setup();
-    let text = |inf: &str| {
-        format!(
-            "Rarity: RARE\nX\nHubris Circlet\n{inf}Item Level: 86\nImplicits: 0\nAdds 20 to 38 Cold Damage to Spells\n"
-        )
-    };
+    let text =
+        |inf: &str| format!("Rarity: RARE\nX\nHubris Circlet\n{inf}Item Level: 86\nImplicits: 0\nAdds 20 to 38 Cold Damage to Spells\n");
     let shaper = &db().match_item(&item(&text("Shaper Item\n"))).mods[0];
     let plain = &db().match_item(&item(&text(""))).mods[0];
     assert_eq!(shaper.source, "natural");
@@ -81,20 +69,9 @@ fn influence_mod_needs_influence() {
 #[test]
 fn unknown_lines_are_reported() {
     common::setup();
-    let m = db().match_item(&item(
-        "Rarity: RARE\nX\nHubris Circlet\nImplicits: 0\nUse a fossil here\n+999 to maximum Life\n",
-    ));
-    assert_eq!(
-        m.notes.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
-        ["Use a fossil here"]
-    );
-    assert_eq!(
-        m.unmatched
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>(),
-        ["+999 to maximum Life"]
-    );
+    let m = db().match_item(&item("Rarity: RARE\nX\nHubris Circlet\nImplicits: 0\nUse a fossil here\n+999 to maximum Life\n"));
+    assert_eq!(m.notes.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Use a fossil here"]);
+    assert_eq!(m.unmatched.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["+999 to maximum Life"]);
 }
 
 #[test]
@@ -111,9 +88,7 @@ fn summed_line_split_into_hybrid_and_single() {
 #[test]
 fn unknown_base_leaves_everything_unmatched() {
     common::setup();
-    let m = db().match_item(&item(
-        "Rarity: RARE\nX\nNo Such Base\nImplicits: 0\n+10 to Strength\n",
-    ));
+    let m = db().match_item(&item("Rarity: RARE\nX\nNo Such Base\nImplicits: 0\n+10 to Strength\n"));
     assert!(m.base_id.is_none() && m.mods.is_empty() && m.unmatched.len() == 1);
 }
 
@@ -158,19 +133,10 @@ fn compare(
 fn texts_match_fixtures() {
     common::setup();
     let texts = expected("texts");
-    let pairs = texts
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e.get("match").is_some())
-        .map(|e| {
-            let item = parse_item(e["text"].as_str().unwrap()).unwrap();
-            (
-                e["text"].to_string(),
-                match_json(&db().match_item(&item)),
-                e["match"].clone(),
-            )
-        });
+    let pairs = texts.as_array().unwrap().iter().filter(|e| e.get("match").is_some()).map(|e| {
+        let item = parse_item(e["text"].as_str().unwrap()).unwrap();
+        (e["text"].to_string(), match_json(&db().match_item(&item)), e["match"].clone())
+    });
     let (same, total, _) = compare("texts", pairs, |_| true);
     assert_eq!(same, total);
 }
@@ -182,9 +148,7 @@ fn fixture_builds_match_fixtures() {
     let mut pairs = Vec::new();
     for b in builds.as_array().unwrap() {
         let path = common::fixtures().join(b["file"].as_str().unwrap());
-        let build =
-            ponder_game::pob::load_with(path.to_str().unwrap(), |_| Err("no network".into()))
-                .unwrap();
+        let build = ponder_game::pob::load_with(path.to_str().unwrap(), |_| Err("no network".into())).unwrap();
         assert_eq!(build.class_name, b["class_name"].as_str().unwrap());
         assert_eq!(build.ascendancy, b["ascendancy"].as_str().unwrap());
         assert_eq!(Some(build.level), b["level"].as_i64());
@@ -194,12 +158,7 @@ fn fixture_builds_match_fixtures() {
             assert_eq!(pi.id, g["id"].as_str().unwrap());
             assert_eq!(pi.slot.as_deref(), g["slot"].as_str());
             let sets: Vec<&str> = pi.sets.iter().map(String::as_str).collect();
-            let want: Vec<&str> = g["sets"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap())
-                .collect();
+            let want: Vec<&str> = g["sets"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
             assert_eq!(sets, want);
             let Some(want_item) = g.get("item") else {
                 assert!(parse_item(&pi.text).is_err());
@@ -207,11 +166,7 @@ fn fixture_builds_match_fixtures() {
             };
             let item = parse_item(&pi.text).unwrap();
             assert_eq!(item_json(&item), *want_item, "{} item {}", b["file"], pi.id);
-            pairs.push((
-                format!("{} item {}", b["file"], pi.id),
-                match_json(&db().match_item(&item)),
-                g["match"].clone(),
-            ));
+            pairs.push((format!("{} item {}", b["file"], pi.id), match_json(&db().match_item(&item)), g["match"].clone()));
         }
     }
     let (same, total, _) = compare("fixtures", pairs.into_iter(), |_| true);
@@ -223,34 +178,10 @@ fn ladder_match_ids_match_fixtures() {
     common::setup();
     let ladder = expected("ladder");
     let pairs = ladder["items"].as_array().unwrap().iter().map(|e| {
-        let ids = |k: &str| -> Vec<String> {
-            e["mods"][k]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect()
-        };
-        let mods = IdMods {
-            explicit: ids("explicit"),
-            fractured: ids("fractured"),
-            crafted: ids("crafted"),
-        };
-        let influences: BTreeSet<String> = e["influences"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s.as_str().unwrap().to_string())
-            .collect();
-        let m = db().match_ids(
-            e["base"].as_str().unwrap(),
-            &mods,
-            e["ilvl"].as_i64(),
-            &influences,
-            "RARE",
-            "",
-            &Default::default(),
-        );
+        let ids = |k: &str| -> Vec<String> { e["mods"][k].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect() };
+        let mods = IdMods { explicit: ids("explicit"), fractured: ids("fractured"), crafted: ids("crafted") };
+        let influences: BTreeSet<String> = e["influences"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
+        let m = db().match_ids(e["base"].as_str().unwrap(), &mods, e["ilvl"].as_i64(), &influences, "RARE", "", &Default::default());
         (e["base"].to_string(), match_json(&m), e["match"].clone())
     });
     let (same, total, ordered) = compare("ladder", pairs, |_| true);
@@ -261,30 +192,11 @@ fn ladder_match_ids_match_fixtures() {
 #[test]
 fn match_ids_skips_unknown_ids() {
     common::setup();
-    let mods = IdMods {
-        explicit: vec!["IncreasedLife7".into(), "NoSuchMod".into(), "".into()],
-        ..Default::default()
-    };
-    let m = db().match_ids(
-        "Hubris Circlet",
-        &mods,
-        Some(86),
-        &BTreeSet::new(),
-        "RARE",
-        "",
-        &Default::default(),
-    );
+    let mods = IdMods { explicit: vec!["IncreasedLife7".into(), "NoSuchMod".into(), "".into()], ..Default::default() };
+    let m = db().match_ids("Hubris Circlet", &mods, Some(86), &BTreeSet::new(), "RARE", "", &Default::default());
     assert_eq!(m.mods.len(), 1);
     assert_eq!(m.mods[0].mod_id, "IncreasedLife7");
-    let none = db().match_ids(
-        "Nope",
-        &mods,
-        None,
-        &BTreeSet::new(),
-        "RARE",
-        "",
-        &Default::default(),
-    );
+    let none = db().match_ids("Nope", &mods, None, &BTreeSet::new(), "RARE", "", &Default::default());
     assert!(none.base_id.is_none() && none.mods.is_empty());
 }
 
@@ -297,11 +209,7 @@ fn synthetic_items_match_fixtures() {
     for e in synth.as_array().unwrap() {
         let item = parse_item(e["text"].as_str().unwrap()).unwrap();
         assert_eq!(item_json(&item), e["item"]);
-        pairs.push((
-            e["text"].to_string(),
-            match_json(&db().match_item(&item)),
-            e["match"].clone(),
-        ));
+        pairs.push((e["text"].to_string(), match_json(&db().match_item(&item)), e["match"].clone()));
     }
     let (same, total, ordered) = compare("synth", pairs.into_iter(), |_| true);
     assert_eq!(same, total);

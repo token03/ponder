@@ -9,7 +9,3 @@ pub mod ladder;
 pub mod prices;
 pub mod repoe;
 pub mod trade;
-
-#[cfg(test)]
-#[path = "../../../tests/support/mod.rs"]
-mod testing;

@@ -1,20 +1,14 @@
-//! Everything the panes read and the actions that change it.
-
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ponder::gear;
 use ponder::pipeline::{self, Context, Estimate, LadderOpts};
-use ponder_game::item::parse_item;
 use ponder_game::mods::ModDB;
 use serde::{Deserialize, Serialize};
 
 use crate::filter::ItemCatalog;
-use crate::jobs::{Finished, Jobs, Loaded, Msg};
+use crate::jobs::{Jobs, Loaded, Msg};
 use crate::view::{self, Filters, Sort};
 
-/// The ladder run's knobs (`LadderOpts`), kept between sessions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RunSettings {
@@ -31,16 +25,16 @@ pub struct RunSettings {
 
 impl Default for RunSettings {
     fn default() -> Self {
-        let o = LadderOpts::default();
-        RunSettings {
-            gear_top: o.gear_top,
-            per_group: o.per_group,
-            niche: o.niche,
-            cluster_top: o.cluster_top,
-            min_characters: o.min_characters,
+        let opts = LadderOpts::default();
+        Self {
+            gear_top: opts.gear_top,
+            per_group: opts.per_group,
+            niche: opts.niche,
+            cluster_top: opts.cluster_top,
+            min_characters: opts.min_characters,
             group: String::new(),
             trade: false,
-            trade_budget: o.trade_budget,
+            trade_budget: opts.trade_budget,
             chaos_per_hour: pipeline::settings_from_env().chaos_per_hour,
         }
     }
@@ -54,7 +48,7 @@ impl RunSettings {
             niche: self.niche,
             cluster_top: self.cluster_top,
             min_characters: self.min_characters,
-            group: Some(self.group.trim().to_string()).filter(|g| !g.is_empty()),
+            group: Some(self.group.trim().into()).filter(|group: &String| !group.is_empty()),
             trade_lookup: self.trade,
             trade_budget: self.trade_budget,
             workers: None,
@@ -62,7 +56,6 @@ impl RunSettings {
     }
 }
 
-/// What survives a restart (besides the tile layout).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Saved {
@@ -70,20 +63,6 @@ pub struct Saved {
     pub sort: Sort,
     pub run: RunSettings,
     pub auto_run: bool,
-    pub donors: DonorSettings,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DonorSettings {
-    pub recomb: [usize; 2],
-    pub fracture: [usize; 2],
-}
-
-impl Default for DonorSettings {
-    fn default() -> Self {
-        Self { recomb: [1, 1], fracture: [1, 6] }
-    }
 }
 
 pub struct State {
@@ -91,35 +70,26 @@ pub struct State {
     pub cx: Arc<Context>,
     pub db: Option<Arc<ModDB>>,
     pub data: Option<Loaded>,
-    /// bumped by every ladder run, so a late job result for an older run is dropped
     pub run: u64,
     pub ranks: Vec<usize>,
     pub catalog: ItemCatalog,
-    /// visible estimates, in display order
     pub rows: Vec<usize>,
     pub selected: Option<usize>,
-    /// scroll the crafts table to the selection on the next frame
     pub reveal: bool,
-    /// recipe step to scroll to
-    pub jump: Option<usize>,
-    pub highlighted_step: Option<usize>,
     pub log: Vec<(Instant, String)>,
     pub status: String,
     pub jobs: Jobs,
-    pub finish_text: String,
-    pub resale_draft: pipeline::ResaleQuote,
-    pub finish: Option<Result<Box<Finished>, String>>,
     pub has_cookie: bool,
     pub has_ladder: bool,
     pub started: Instant,
 }
 
 impl State {
-    pub fn new(ctx: &egui::Context, saved: Saved) -> State {
+    pub fn new(ctx: &egui::Context, saved: Saved) -> Self {
         let jobs = Jobs::new(ctx.clone());
-        jobs.spawn("game data", |_| Msg::Db(ModDB::load().map(Arc::new).map_err(|e| e.to_string())));
-        let has_ladder = std::fs::read_dir(ponder_net::ladder::CACHE).is_ok_and(|mut d| d.next().is_some());
-        let mut s = State {
+        jobs.spawn("game data", |_| Msg::Db(ModDB::load().map(Arc::new).map_err(|error| error.to_string())));
+        let has_ladder = std::fs::read_dir(ponder_net::ladder::DATA_DIR).is_ok_and(|mut entries| entries.next().is_some());
+        Self {
             cx: Arc::new(context(&saved.run)),
             saved,
             db: None,
@@ -130,40 +100,31 @@ impl State {
             rows: Vec::new(),
             selected: None,
             reveal: false,
-            jump: None,
-            highlighted_step: None,
             log: Vec::new(),
             status: "loading game data".into(),
             jobs,
-            finish_text: String::new(),
-            resale_draft: pipeline::ResaleQuote::default(),
-            finish: None,
             has_cookie: ponder_net::trade::cookie().is_some(),
             has_ladder,
             started: Instant::now(),
-        };
-        if !s.has_ladder {
-            s.note("no ladder data yet: `ponder ladder fetch` downloads it (or use Run ➡ Fetch ladder)");
         }
-        s
     }
 
-    pub fn note(&mut self, msg: impl Into<String>) {
-        let msg = msg.into();
-        self.status.clone_from(&msg);
-        self.log.push((Instant::now(), msg));
+    pub fn note(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.status.clone_from(&message);
+        self.log.push((Instant::now(), message));
     }
-
     pub fn divine(&self) -> f64 {
-        self.data.as_ref().map_or(0.0, |d| d.report.divine)
+        self.data.as_ref().map_or(0.0, |data| data.report.divine)
     }
-
     pub fn estimates(&self) -> &[Estimate] {
-        self.data.as_ref().map_or(&[], |d| &d.report.estimates)
+        self.data.as_ref().map_or(&[], |data| data.report.estimates.as_slice())
     }
-
     pub fn selected_estimate(&self) -> Option<&Estimate> {
         self.estimates().get(self.selected?)
+    }
+    pub fn select(&mut self, index: usize) {
+        self.selected = Some(index);
     }
 
     pub fn refilter(&mut self) {
@@ -172,48 +133,23 @@ impl State {
             self.rows.retain(|&i| self.catalog.admits(&data.report.estimates[i], &self.saved.filters.items));
         }
         if self.selected.is_none_or(|selected| !self.rows.contains(&selected)) {
-            self.selected = None;
-            if let Some(index) = self.rows.first().copied() {
-                self.select(index);
-            }
-            self.jump = None;
-            self.highlighted_step = None;
+            self.selected = self.rows.first().copied();
         }
     }
 
-    pub fn select(&mut self, index: usize) {
-        if self.selected != Some(index) {
-            self.resale_draft = self
-                .estimates()
-                .get(index)
-                .and_then(|e| Some((e.problem.as_ref()?, e.recovery_core()?)))
-                .and_then(|(p, core)| self.cx.resale_quote(p, core))
-                .unwrap_or_default();
-            self.selected = Some(index);
-            self.jump = None;
-            self.highlighted_step = None;
-        }
-    }
-
-    /// Move the selection by `delta` rows of the table.
     pub fn step_selection(&mut self, delta: isize) {
         if self.rows.is_empty() {
             return;
         }
-        let at = self.selected.and_then(|s| self.rows.iter().position(|&r| r == s));
-        let next = match at {
-            Some(p) => (p as isize + delta).clamp(0, self.rows.len() as isize - 1) as usize,
-            None => 0,
-        };
+        let current = self.selected.and_then(|index| self.rows.iter().position(|&row| row == index)).unwrap_or(0);
+        let next = (current as isize + delta).clamp(0, self.rows.len() as isize - 1) as usize;
         self.select(self.rows[next]);
         self.reveal = true;
     }
 
-    pub fn handle(&mut self, msg: Msg) {
-        match msg {
-            Msg::Status(s) => {
-                self.status = s;
-            }
+    pub fn handle(&mut self, message: Msg) {
+        match message {
+            Msg::Status(message) => self.status = message,
             Msg::Db(Ok(db)) => {
                 self.catalog = ItemCatalog::new(&db);
                 self.db = Some(db);
@@ -222,55 +158,43 @@ impl State {
                     self.run_ladder();
                 }
             }
-            Msg::Db(Err(e)) => self.note(format!("game data: {e} (run `ponder data fetch`)")),
+            Msg::Db(Err(error)) => self.note(format!("game data: {error}")),
             Msg::Ladder(Ok(loaded)) => {
-                let r = &loaded.report;
-                let msg = format!(
-                    "{} estimates from {} characters ({} archetypes) in {:.1}s",
-                    r.estimates.len(),
-                    r.characters,
-                    r.archetypes,
+                let message = format!(
+                    "{} estimates from {} characters in {:.1}s",
+                    loaded.report.estimates.len(),
+                    loaded.report.characters,
                     loaded.took.as_secs_f64()
                 );
-                let keep = self.selected_estimate().map(|e| (e.title.clone(), e.targets.clone()));
                 self.ranks = view::ranks(&loaded.report.estimates);
                 self.catalog.update_counts(&loaded.report.estimates);
                 self.data = Some(*loaded);
-                self.selected = keep.and_then(|(t, ts)| self.estimates().iter().position(|e| e.title == t && e.targets == ts));
                 self.refilter();
-                if self.selected.is_none() {
-                    self.selected = self.rows.first().copied();
-                }
-                self.note(msg);
+                self.note(message);
             }
-            Msg::Ladder(Err(e)) => self.note(format!("ladder run failed: {e}")),
+            Msg::Ladder(Err(error)) => self.note(format!("ladder run failed: {error}")),
+            Msg::LadderFetched { characters, note } => {
+                self.has_ladder |= characters > 0;
+                self.note(note);
+                if self.saved.auto_run && self.has_ladder && self.data.is_none() {
+                    self.run_ladder();
+                }
+            }
             Msg::Estimate { run, index, estimate, note } => {
-                if run == self.run
-                    && let Some(d) = self.data.as_mut()
-                    && index < d.report.estimates.len()
+                if run != self.run {
+                    return;
+                }
+                if let Some(data) = self.data.as_mut()
+                    && index < data.report.estimates.len()
                 {
-                    let route = d.report.estimates[index].cheapest_route();
-                    d.report.estimates[index] = *estimate;
-                    if d.report.estimates[index].cheapest_route() != route {
-                        // a priced fractured base can change the recipe, and with it the pivots
-                        d.report.estimates[index].pivots = pipeline::pivots_of(&d.report.estimates, index);
-                    }
-                    self.ranks = view::ranks(&d.report.estimates);
+                    data.report.estimates[index] = *estimate;
+                    self.ranks = view::ranks(&data.report.estimates);
                     self.refilter();
                 }
                 self.note(note);
             }
-            Msg::Finished(r) => {
-                match &r {
-                    Ok(f) => self.note(format!("{} ways to finish the item", f.found.len())),
-                    Err(e) => self.note(format!("finishing failed: {e}")),
-                }
-                self.finish = Some(r);
-            }
         }
     }
-
-    // -- actions -----------------------------------------------------------------------------
 
     pub fn run_ladder(&mut self) {
         let Some(db) = self.db.clone() else { return };
@@ -283,30 +207,34 @@ impl State {
         let opts = self.saved.run.opts();
         self.note("running the ladder pipeline");
         self.jobs.spawn("ladder", move |reply| {
-            let t = Instant::now();
-            let say = |m: &str| reply.status(m);
+            let clock = Instant::now();
+            let say = |message: &str| reply.status(message);
             let table = match cx.prices.load() {
-                Ok((t, _)) => t,
-                Err(e) => return Msg::Ladder(Err(format!("{e:#} (fetch prices first)"))),
+                Ok((table, _)) => table,
+                Err(error) => return Msg::Ladder(Err(error.to_string())),
             };
-            let r = pipeline::ladder(&cx, &db, None, &opts, Some(&say));
-            Msg::Ladder(r.map(|report| Box::new(Loaded { report, table, took: t.elapsed() })).map_err(|e| format!("{e:#}")))
+            Msg::Ladder(
+                pipeline::ladder(&cx, &db, None, &opts, Some(&say))
+                    .map(|report| Box::new(Loaded { report, table, took: clock.elapsed() }))
+                    .map_err(|error| error.to_string()),
+            )
         });
     }
 
     pub fn fetch_ladder(&mut self) {
-        if self.jobs.is_running("fetch ladder") {
-            return;
-        }
         let cx = self.cx.clone();
-        self.note("downloading ladder characters from poe.ninja");
         self.jobs.spawn("fetch ladder", move |reply| {
-            let say = |m: &str| reply.status(m);
-            let r = cx.ladder.snapshot(None).and_then(|snap| {
-                let chars = cx.ladder.sample(&snap, &ponder_net::ladder::Sample::default(), Some(&say))?;
-                Ok(format!("{} characters from {} cached", chars.len(), snap.league))
-            });
-            Msg::Status(r.unwrap_or_else(|e| format!("ladder fetch failed: {e:#}")))
+            let say = |message: &str| reply.status(message);
+            match cx
+                .ladder
+                .snapshot(None)
+                .and_then(|snapshot| cx.ladder.sample(&snapshot, &ponder_net::ladder::Sample::default(), Some(&say)))
+            {
+                Ok(characters) => {
+                    Msg::LadderFetched { characters: characters.len(), note: format!("{} characters saved", characters.len()) }
+                }
+                Err(error) => Msg::Status(format!("ladder fetch failed: {error}")),
+            }
         });
     }
 
@@ -314,132 +242,41 @@ impl State {
         let cx = self.cx.clone();
         self.jobs.spawn("fetch prices", move |_| {
             Msg::Status(match cx.prices.fetch(None) {
-                Ok((league, n)) => format!("fetched {n} prices for {league}"),
-                Err(e) => format!("price fetch failed: {e:#}"),
+                Ok((league, count)) => format!("fetched {count} prices for {league}"),
+                Err(error) => format!("price fetch failed: {error}"),
             })
         });
     }
 
-    /// Clone the selected estimate into a job that changes it, and put the result back.
-    fn job_on_selected(
-        &mut self,
-        name: &str,
-        work: impl FnOnce(&Context, &ModDB, &Priced, &mut Estimate, &crate::jobs::Reply) -> String + Send + 'static,
-    ) {
-        let (Some(index), Some(db), Some(d)) = (self.selected, self.db.clone(), self.data.as_ref()) else {
-            return;
-        };
-        let job = format!("{name} #{index}");
-        if self.jobs.is_running(&job) {
-            return;
-        }
-        let mut est = d.report.estimates[index].clone();
-        let ctx = Priced { table: d.table.clone(), league: d.report.league.clone() };
-        let (cx, run) = (self.cx.clone(), self.run);
-        self.note(format!("{name}: {}", est.title));
-        self.jobs.spawn(&job, move |reply| {
-            let note = work(&cx, &db, &ctx, &mut est, reply);
-            Msg::Estimate { run, index, estimate: Box::new(est), note }
-        });
-    }
-
-    pub fn quote_resale(&mut self, enabled: bool) {
-        let quote = enabled.then_some(self.resale_draft);
-        self.job_on_selected("recovery quote", move |cx, db, d, est, reply| {
-            let Some(problem) = &est.problem else { return "No crafting problem".into() };
-            let Some(core) = est.recovery_core() else { return "No recovery recipe".into() };
-            if let Err(error) = cx.set_resale_quote(problem, core, quote) {
-                return error;
-            }
-            est.protected = None;
-            est.recomb = None;
-            est.awakener = None;
-            let say = |m: &str| reply.status(m);
-            pipeline::add_recombs_in_league(cx, db, std::slice::from_mut(est), &d.table, &d.league, None, Some(&say));
-            pipeline::solve_estimates(cx, std::slice::from_mut(est), &d.table, None, Some(&say));
-            format!("Updated recovery choices for {}", est.title)
-        });
-    }
-
     pub fn price_selected(&mut self) {
-        self.job_on_selected("trade prices", |cx, _, d, est, reply| {
-            let say = |m: &str| reply.status(m);
-            pipeline::lookup_market(cx, est, &d.table, &d.league);
-            let n = pipeline::price_fractures(cx, std::slice::from_mut(est), &d.table, &d.league, 3, 6, Some(&say));
-            match (&est.market, &est.market_error) {
-                (Some((p, n_listed)), _) => format!("{}: {p:.0}c, {n_listed} listed; {n} fractured bases priced", est.title),
-                (None, Some(e)) => format!("{}: {e}", est.title),
-                _ => format!("{}: not listed", est.title),
-            }
-        });
-    }
-
-    pub fn starts_selected(&mut self) {
-        self.job_on_selected("half-done items", |cx, db, d, est, _| match pipeline::find_starts(cx, db, est, &d.table, &d.league, 20, 5) {
-            Ok(found) => {
-                let n = found.len();
-                est.starts = found;
-                format!("{n} half-done {} on trade", est.title)
-            }
-            Err(e) => format!("half-done search failed: {e:#}"),
-        });
-    }
-
-    /// Read the pasted item and find the ladder products it can be finished into.
-    pub fn finish_item(&mut self) {
-        let (Some(db), Some(d)) = (self.db.clone(), self.data.as_ref()) else {
+        let (Some(index), Some(data)) = (self.selected, self.data.as_ref()) else {
             return;
         };
-        let item = match parse_item(&self.finish_text) {
-            Ok(i) => i,
-            Err(e) => {
-                self.finish = Some(Err(format!("can't read the item: {e}")));
-                return;
-            }
-        };
-        let m = db.match_item(&item);
-        if m.base_id.is_none() {
-            self.finish = Some(Err(format!("unknown base {:?}", m.item.base)));
-            return;
-        }
-        let group = gear::group(&db, &m).label.clone();
-        let mine: Vec<Estimate> = d.report.estimates.iter().filter(|e| e.title == group).cloned().collect();
-        if mine.is_empty() {
-            self.finish = Some(Err(format!("the ladder run has no {group} crafts (widen the run or set its group to {group:?})")));
-            return;
-        }
-        let (cx, table) = (self.cx.clone(), d.table.clone());
-        self.jobs.spawn("finish item", move |_| {
-            let found = pipeline::finishes(&cx, &db, &m, &mine, &table, 8);
-            Msg::Finished(Ok(Box::new(Finished { item: m, group, found })))
+        let mut estimate = data.report.estimates[index].clone();
+        let (cx, run, table, league) = (self.cx.clone(), self.run, data.table.clone(), data.report.league.clone());
+        self.jobs.spawn(&format!("trade prices #{index}"), move |_| {
+            pipeline::lookup_market(&cx, &mut estimate, &table, &league);
+            pipeline::solve_one(&cx, &mut estimate, &table);
+            Msg::Estimate { run, index, estimate: Box::new(estimate), note: "trade prices updated".into() }
         });
     }
 
-    /// Write the report as JSON (the CLI's format) next to the working directory.
     pub fn export(&mut self) {
-        let Some(d) = self.data.as_ref() else { return };
-        let path = PathBuf::from(format!("ponder-{}.json", d.report.league.to_lowercase().replace(' ', "-")));
-        let r = std::fs::File::create(&path).map_err(anyhow::Error::from).and_then(|f| {
-            serde_json::to_writer_pretty(std::io::BufWriter::new(f), &d.report.to_dict())?;
-            Ok(())
+        let Some(data) = &self.data else { return };
+        let result = serde_json::to_vec_pretty(&data.report)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| std::fs::write("ponder-report.json", bytes).map_err(|error| error.to_string()));
+        self.note(match result {
+            Ok(()) => "saved ponder-report.json".into(),
+            Err(error) => format!("export failed: {error}"),
         });
-        match r {
-            Ok(()) => self.note(format!("saved {}", std::fs::canonicalize(&path).unwrap_or(path).display())),
-            Err(e) => self.note(format!("export failed: {e:#}")),
-        }
     }
-}
-
-/// The prices and league a job on one estimate needs.
-pub struct Priced {
-    pub table: ponder_core::Prices,
-    pub league: String,
 }
 
 fn context(run: &RunSettings) -> Context {
-    let mut cx = Context::real();
-    if run.chaos_per_hour >= 0.0 {
-        cx.settings.chaos_per_hour = run.chaos_per_hour;
+    let mut context = Context::real();
+    if run.chaos_per_hour.is_finite() && run.chaos_per_hour >= 0.0 {
+        context.settings.chaos_per_hour = run.chaos_per_hour;
     }
-    cx
+    context
 }

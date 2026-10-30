@@ -15,6 +15,7 @@ percent-encoding.workspace = true
 form_urlencoded.workspace = true
 ureq.workspace = true
 anyhow.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 flate2 = "1"

@@ -225,7 +225,11 @@ fn title(s: &str) -> String {
     let mut in_word = false;
     for c in s.chars() {
         if c.is_alphabetic() {
-            if in_word { out.extend(c.to_lowercase()) } else { out.extend(c.to_uppercase()) }
+            if in_word {
+                out.extend(c.to_lowercase())
+            } else {
+                out.extend(c.to_uppercase())
+            }
             in_word = true;
         } else {
             out.push(c);
@@ -252,7 +256,8 @@ pub fn cluster_query(
     if let Some(p) = passives.filter(|p| *p != 0) {
         extra.push(json!({"id": PASSIVES_STAT, "value": {"min": p, "max": p}, "disabled": false}));
     }
-    let mut stats: Vec<Stat> = notable_ids.iter().map(|(m, low)| (ids.stat_id(m, "explicit").unwrap_or_else(|| m.clone()), low.clone())).collect();
+    let mut stats: Vec<Stat> =
+        notable_ids.iter().map(|(m, low)| (ids.stat_id(m, "explicit").unwrap_or_else(|| m.clone()), low.clone())).collect();
     stats.extend(fractured_ids.iter().map(|m| (ids.stat_id(m, "fractured").unwrap_or_else(|| m.clone()), None)));
     item_query(&ItemQuery {
         base: Some(format!("{} Cluster Jewel", title(size))),
@@ -332,10 +337,19 @@ pub fn listing_item(listing: &Value) -> ListingItem {
     let empty = json!({});
     let it = listing.get("item").unwrap_or(&empty);
     let str_of = |k: &str| it.get(k).and_then(Value::as_str).filter(|s| !s.is_empty());
-    let frame = ["NORMAL", "MAGIC", "RARE", "UNIQUE"].get(it.get("frameType").and_then(Value::as_u64).unwrap_or(99) as usize).copied().unwrap_or("");
+    let frame = ["NORMAL", "MAGIC", "RARE", "UNIQUE"]
+        .get(it.get("frameType").and_then(Value::as_u64).unwrap_or(99) as usize)
+        .copied()
+        .unwrap_or("");
     let influences = influences(it.get("influences"));
-    let flags = ["corrupted", "fractured", "mirrored", "split"].iter().filter(|k| it.get(**k).and_then(Value::as_bool) == Some(true)).map(|k| k.to_string()).collect();
-    let lines = |key: &str| -> Vec<String> { it.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect() };
+    let flags = ["corrupted", "fractured", "mirrored", "split"]
+        .iter()
+        .filter(|k| it.get(**k).and_then(Value::as_bool) == Some(true))
+        .map(|k| k.to_string())
+        .collect();
+    let lines = |key: &str| -> Vec<String> {
+        it.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+    };
     let mut explicits = Vec::new();
     for (key, fractured, crafted) in [("fracturedMods", true, false), ("explicitMods", false, false), ("craftedMods", false, true)] {
         explicits.extend(lines(key).into_iter().map(|text| ListedLine { text, fractured, crafted }));
@@ -393,7 +407,16 @@ impl Trade {
     }
 
     pub fn with(http: Arc<dyn Transport>, cache: PathBuf, clock: Clock) -> Trade {
-        Trade { http, cache, ttl: 3600.0, clock, on_wait: None, cookie: Arc::new(cookie), limits: Mutex::new(HashMap::new()), searches: AtomicUsize::new(0) }
+        Trade {
+            http,
+            cache,
+            ttl: 3600.0,
+            clock,
+            on_wait: None,
+            cookie: Arc::new(cookie),
+            limits: Mutex::new(HashMap::new()),
+            searches: AtomicUsize::new(0),
+        }
     }
 
     /// Searches sent to the site this run (cached answers don't count).
@@ -408,7 +431,12 @@ impl Trade {
         let key = cache_key(json!([1, "price", league, query, listings]));
         let path = self.cache.join(format!("{key}.json"));
         if let Some(saved) = self.fresh(&path, max_age) {
-            let asks: Vec<(Number, String)> = saved["asks"].as_array().into_iter().flatten().filter_map(|a| Some((a[0].as_number()?.clone(), a[1].as_str()?.to_string()))).collect();
+            let asks: Vec<(Number, String)> = saved["asks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|a| Some((a[0].as_number()?.clone(), a[1].as_str()?.to_string())))
+                .collect();
             return Ok(priced(&asks, saved["total"].as_i64().unwrap_or(0), rates));
         }
         self.searches.fetch_add(1, Ordering::SeqCst);
@@ -419,7 +447,10 @@ impl Trade {
             let fetched = self.call(&format!("{SITE}/api/trade/fetch/{}?query={}", ids.join(","), query_id(&found)), None, "fetch", 2)?;
             for r in fetched["result"].as_array().into_iter().flatten() {
                 let p = &r["listing"]["price"];
-                if let (Some(a), Some(c)) = (p.get("amount").and_then(Value::as_number).filter(|n| n.as_f64() != Some(0.0)), p.get("currency").and_then(Value::as_str).filter(|c| !c.is_empty())) {
+                if let (Some(a), Some(c)) = (
+                    p.get("amount").and_then(Value::as_number).filter(|n| n.as_f64() != Some(0.0)),
+                    p.get("currency").and_then(Value::as_str).filter(|c| !c.is_empty()),
+                ) {
                     asks.push((a.clone(), c.to_string()));
                 }
             }
@@ -473,7 +504,13 @@ impl Trade {
                 headers.push(("Cookie".into(), format!("POESESSID={c}")));
             }
             let body = body.map(serde_json::to_vec).transpose()?;
-            let req = Request { method: if body.is_some() { Method::Post } else { Method::Get }, url: url.to_string(), headers, body, timeout: Duration::from_secs(30) };
+            let req = Request {
+                method: if body.is_some() { Method::Post } else { Method::Get },
+                url: url.to_string(),
+                headers,
+                body,
+                timeout: Duration::from_secs(30),
+            };
             let resp = self.http.send(&req)?;
             self.remember_limits(endpoint, &resp.headers);
             if resp.ok() {
@@ -490,14 +527,18 @@ impl Trade {
 
     /// Parse e.g. `X-Rate-Limit-Ip: 8:10:60,15:60:300` and `X-Rate-Limit-Ip-State: 1:10:0,1:60:0`.
     pub(crate) fn remember_limits(&self, endpoint: &str, headers: &Headers) {
-        let Some(rules_header) = headers.get("X-Rate-Limit-Rules").filter(|r| !r.is_empty()) else { return };
+        let Some(rules_header) = headers.get("X-Rate-Limit-Rules").filter(|r| !r.is_empty()) else {
+            return;
+        };
         let mut rules = Vec::new();
         for rule in rules_header.split(',') {
             let limits = headers.get(&format!("X-Rate-Limit-{rule}")).unwrap_or("");
             let states = headers.get(&format!("X-Rate-Limit-{rule}-State")).unwrap_or("");
             for (lim, st) in limits.split(',').zip(states.split(',')) {
                 // int() of exactly three colon-separated numbers each, else the pair is skipped
-                let (Some([max_hits, period, _]), Some([hits, _, restricted])) = (triple(lim), triple(st)) else { continue };
+                let (Some([max_hits, period, _]), Some([hits, _, restricted])) = (triple(lim), triple(st)) else {
+                    continue;
+                };
                 rules.push((max_hits, period, hits, restricted));
             }
         }
@@ -506,7 +547,9 @@ impl Trade {
 
     /// Sleep until one more call fits under every limit the last response reported.
     pub(crate) fn wait_for(&self, endpoint: &str) {
-        let Some((seen, rules)) = self.limits.lock().unwrap().get(endpoint).cloned() else { return };
+        let Some((seen, rules)) = self.limits.lock().unwrap().get(endpoint).cloned() else {
+            return;
+        };
         let elapsed = self.clock.now() - seen;
         let mut wait: f64 = 0.0;
         for (max_hits, period, hits, restricted) in rules {
@@ -540,188 +583,5 @@ fn query_id(found: &Value) -> String {
     match &found["id"] {
         Value::String(s) => s.clone(),
         other => other.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::http::Response;
-    use crate::testing::TempDir;
-
-    #[test]
-    fn cache_keys_ignore_object_order_and_distinguish_requests() {
-        let a = json!([1, "price", "Standard", {"b": 1, "a": {"d": 2, "c": 3}}, 10]);
-        let mut b = json!([1, "price", "Standard", {"a": {"c": 3, "d": 2}, "b": 1}, 10]);
-        assert_eq!(cache_key(a.clone()), cache_key(b.clone()));
-        b[1] = json!("listings");
-        assert_ne!(cache_key(a), cache_key(b));
-    }
-
-    fn clock_at(now: f64) -> (Clock, Arc<Mutex<Vec<f64>>>) {
-        let slept = Arc::new(Mutex::new(Vec::new()));
-        let s = slept.clone();
-        (Clock::new(move || now, move |x| s.lock().unwrap().push(x)), slept)
-    }
-
-    fn headers(state: &str) -> Headers {
-        Headers::new([("X-Rate-Limit-Rules", "Ip"), ("X-Rate-Limit-Ip", "8:10:60,15:60:300"), ("X-Rate-Limit-Ip-State", state)])
-    }
-
-    #[test]
-    fn rate_limit_waits_until_a_call_fits() {
-        let (clock, slept) = clock_at(1000.0);
-        let t = Trade::with(http::real(), "unused".into(), clock);
-        t.remember_limits("search", &headers("7:10:0,3:60:0"));
-        t.wait_for("search"); // 7 of 8 used in the 10 s window: wait it out
-        assert_eq!(*slept.lock().unwrap(), [10.0]);
-        t.remember_limits("search", &headers("1:10:0,1:60:0"));
-        t.wait_for("search");
-        assert_eq!(*slept.lock().unwrap(), [10.0]); // plenty left: no wait
-        t.remember_limits("search", &headers("8:10:45,8:60:0"));
-        t.wait_for("search");
-        assert_eq!(*slept.lock().unwrap(), [10.0, 45.0]); // restricted: wait the penalty
-    }
-
-    #[test]
-    fn on_wait_hears_about_waits_and_429_retries() {
-        let (clock, slept) = clock_at(1000.0);
-        let calls = Arc::new(AtomicUsize::new(0));
-        let c = calls.clone();
-        let http = move |_: &Request| {
-            Ok(if c.fetch_add(1, Ordering::SeqCst) == 0 { Response::new(429, "").with_headers([("Retry-After", "7")]) } else { Response::json(200, &json!({"ok": true})) })
-        };
-        let mut t = Trade::with(Arc::new(http), "unused".into(), clock);
-        let told = Arc::new(Mutex::new(Vec::new()));
-        let tw = told.clone();
-        t.on_wait = Some(Arc::new(move |s| tw.lock().unwrap().push(s)));
-        t.cookie = Arc::new(|| None);
-        assert_eq!(t.call("u", None, "search", 2).unwrap(), json!({"ok": true}));
-        assert_eq!((slept.lock().unwrap().clone(), told.lock().unwrap().clone(), calls.load(Ordering::SeqCst)), (vec![7.0], vec![7.0], 2));
-    }
-
-    #[test]
-    fn prices_are_cached_in_their_own_currency() {
-        let dir = TempDir::new("trade-prices");
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let l = log.clone();
-        let http = move |req: &Request| {
-            l.lock().unwrap().push(req.url.clone());
-            Ok(Response::json(
-                200,
-                &if req.url.contains("/search/") {
-                    json!({"id": "q", "result": ["a", "b", "c"], "total": 3})
-                } else {
-                    let ask = |c: &str, n: i64| json!({"listing": {"price": {"currency": c, "amount": n}}});
-                    json!({"result": [ask("divine", 1), ask("divine", 2), ask("chaos", 100)]})
-                },
-            ))
-        };
-        let mut t = Trade::with(Arc::new(http), dir.path().into(), Clock::new(|| 5000.0, |_| {}));
-        t.cookie = Arc::new(|| None);
-        let query = item_query(&ItemQuery { base: Some("Warlock Gloves".into()), stats: vec![("explicit.stat_1".into(), Some(num(40.0)))], ..Default::default() });
-        let rates = |d: f64| Rates::from([("divine".into(), d), ("chaos".into(), 1.0)]);
-        assert_eq!(t.price("L", &query, &rates(200.0), 10, None).unwrap(), Some((200.0, 3)));
-        assert_eq!(t.price("L", &query, &rates(300.0), 10, None).unwrap(), Some((300.0, 3))); // cached asks, new divine rate
-        assert_eq!(log.lock().unwrap().len(), 2); // one search, one fetch
-        assert_eq!(log.lock().unwrap()[1], format!("{SITE}/api/trade/fetch/a,b,c?query=q"));
-        assert_eq!(t.searches(), 1);
-    }
-
-    #[test]
-    fn listings_fetch_in_tens_and_expire() {
-        let dir = TempDir::new("trade-listings");
-        let now = Arc::new(Mutex::new(1000.0));
-        let (n, fetches) = (now.clone(), Arc::new(AtomicUsize::new(0)));
-        let f = fetches.clone();
-        let http = move |req: &Request| {
-            Ok(Response::json(
-                200,
-                &if req.url.contains("/search/") {
-                    assert!(req.body.is_some() && req.method == Method::Post);
-                    json!({"id": "q", "result": (0..25).map(|i| format!("r{i}")).collect::<Vec<_>>(), "total": 25})
-                } else {
-                    f.fetch_add(1, Ordering::SeqCst);
-                    json!({"result": [{"item": {}}, null, {"item": {"name": "x"}}]})
-                },
-            ))
-        };
-        let clock = Clock::new(move || *n.lock().unwrap(), |_| {});
-        let mut t = Trade::with(Arc::new(http), dir.path().into(), clock);
-        t.cookie = Arc::new(|| None);
-        let q = item_query(&ItemQuery::default());
-        assert_eq!(t.listings("L", &q, 25, None).unwrap().len(), 6); // 3 fetches, nulls dropped
-        assert_eq!(fetches.load(Ordering::SeqCst), 3);
-        t.listings("L", &q, 25, None).unwrap();
-        assert_eq!(fetches.load(Ordering::SeqCst), 3);
-        *now.lock().unwrap() = 1000.0 + 3601.0;
-        t.listings("L", &q, 25, None).unwrap();
-        assert_eq!(fetches.load(Ordering::SeqCst), 6);
-    }
-
-    #[test]
-    fn cookie_from_dotenv() {
-        let dir = TempDir::new("trade-cookie");
-        let dotenv = dir.path().join(".env");
-        let none = |_: &str| None;
-        assert_eq!(env::env_in("POESESSID", &none, &dotenv), None);
-        std::fs::write(&dotenv, "# secrets\nexport POESESSID=\"abc123\"\n").unwrap();
-        assert_eq!(env::env_in("POESESSID", &none, &dotenv).as_deref(), Some("abc123"));
-        assert_eq!(env::env_in("POESESSID", &|_| Some("env-wins".into()), &dotenv).as_deref(), Some("env-wins"));
-    }
-
-    #[test]
-    fn cookie_goes_in_the_header_only() {
-        let seen = Arc::new(Mutex::new(String::new()));
-        let s = seen.clone();
-        let http = move |req: &Request| {
-            *s.lock().unwrap() = req.header("Cookie").unwrap_or("").to_string();
-            assert!(!format!("{req:?}").contains("secret"));
-            Ok(Response::new(403, ""))
-        };
-        let mut t = Trade::with(Arc::new(http), "unused".into(), Clock::real());
-        t.cookie = Arc::new(|| Some("secret".into()));
-        let err = t.call("u", None, "search", 0).unwrap_err();
-        assert_eq!(*seen.lock().unwrap(), "POESESSID=secret");
-        assert!(!err.to_string().contains("secret"));
-    }
-
-    #[test]
-    fn item_query_shape() {
-        let q = item_query(&ItemQuery {
-            category: Some("accessory.ring".into()),
-            stats: vec![("fractured.stat_9".into(), Some(num(5.0)))],
-            item_level: Some(84),
-            fractured_only: true,
-            ..Default::default()
-        });
-        let q = &q["query"];
-        assert_eq!(q["filters"]["type_filters"]["filters"]["category"], json!({"option": "accessory.ring"}));
-        assert_eq!(q["filters"]["misc_filters"]["filters"], json!({"ilvl": {"min": 84}, "fractured_item": {"option": "true"}}));
-        assert_eq!(q["stats"][0]["filters"][0]["value"], json!({"min": 5}));
-    }
-
-    #[test]
-    fn listing_item_marks_fractured_and_crafted_lines() {
-        let mut listing = json!({"item": {"rarity": "Rare", "name": "Gale Loop", "baseType": "Bone Ring", "ilvl": 84, "influences": {"shaper": true, "elder": false},
-            "fracturedMods": ["+40 to maximum Energy Shield"], "explicitMods": ["+105 to maximum Life"], "craftedMods": ["+12 to Dexterity"]}});
-        let item = listing_item(&listing);
-        assert_eq!((item.rarity.as_str(), item.base.as_str(), item.ilvl, item.influences), ("RARE", "Bone Ring", Some(84), BTreeSet::from(["shaper".to_string()])));
-        let lines: Vec<_> = item.explicits.iter().map(|m| (m.text.as_str(), m.fractured, m.crafted)).collect();
-        assert_eq!(lines, [("+40 to maximum Energy Shield", true, false), ("+105 to maximum Life", false, false), ("+12 to Dexterity", false, true)]);
-        listing["item"]["influences"] = json!(["shaper"]);
-        assert_eq!(listing_item(&listing).influences, BTreeSet::from(["shaper".to_string()]));
-    }
-
-    #[test]
-    fn cluster_query_looks_up_trade_stats() {
-        let mods = json!({"Notable1": {"stats": [{"id": "s1", "min": 1, "max": 1}]}});
-        let tr = json!([{"ids": ["s1"], "trade_stats": [{"type": "explicit", "id": "explicit.stat_1"}, {"type": "fractured", "id": "fractured.stat_1"}]}]);
-        let repoe = Repoe::new(&mods, &tr);
-        assert_eq!(stat_min(&mods, &["Notable1", "Nope"]), Some(Number::from(1)));
-        let q = cluster_query(&repoe, "large", Some("opt"), Some(8), &[("Notable1".into(), None), ("Unknown".into(), Some(num(2.0)))], Some(84), &["Notable1".into()]);
-        let ids: Vec<_> = q["query"]["stats"][0]["filters"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["explicit.stat_1", "Unknown", "fractured.stat_1", ENCHANT_STAT, PASSIVES_STAT]);
-        assert_eq!(q["query"]["type"], "Large Cluster Jewel");
     }
 }

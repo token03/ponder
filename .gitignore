@@ -1,6 +1,7 @@
 /target/
 
-# Downloaded game data, ladder, prices, trade answers and solved plans (see `ponder data fetch`)
+# Downloaded inputs, local benchmark archives, prices, trade answers and solved plans
+/data/
 .cache/
 
 # Local secrets (POESESSID)

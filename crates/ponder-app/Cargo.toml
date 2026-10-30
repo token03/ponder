@@ -8,7 +8,6 @@ description = "Desktop app (egui): run the ladder pipeline and browse the market
 
 [dependencies]
 ponder.workspace = true
-ponder-core.workspace = true
 ponder-game.workspace = true
 ponder-net.workspace = true
 serde.workspace = true
@@ -18,5 +17,4 @@ anyhow.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "x11", "wayland"] }
 egui_extras = { version = "0.37", default-features = false }
 egui_tiles = "0.18"
-egui_plot = "0.38"
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] } # icons on buttons

@@ -1,7 +1,7 @@
 use ponder_net::ladder;
 use ponder_net::trade::{self, ItemQuery, Repoe};
 use serde_json::{Number, Value};
-#[path = "../../../tests/support/mod.rs"]
+#[path = "../../../fixtures/support.rs"]
 mod common;
 
 fn expected(name: &str) -> Value {

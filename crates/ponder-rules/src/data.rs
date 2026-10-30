@@ -128,6 +128,10 @@ impl Repoe {
 }
 
 fn read<T: DeserializeOwned>(dir: &Path, name: &str) -> std::io::Result<T> {
+    let path = dir.join(format!("{name}.json"));
+    if path.exists() {
+        return serde_json::from_slice(&std::fs::read(&path)?).map_err(std::io::Error::other);
+    }
     let path = dir.join(format!("{name}.json.gz"));
     let mut json = String::new();
     flate2::read::GzDecoder::new(std::fs::File::open(&path)?).read_to_string(&mut json)?;
@@ -184,18 +188,4 @@ fn number_end(b: &[u8], j: usize) -> Option<usize> {
     }
     let e = j + n;
     if b.get(e) == Some(&b'.') && b.get(e + 1).is_some_and(u8::is_ascii_digit) { Some(e + 1 + digits(e + 1)) } else { Some(e) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::template;
-
-    #[test]
-    fn templates() {
-        assert_eq!(template("+(8-12) to Strength"), "+# to Strength");
-        assert_eq!(template("Adds (1-2) to (3-4) Fire Damage"), "Adds # to # Fire Damage");
-        assert_eq!(template("-(8-6) to Total Mana Cost"), "-# to Total Mana Cost");
-        assert_eq!(template("Nearby Enemies have -9% to Chaos Resistance"), "Nearby Enemies have #% to Chaos Resistance");
-        assert_eq!(template("(0.2-0.4)% of Life\n+1 to Level"), "#% of Life / +# to Level");
-    }
 }

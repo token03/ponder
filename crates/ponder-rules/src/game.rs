@@ -18,7 +18,8 @@ pub struct GroupId(pub u16);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TagId(pub u16);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Prefix,
     Suffix,
@@ -299,10 +300,21 @@ impl Game {
     /// (essences) rank where their level falls among the natural ones.
     pub fn tier(&self, mut kind: Kind, m: ModId) -> Option<u8> {
         let def = self.def(m);
+        if def.source == Source::Essence {
+            let class = &self.bases[kind.base.0 as usize].class;
+            if !self.essences.iter().any(|e| e.mods.get(class).and_then(|m| m.as_deref()).and_then(|m| self.mod_id(m)) == Some(m)) {
+                return None;
+            }
+        }
         if let Some(influence) = def.influence {
             kind.influences.0 |= 1 << influence as u8;
         }
         let pool = self.pool(kind);
+        if matches!(def.source, Source::Natural | Source::Influence)
+            && (!pool.mods.iter().any(|&(id, _)| id == m) || def.level > kind.ilvl as u32)
+        {
+            return None;
+        }
         let levels: std::collections::BTreeSet<u32> = if let Some(list) = pool.tiers.get(&def.template) {
             list.iter().map(|id| self.def(*id).level).collect()
         } else if def.source == Source::Essence {

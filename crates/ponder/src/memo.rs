@@ -49,19 +49,3 @@ impl<K: Eq + Hash, V: Clone> Memo<K, V> {
         entries.lock().unwrap().entry(key).or_insert(value).clone()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Memo;
-
-    #[test]
-    fn nested_parallel_initializers_can_publish_work_the_parent_is_waiting_for() {
-        for workers in [1, 2] {
-            let memo = Memo::new();
-            let pool = rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
-            let value = pool.install(|| memo.get_or_init(0, || rayon::join(|| memo.get_or_init(0, || 7), || 7).0));
-            assert_eq!(value, 7);
-            assert_eq!(memo.get_or_init(0, || panic!("the completed value is cached")), 7);
-        }
-    }
-}

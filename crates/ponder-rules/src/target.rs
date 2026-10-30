@@ -46,6 +46,14 @@ impl Target {
         let base = game.base(name).ok_or_else(|| format!("unknown base {name:?}"))?;
         let influences = Influences::of(&goal.influences);
         let kind = Kind { base, ilvl: goal.ilvl.unwrap_or(100), influences };
+        let class = &game.bases[base.0 as usize].class;
+        let crafts: HashSet<_> = game
+            .bench
+            .iter()
+            .filter(|option| option.item_classes.contains(class))
+            .filter_map(|option| game.mod_id(option.actions.add_explicit_mod.as_deref()?))
+            .collect();
+        let pool = game.pool(kind);
         let mut needs = Vec::new();
         for req in &goal.mods {
             let mut ok = HashSet::new();
@@ -56,6 +64,17 @@ impl Target {
                 }
                 for &m in mods {
                     let source = game.def(m).source;
+                    let available = match source {
+                        // An unrestricted predicate may describe a transferred modifier.
+                        // Ranked requirements need a tier on this particular base.
+                        Source::Natural | Source::Influence | Source::Essence => req.tier.is_none() || game.tier(kind, m).is_some(),
+                        Source::Crafted => crafts.contains(&m),
+                        Source::Veiled | Source::Fossil => pool.mods.iter().any(|&(id, _)| id == m),
+                        Source::Elevated | Source::Legacy => true,
+                    };
+                    if !available {
+                        continue;
+                    }
                     let fits = match (req.source, req.tier) {
                         (Some(s), _) if s != source => false,
                         (None, _) if source == Source::Crafted => false,

@@ -18,7 +18,11 @@ use std::hash::Hash;
 use rayon::prelude::*;
 
 mod ilu;
+mod linear;
+
+use linear::{SparseMatrix, SparseSystem};
 pub mod inspect;
+pub mod policy;
 
 pub type IndexedOutcomes = Box<[(f64, usize)]>;
 
@@ -152,20 +156,26 @@ impl Edge {
 
 enum Transitions<S> {
     Known(Box<[(f64, S)]>),
+    Single((f64, S)),
     Optimistic,
     Deferred,
 }
 
 impl<S> Transitions<S> {
+    fn known(mut to: Vec<(f64, S)>) -> Self {
+        if to.len() == 1 { Self::Single(to.pop().unwrap()) } else { Self::Known(to.into_boxed_slice()) }
+    }
+
     fn outcomes(&self) -> &[(f64, S)] {
         match self {
             Self::Known(to) => to,
+            Self::Single(to) => std::slice::from_ref(to),
             _ => &[],
         }
     }
 
     fn pending(&self) -> bool {
-        !matches!(self, Self::Known(_))
+        !matches!(self, Self::Known(_) | Self::Single(_))
     }
 
     fn optimistic(&self) -> bool {
@@ -188,21 +198,55 @@ impl Affine {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub enum Numerics {
+    #[default]
+    Iterative,
+    Hybrid,
+}
+
 pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
-    solve_keeping(model, start, limit, false)
+    solve_keeping(model, start, Some(limit), false, Numerics::Iterative)
 }
 
 /// [`solve`], keeping every explored state with its value rather than only those the policy
 /// reaches.
 pub fn solve_everywhere<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
-    solve_keeping(model, start, limit, true)
+    solve_keeping(model, start, Some(limit), true, Numerics::Iterative)
 }
 
-fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, keep_all: bool) -> Result<Solution<M::State>, Error> {
+/// Choose the numerical strategy and an optional diagnostic state limit. `None` explores
+/// without a state-count cutoff; a limit is a resource guard, never a partial solution.
+pub fn solve_with<M: Model>(
+    model: &M,
+    start: &[(f64, M::State)],
+    limit: impl Into<Option<usize>>,
+    numerics: Numerics,
+) -> Result<Solution<M::State>, Error> {
+    solve_keeping(model, start, limit.into(), false, numerics)
+}
+
+pub fn solve_everywhere_with<M: Model>(
+    model: &M,
+    start: &[(f64, M::State)],
+    limit: usize,
+    numerics: Numerics,
+) -> Result<Solution<M::State>, Error> {
+    solve_keeping(model, start, Some(limit), true, numerics)
+}
+
+fn solve_keeping<M: Model>(
+    model: &M,
+    start: &[(f64, M::State)],
+    limit: Option<usize>,
+    keep_all: bool,
+    numerics: Numerics,
+) -> Result<Solution<M::State>, Error> {
     let mut stats = Stats::default();
     let mut graph = Graph::new();
     if !model.restarts_anywhere() {
-        return solve_within(model, start, limit, f64::INFINITY, keep_all, &mut graph, &mut stats).map(|s| Solution { stats, ..s.0 });
+        return solve_within(model, start, limit, f64::INFINITY, keep_all, &mut graph, &mut stats, numerics)
+            .map(|s| Solution { stats, ..s.0 });
     }
     // Explore only actions cheaper than a ceiling. A start worth less than the ceiling proves
     // every action left out dearer than starting over, so the solution is exact; otherwise the
@@ -213,7 +257,7 @@ fn solve_keeping<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize, k
     let bound: f64 = start.iter().map(|(p, s)| p * model.bound(s).unwrap_or(0.0)).sum();
     let mut ceiling = (2.0 * first.clamp(0.5, 1e9)).max(bound.clamp(0.0, 1e9) * (1.0 + 1e-9));
     loop {
-        match solve_within(model, start, limit, ceiling, keep_all, &mut graph, &mut stats) {
+        match solve_within(model, start, limit, ceiling, keep_all, &mut graph, &mut stats, numerics) {
             Ok((solution, w)) if w < ceiling => return Ok(Solution { stats, ..solution }),
             Ok((_, w)) => ceiling = w * (1.0 + 1e-9),
             Err(Error::Unreachable) if ceiling.is_finite() => ceiling = if ceiling > 1e9 { f64::INFINITY } else { ceiling * 4.0 },
@@ -265,11 +309,7 @@ struct Checks {
 }
 
 fn expand_deferred<M: Model>(model: &M, state: &M::State, edges: &[Edge]) -> Expansion<M::State> {
-    edges
-        .iter()
-        .filter(|e| e.to.pending())
-        .map(|e| (e.action, e.cost, Transitions::Known(model.outcomes(state, e.action).into_boxed_slice())))
-        .collect()
+    edges.iter().filter(|e| e.to.pending()).map(|e| (e.action, e.cost, Transitions::known(model.outcomes(state, e.action)))).collect()
 }
 
 /// The states explored so far and their actions under `ceiling`.
@@ -313,11 +353,13 @@ impl<S> Graph<S> {
 }
 
 /// The graph's number for a state, numbering it if new.
-fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<S, usize>, limit: usize) -> Result<usize, Error> {
+fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<S, usize>, limit: Option<usize>) -> Result<usize, Error> {
     if let Some(&i) = index.get(s) {
         return Ok(i);
     }
-    if states.len() >= limit {
+    if let Some(limit) = limit
+        && states.len() >= limit
+    {
         return Err(Error::TooManyStates(limit));
     }
     index.insert(s.clone(), states.len());
@@ -330,14 +372,16 @@ fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<
 /// States the model bounds stay unexpanded, worth their bound, until the best policy reaches
 /// them; then they are expanded and the graph solved again. With admissible bounds the policy
 /// that reaches no unexpanded state is optimal (LAO*), and its value is exact either way.
+#[allow(clippy::too_many_arguments)]
 fn solve_within<M: Model>(
     model: &M,
     start: &[(f64, M::State)],
-    limit: usize,
+    limit: Option<usize>,
     ceiling: f64,
     keep_all: bool,
     graph: &mut Graph<M::State>,
     stats: &mut Stats,
+    numerics: Numerics,
 ) -> Result<(Solution<M::State>, f64), Error> {
     stats.attempts += 1;
     let separating = model.restarts_anywhere() && !model.gives_up();
@@ -351,7 +395,7 @@ fn solve_within<M: Model>(
             .map(|(a, cost)| {
                 let lazy = deferred == Some(false) && model.defers(s, a);
                 let to = if !lazy {
-                    Transitions::Known(model.outcomes(s, a).into_boxed_slice())
+                    Transitions::known(model.outcomes(s, a))
                 } else if separating {
                     Transitions::Deferred
                 } else {
@@ -383,12 +427,14 @@ fn solve_within<M: Model>(
         for (action, cost, to) in out {
             let known = states.len();
             let to = match to {
-                Transitions::Known(to) => Transitions::Known(
+                Transitions::Known(to) => Transitions::known(
                     to.iter()
                         .filter(|o| o.0 > 0.0)
                         .map(|(p, t)| intern(t, states, index, limit).map(|i| (*p, i)))
                         .collect::<Result<_, _>>()?,
                 ),
+                Transitions::Single((p, t)) if p > 0.0 => Transitions::Single((p, intern(&t, states, index, limit)?)),
+                Transitions::Single(_) => Transitions::Known(Box::new([])),
                 Transitions::Optimistic => Transitions::Optimistic,
                 Transitions::Deferred => Transitions::Deferred,
             };
@@ -521,11 +567,14 @@ fn solve_within<M: Model>(
         loop {
             for s in 0..n {
                 if !end[s] {
-                    let (keep, drop) = std::mem::take(&mut edges[s]).into_iter().partition(|e: &Edge| {
-                        e.to.pending() || e.outcomes().iter().all(|&(_, t)| alive[t]) && e.outcomes().iter().any(|&(_, t)| t != s)
-                    });
-                    edges[s] = keep;
-                    dropped.extend(drop.into_iter().map(|e| (s, e)));
+                    dropped.extend(
+                        edges[s]
+                            .extract_if(.., |e| {
+                                !e.to.pending()
+                                    && (!e.outcomes().iter().all(|&(_, t)| alive[t]) || !e.outcomes().iter().any(|&(_, t)| t != s))
+                            })
+                            .map(|e| (s, e)),
+                    );
                 }
             }
             if all_reach {
@@ -576,12 +625,8 @@ fn solve_within<M: Model>(
         let clock = std::time::Instant::now();
         let restarts = fixed.iter().any(|f| f.is_some_and(|f| f.b > 0.0));
         let rounds = if edges.iter().flatten().any(|e| matches!(e.to, Transitions::Deferred)) { ADMISSION_ROUNDS } else { ROUNDS };
+        let nonnegative = edges.iter().flatten().all(|e| e.cost >= 0.0);
         let mut local = vec![usize::MAX; n];
-        for component in &order {
-            for (i, &s) in component.iter().enumerate() {
-                local[s] = i;
-            }
-        }
         acted.resize(n, usize::MAX);
         let mut choice: Vec<usize> =
             (0..n).map(|s| edges[s].iter().position(|e| !end[s] && e.action == acted[s]).unwrap_or(usize::MAX)).collect();
@@ -598,7 +643,25 @@ fn solve_within<M: Model>(
             let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
             let mut stable = true;
             for component in &order {
-                stable &= solve_component(component, &local, edges, &mut values, &mut choice, &mut affine, &seed, w, rounds);
+                for (i, &s) in component.iter().enumerate() {
+                    local[s] = i;
+                }
+                stable &= solve_component(
+                    component,
+                    &local,
+                    edges,
+                    &mut values,
+                    &mut choice,
+                    &mut affine,
+                    &seed,
+                    w,
+                    rounds,
+                    nonnegative,
+                    numerics,
+                );
+                for &s in component {
+                    local[s] = usize::MAX;
+                }
             }
             let at_start = starts
                 .iter()
@@ -788,16 +851,16 @@ fn solve_within<M: Model>(
                         rooms.push((s, room));
                         if let Some((action, cost, _)) = selected {
                             if let Some(to) = transitions.as_ref().and_then(|link| link(&states[s], action)) {
-                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::Known(to) }]));
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.into_vec()) }]));
                                 return (updates, checks, rooms);
                             }
                             let out = model.outcomes(&states[s], action);
                             let linked: Option<Box<[_]>> =
                                 out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(t).map(|&t| (*p, t))).collect();
                             if let Some(to) = linked {
-                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::Known(to) }]));
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.into_vec()) }]));
                             } else {
-                                updates.push(Update::Deferred(s, vec![(action, cost, Transitions::Known(out.into_boxed_slice()))]));
+                                updates.push(Update::Deferred(s, vec![(action, cost, Transitions::known(out))]));
                             }
                         }
                         (updates, checks, rooms)
@@ -1027,8 +1090,10 @@ fn solve_component(
     seed: &[Affine],
     w: f64,
     rounds: usize,
+    nonnegative: bool,
+    numerics: Numerics,
 ) -> bool {
-    let position = |t: usize| states.get(local[t]).filter(|&&s| s == t).map(|_| local[t]);
+    let position = |t: usize| (local[t] != usize::MAX).then_some(local[t]);
     let mut chosen: Vec<usize> = states.iter().map(|&s| choice[s]).collect();
     if chosen.contains(&usize::MAX) {
         let mut ranked = vec![false; states.len()];
@@ -1073,7 +1138,7 @@ fn solve_component(
     let mut stable = true;
     for _ in 0..rounds {
         stable = false;
-        let Some(v) = evaluate(states, local, edges, &chosen, affine, seed) else {
+        let Some(v) = evaluate(states, local, edges, &chosen, affine, seed, nonnegative, numerics) else {
             stable = true;
             break;
         };
@@ -1082,18 +1147,19 @@ fn solve_component(
             affine[s] = v[i];
             values[s] = v[i].at(w);
         }
-        let improved: Vec<usize> = states
-            .iter()
-            .enumerate()
-            .map(|(i, &s)| {
-                if edges[s].len() == 1 {
-                    return chosen[i];
-                }
-                let (v, a) = best(&edges[s], values);
-                let current = q(&edges[s][chosen[i]], values);
-                if v < current - 1e-10 * current.abs().max(1.0) { a } else { chosen[i] }
-            })
-            .collect();
+        let improve = |(i, &s): (usize, &usize)| {
+            if edges[s].len() == 1 {
+                return chosen[i];
+            }
+            let (v, a) = best(&edges[s], values);
+            let current = q(&edges[s][chosen[i]], values);
+            if v < current - 1e-10 * current.abs().max(1.0) { a } else { chosen[i] }
+        };
+        let improved: Vec<usize> = if states.len() >= 1024 {
+            states.par_iter().enumerate().map(improve).collect()
+        } else {
+            states.iter().enumerate().map(improve).collect()
+        };
         if improved == chosen {
             stable = true;
             break;
@@ -1113,6 +1179,7 @@ const ADMISSION_ROUNDS: usize = 3;
 /// Exact values of a fixed policy inside a component, as `a + b w`. The policy's own graph
 /// usually splits into much smaller components; each solves (I - P) x = r for the cost part
 /// (r = c + P_out a_out) and the restart part (r = P_out b_out) together, successors first.
+#[allow(clippy::too_many_arguments)]
 fn evaluate(
     states: &[usize],
     local: &[usize],
@@ -1120,12 +1187,44 @@ fn evaluate(
     choice: &[usize],
     affine: &[Affine],
     seed: &[Affine],
+    nonnegative: bool,
+    numerics: Numerics,
 ) -> Option<Vec<Affine>> {
-    let chosen = |i: usize| &edges[states[i]][choice[i]];
-    let position = |t: usize| states.get(local[t]).filter(|&&s| s == t).map(|_| local[t]);
+    let policy: Vec<&Edge> = states.iter().zip(choice).map(|(&s, &a)| &edges[s][a]).collect();
+    let chosen = |i: usize| policy[i];
+    let position = |t: usize| (local[t] != usize::MAX).then_some(local[t]);
     let mut out = vec![Affine::INFINITE; states.len()];
     let mut place = vec![usize::MAX; states.len()];
-    for part in components(states.len(), |i| chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t))).iter() {
+    let mut pending = Vec::new();
+    for (i, &s) in states.iter().enumerate() {
+        let edge = chosen(i);
+        if edge.outcomes().iter().any(|&(_, t)| t != s && position(t).is_some()) {
+            pending.push(i);
+            continue;
+        }
+        let mut value = Affine { a: edge.constant(), b: 0.0 };
+        let mut diagonal: f64 = 1.0;
+        for &(p, t) in edge.outcomes() {
+            if t == s {
+                diagonal -= p;
+            } else {
+                value.a += p * affine[t].a;
+                value.b += p * affine[t].b;
+            }
+        }
+        if diagonal.abs() < 1e-14 {
+            return None;
+        }
+        out[i] = Affine { a: value.a / diagonal, b: value.b / diagonal };
+    }
+    let mut active = vec![false; states.len()];
+    for &i in &pending {
+        active[i] = true;
+    }
+    let parts = components_from(states.len(), pending.into_iter(), |i| {
+        chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t).filter(|&j| active[j]))
+    });
+    for part in parts.iter() {
         let n = part.len();
         if n == 1 {
             let i = part[0];
@@ -1151,7 +1250,7 @@ fn evaluate(
             place[i] = k;
         }
         // Row k: transitions inside the part, and the known value of the rest.
-        let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+        let mut rows = SparseMatrix::new(n);
         let mut ra = vec![0.0; n];
         let mut rb = vec![0.0; n];
         for (k, &i) in part.iter().enumerate() {
@@ -1159,8 +1258,8 @@ fn evaluate(
             ra[k] = e.constant();
             for &(p, t) in e.outcomes() {
                 let known = match position(t) {
-                    Some(j) if place[j] != usize::MAX && part.get(place[j]) == Some(&j) => {
-                        rows[k].push((place[j], p));
+                    Some(j) if place[j] != usize::MAX => {
+                        rows.push(place[j], p);
                         continue;
                     }
                     Some(j) => out[j],
@@ -1169,16 +1268,17 @@ fn evaluate(
                 ra[k] += p * known.a;
                 rb[k] += p * known.b;
             }
+            rows.finish_row();
         }
         let x = if n <= DENSE {
             let mut m = vec![0.0; n * n];
-            for (k, row) in rows.iter().enumerate() {
+            for (k, row) in rows.rows().enumerate() {
                 m[k * n + k] += 1.0;
                 for &(j, p) in row {
                     m[k * n + j] -= p;
                 }
             }
-            lu_solve(n, &mut m, &mut [&mut ra, &mut rb])?
+            linear::solve_dense(n, &mut m, &mut [&mut ra, &mut rb])?
         } else {
             let start = |f: fn(&Affine) -> f64| {
                 part.iter()
@@ -1190,144 +1290,22 @@ fn evaluate(
                     })
                     .collect()
             };
-            let factor = std::cell::OnceCell::new();
-            let solve = |r: &[f64], x: Vec<f64>| gauss_seidel(&rows, r, bicgstab(&rows, r, x, &factor));
-            vec![solve(&ra, start(|f| f.a))?, solve(&rb, start(|f| f.b))?]
+            let mut system = match numerics {
+                Numerics::Iterative => SparseSystem::new(&rows),
+                Numerics::Hybrid => SparseSystem::hybrid(&rows),
+            };
+            vec![system.solve(&ra, start(|f| f.a))?, system.solve(&rb, start(|f| f.b))?]
         };
         for (k, &i) in part.iter().enumerate() {
             out[i] = Affine { a: x[0][k], b: x[1][k] };
+            place[i] = usize::MAX;
         }
     }
-    out.iter().all(|f| f.a.is_finite() && f.a >= 0.0 && f.b.is_finite() && f.b >= -1e-9).then_some(out)
+    out.iter().all(|f| f.a.is_finite() && (!nonnegative || f.a >= 0.0) && f.b.is_finite() && f.b >= -1e-9).then_some(out)
 }
 
 /// Largest policy component solved by dense elimination; larger ones iterate.
 const DENSE: usize = 64;
-
-/// Solves x = r + P x by Gauss-Seidel sweeps from `x`, each state's self-loop eliminated (rerolls
-/// mostly return to themselves), until no value moves by more than a relative 1e-12. `None` when
-/// it does not converge.
-fn gauss_seidel(rows: &[Vec<(usize, f64)>], r: &[f64], mut x: Vec<f64>) -> Option<Vec<f64>> {
-    let stay: Vec<f64> = rows.iter().enumerate().map(|(k, row)| row.iter().filter(|e| e.0 == k).map(|e| e.1).sum()).collect();
-    if stay.iter().any(|p| 1.0 - p < 1e-14) {
-        return None;
-    }
-    for _ in 0..1_000_000 {
-        let mut moved = 0.0f64;
-        for (k, row) in rows.iter().enumerate() {
-            let inflow: f64 = row.iter().filter(|e| e.0 != k).map(|&(j, p)| p * x[j]).sum();
-            let v = (r[k] + inflow) / (1.0 - stay[k]);
-            moved = moved.max((v - x[k]).abs() / v.abs().max(1.0));
-            x[k] = v;
-        }
-        if moved < 1e-12 {
-            return Some(x);
-        }
-    }
-    None
-}
-
-fn bicgstab(rows: &[Vec<(usize, f64)>], b: &[f64], x: Vec<f64>, factor: &std::cell::OnceCell<Option<ilu::Ilu>>) -> Vec<f64> {
-    let n = rows.len();
-    let d: Vec<f64> = rows.iter().enumerate().map(|(k, row)| 1.0 - row.iter().filter(|e| e.0 == k).map(|e| e.1).sum::<f64>()).collect();
-    let apply = |x: &[f64]| -> Vec<f64> {
-        rows.iter().enumerate().map(|(k, row)| x[k] - row.iter().map(|&(j, p)| p * x[j]).sum::<f64>()).collect()
-    };
-    let precondition = |r: &[f64]| {
-        if let Some(factor) = factor.get_or_init(|| ilu::Ilu::new(rows)) {
-            return factor.apply(r);
-        }
-        let mut x = vec![0.0; n];
-        for (k, row) in rows.iter().enumerate() {
-            let inflow: f64 = row.iter().filter(|e| e.0 < k).map(|&(j, p)| p * x[j]).sum();
-            x[k] = (r[k] + inflow) / d[k];
-        }
-        x
-    };
-    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
-    let norm = |a: &[f64]| a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let ax = apply(&x);
-    let mut r: Vec<f64> = (0..n).map(|k| b[k] - ax[k]).collect();
-    let rhat = r.clone();
-    let (mut rho, mut alpha, mut omega) = (1.0, 1.0, 1.0);
-    let (mut v, mut p) = (vec![0.0; n], vec![0.0; n]);
-    let (mut x, mut best) = (x.clone(), x);
-    let mut least = norm(&r);
-    for _ in 0..10_000 {
-        let scale = norm(&x).max(norm(b)).max(1.0);
-        if least <= 1e-13 * scale {
-            break;
-        }
-        let rho_next = dot(&rhat, &r);
-        let beta = rho_next / rho * (alpha / omega);
-        rho = rho_next;
-        p = (0..n).map(|k| r[k] + beta * (p[k] - omega * v[k])).collect();
-        let y = precondition(&p);
-        v = apply(&y);
-        alpha = rho / dot(&rhat, &v);
-        let s: Vec<f64> = (0..n).map(|k| r[k] - alpha * v[k]).collect();
-        if norm(&s) <= 1e-13 * scale && s.iter().all(|v| v.is_finite()) {
-            let next: Vec<_> = (0..n).map(|k| x[k] + alpha * y[k]).collect();
-            if next.iter().all(|v| v.is_finite()) {
-                best = next;
-            }
-            break;
-        }
-        let z = precondition(&s);
-        let t = apply(&z);
-        omega = dot(&t, &s) / dot(&t, &t);
-        x = (0..n).map(|k| x[k] + alpha * y[k] + omega * z[k]).collect();
-        r = (0..n).map(|k| s[k] - omega * t[k]).collect();
-        let size = norm(&r);
-        if !size.is_finite() || !omega.is_finite() || omega == 0.0 || rho == 0.0 {
-            break;
-        }
-        if size < least {
-            (least, best) = (size, x.clone());
-        }
-    }
-    best
-}
-
-/// Gaussian elimination with partial pivoting, for several right-hand sides; `None` when
-/// singular.
-fn lu_solve(n: usize, a: &mut [f64], rhs: &mut [&mut Vec<f64>]) -> Option<Vec<Vec<f64>>> {
-    for k in 0..n {
-        let p = (k..n).max_by(|&i, &j| a[i * n + k].abs().total_cmp(&a[j * n + k].abs()))?;
-        if a[p * n + k].abs() < 1e-14 {
-            return None;
-        }
-        if p != k {
-            for c in 0..n {
-                a.swap(k * n + c, p * n + c);
-            }
-            for b in rhs.iter_mut() {
-                b.swap(k, p);
-            }
-        }
-        for i in k + 1..n {
-            let f = a[i * n + k] / a[k * n + k];
-            if f != 0.0 {
-                for c in k..n {
-                    a[i * n + c] -= f * a[k * n + c];
-                }
-                for b in rhs.iter_mut() {
-                    b[i] -= f * b[k];
-                }
-            }
-        }
-    }
-    let mut out = Vec::with_capacity(rhs.len());
-    for b in rhs.iter() {
-        let mut x = vec![0.0; n];
-        for k in (0..n).rev() {
-            let s: f64 = (k + 1..n).map(|c| a[k * n + c] * x[c]).sum();
-            x[k] = (b[k] - s) / a[k * n + k];
-        }
-        out.push(x);
-    }
-    Some(out)
-}
 
 /// Strongly connected components of a successor graph, successors before predecessors
 /// (Tarjan, iterative).
@@ -1343,11 +1321,16 @@ impl Components {
 }
 
 fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) -> I) -> Components {
-    let (mut index, mut low, mut on) = (vec![usize::MAX; n], vec![0; n], vec![false; n]);
+    components_from(n, 0..n, successors)
+}
+
+fn components_from<I: Iterator<Item = usize>>(n: usize, roots: impl Iterator<Item = usize>, successors: impl Fn(usize) -> I) -> Components {
+    const FINISHED: usize = usize::MAX - 1;
+    let (mut index, mut low) = (vec![usize::MAX; n], vec![0; n]);
     let (mut stack, mut out, mut counter) = (Vec::new(), Vec::with_capacity(n), 0);
     let mut offsets = vec![0];
     let mut call = Vec::new();
-    for root in 0..n {
+    for root in roots {
         if index[root] != usize::MAX {
             continue;
         }
@@ -1356,7 +1339,6 @@ fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) ->
         low[root] = counter;
         counter += 1;
         stack.push(root);
-        on[root] = true;
         while let Some((v, next)) = call.last_mut() {
             let v = *v;
             if let Some(w) = next.next() {
@@ -1365,9 +1347,8 @@ fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) ->
                     low[w] = counter;
                     counter += 1;
                     stack.push(w);
-                    on[w] = true;
                     call.push((w, successors(w)));
-                } else if on[w] {
+                } else if index[w] != FINISHED {
                     low[v] = low[v].min(index[w]);
                 }
             } else {
@@ -1377,7 +1358,7 @@ fn components<I: Iterator<Item = usize>>(n: usize, successors: impl Fn(usize) ->
                 }
                 if low[v] == index[v] {
                     while let Some(w) = stack.pop() {
-                        on[w] = false;
+                        index[w] = FINISHED;
                         out.push(w);
                         if w == v {
                             break;
@@ -1428,17 +1409,17 @@ pub fn ends<M: Model>(model: &M, solution: &Solution<M::State>, start: &[(f64, M
         k += 1;
     }
     // Expected visits: x = seed + flow in.
-    let rows: Vec<Vec<(usize, f64)>> = into
-        .into_iter()
-        .zip(&stay)
-        .enumerate()
-        .map(|(t, (mut row, &p))| {
-            row.push((t, p));
-            row
-        })
-        .collect();
-    let guess = bicgstab(&rows, &seed, vec![0.0; rows.len()], &std::cell::OnceCell::new());
-    let x = gauss_seidel(&rows, &seed, guess.clone()).unwrap_or(guess);
+    let mut rows = SparseMatrix::new(into.len());
+    for (k, (row, &p)) in into.into_iter().zip(&stay).enumerate() {
+        for (j, p) in row {
+            rows.push(j, p);
+        }
+        rows.push(k, p);
+        rows.finish_row();
+    }
+    let mut system = SparseSystem::new(&rows);
+    let guess = system.bicgstab(&seed, vec![0.0; rows.len()]);
+    let x = system.gauss_seidel(&seed, guess.clone()).unwrap_or(guess);
     let goals: Vec<(f64, usize)> =
         (0..order.len()).filter(|&k| model.is_goal(&solution.states[order[k]])).map(|k| (x[k], order[k])).collect();
     let total: f64 = goals.iter().map(|g| g.0).sum();

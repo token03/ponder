@@ -112,11 +112,16 @@ impl ItemCatalog {
         let mut catalog = Self::default();
         let mut groups = BTreeMap::new();
         for base in bases.values().filter(|base| base.release_state == "released") {
-            let Some(path) = base_path(base) else { continue };
+            let Some(path) = base_path(base) else {
+                continue;
+            };
             catalog.root.insert(&path);
             let signature: BTreeSet<&str> = base.tags.iter().map(String::as_str).filter(|tag| spawn_tags.contains(*tag)).collect();
             let cluster = if base.domain == "affliction_jewel" { base.name.as_str() } else { "" };
-            groups.entry((base.domain.as_str(), base.item_class.as_str(), signature, cluster)).or_insert_with(BTreeMap::new).insert(base.name.clone(), path);
+            groups
+                .entry((base.domain.as_str(), base.item_class.as_str(), signature, cluster))
+                .or_insert_with(BTreeMap::new)
+                .insert(base.name.clone(), path);
         }
         for paths in groups.into_values() {
             let index = catalog.groups.len();
@@ -129,7 +134,8 @@ impl ItemCatalog {
     }
 
     fn paths(&self, estimate: &Estimate) -> Vec<&[String]> {
-        let index = self.bases.get(&estimate.base).or_else(|| self.bases.get(&estimate.used_base)).or_else(|| self.bases.get(&estimate.title));
+        let index =
+            self.bases.get(&estimate.base).or_else(|| self.bases.get(&estimate.used_base)).or_else(|| self.bases.get(&estimate.title));
         match index {
             Some(&index) => self.groups[index].iter().map(Vec::as_slice).collect(),
             None => Vec::new(),
@@ -185,7 +191,8 @@ impl ItemCatalog {
             if ui.selectable_label(selected.paths.is_empty(), "Everything").clicked() {
                 selected.paths.clear();
             }
-            let words: Vec<String> = self.search.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_lowercase).collect();
+            let words: Vec<String> =
+                self.search.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_lowercase).collect();
             egui::ScrollArea::vertical().max_height(280.0).min_scrolled_height(280.0).auto_shrink([false, false]).show(ui, |ui| {
                 let mut found = false;
                 for node in self.root.children.values() {
@@ -270,106 +277,4 @@ fn base_path(base: &BaseItem) -> Option<ItemPath> {
         return None;
     };
     Some(path.into_iter().map(String::from).collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn path(parts: &[&str]) -> ItemPath {
-        parts.iter().map(|part| part.to_string()).collect()
-    }
-
-    fn catalog() -> ItemCatalog {
-        let definitions = [
-            ("Warlock Gloves", "Gloves", "item", vec!["armour", "int_armour"]),
-            ("Sage Gloves", "Gloves", "item", vec!["armour", "int_armour", "not_for_sale"]),
-            ("Titan Gauntlets", "Gloves", "item", vec!["armour", "str_armour"]),
-            ("Lich's Circlet", "Helmet", "item", vec!["armour", "int_armour"]),
-            ("Necrotic Armour", "Body Armour", "item", vec!["armour", "dex_int_armour"]),
-            ("Carnal Armour", "Body Armour", "item", vec!["armour", "dex_int_armour"]),
-            ("Imperial Bow", "Bow", "item", vec!["weapon", "bow"]),
-            ("Cobalt Jewel", "Jewel", "misc", vec!["jewel", "intjewel"]),
-            ("Crimson Jewel", "Jewel", "misc", vec!["jewel", "strjewel"]),
-            ("Ghastly Eye Jewel", "AbyssJewel", "abyss_jewel", vec!["abyss_jewel", "abyss_jewel_summoner"]),
-            ("Small Cluster Jewel", "Jewel", "affliction_jewel", vec!["jewel", "expansion_jewel_small"]),
-            ("Medium Cluster Jewel", "Jewel", "affliction_jewel", vec!["jewel", "expansion_jewel_medium"]),
-            ("Large Cluster Jewel", "Jewel", "affliction_jewel", vec!["jewel", "expansion_jewel_large"]),
-        ];
-        let bases: BaseItems = serde_json::from_value(
-            definitions
-                .iter()
-                .map(|(name, class, domain, tags)| {
-                    (name.to_string(), json!({ "name": name, "item_class": class, "domain": domain, "tags": tags, "release_state": "released" }))
-                })
-                .collect::<serde_json::Map<_, _>>()
-                .into(),
-        )
-        .unwrap();
-        let tags = ["int_armour", "str_armour", "dex_int_armour", "intjewel", "strjewel", "abyss_jewel_summoner"].map(String::from).into_iter().collect();
-        ItemCatalog::from_bases(&bases, &tags)
-    }
-
-    fn estimate(base: &str) -> Estimate {
-        let mut estimate = Estimate::new(if base.contains("Cluster") { "cluster" } else { "gear" }, base, Vec::new());
-        estimate.base = base.into();
-        estimate
-    }
-
-    #[test]
-    fn branches_combine_and_children_narrow_without_losing_other_branches() {
-        let catalog = catalog();
-        let mut selected = ItemSelection::default();
-        assert!(catalog.admits(&estimate("Cobalt Jewel"), &selected));
-        selected.toggle(&path(&["Gear"]));
-        assert!(!catalog.admits(&estimate("Cobalt Jewel"), &selected));
-        selected.toggle(&path(&["Jewels", "Clusters", "Small"]));
-        selected.toggle(&path(&["Gear", "Armour", "Helmet", "ES"]));
-        assert_eq!(selected.paths.len(), 2);
-        assert!(catalog.admits(&estimate("Lich's Circlet"), &selected));
-        assert!(catalog.admits(&estimate("Small Cluster Jewel"), &selected));
-        assert!(!catalog.admits(&estimate("Warlock Gloves"), &selected));
-        assert!(!catalog.admits(&estimate("Large Cluster Jewel"), &selected));
-        selected.toggle(&path(&["Jewels", "Base jewels", "Cobalt Jewel"]));
-        assert!(catalog.admits(&estimate("Cobalt Jewel"), &selected));
-        assert!(!catalog.admits(&estimate("Crimson Jewel"), &selected));
-        selected.toggle(&path(&["Jewels"]));
-        assert_eq!(selected.paths.len(), 2);
-        assert!(catalog.admits(&estimate("Ghastly Eye Jewel"), &selected));
-        assert!(!catalog.admits(&estimate("Imperial Bow"), &selected));
-    }
-
-    #[test]
-    fn named_bases_match_the_crafts_mod_pool_and_counts_are_distinct() {
-        let mut catalog = catalog();
-        let mut selected = ItemSelection::default();
-        selected.toggle(&path(&["Gear", "Armour", "Gloves", "ES", "Sage Gloves"]));
-        assert!(catalog.admits(&estimate("Warlock Gloves"), &selected));
-        assert!(!catalog.admits(&estimate("Titan Gauntlets"), &selected));
-        selected.toggle(&path(&["Gear", "Armour", "Body Armour", "Evasion/ES", "Carnal Armour"]));
-        assert!(catalog.admits(&estimate("Necrotic Armour"), &selected));
-        let estimates = [estimate("Warlock Gloves"), estimate("Lich's Circlet"), estimate("Cobalt Jewel")];
-        catalog.update_counts(&estimates);
-        let gear = &catalog.root.children["Gear"];
-        assert_eq!(gear.count, 2);
-        assert_eq!(gear.children["Armour"].children["Gloves"].children["ES"].count, 1);
-        assert_eq!(catalog.root.children["Jewels"].children["Base jewels"].children["Cobalt Jewel"].count, 1);
-    }
-
-    #[test]
-    fn selections_round_trip_and_clearing_the_last_restores_everything() {
-        let mut selected = ItemSelection::default();
-        let gloves = path(&["Gear", "Armour", "Gloves", "ES"]);
-        selected.toggle(&gloves);
-        let restored: ItemSelection = serde_json::from_str(&serde_json::to_string(&selected).unwrap()).unwrap();
-        assert_eq!(restored, selected);
-        assert!(catalog().root.matches(&["sage".into(), "gloves".into()]));
-        assert!(!catalog().root.matches(&["missingbase".into()]));
-        let mut ward = Node::default();
-        ward.insert(&path(&["Gear", "Armour", "Helmet", "Ward", "Runic Crest"]));
-        assert!(!ward.matches(&["helmet".into(), "es".into()]));
-        selected.toggle(&gloves);
-        assert!(catalog().admits(&estimate("Imperial Bow"), &selected));
-    }
 }

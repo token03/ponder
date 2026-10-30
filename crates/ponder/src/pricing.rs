@@ -25,7 +25,7 @@ use ponder_game::mods::{ItemMatch, ModDB};
 use ponder_net::trade::{self, ItemQuery, Rates, StatIds};
 use serde_json::Value;
 
-use crate::demand::{RES, stat_key};
+use crate::candidate::{RES, stat_key};
 use crate::gear;
 
 /// Search floor: listings at this tier or better on every core mod.
@@ -100,7 +100,7 @@ pub struct PriceModel {
 
 /// A trade search for the archetype's core mods at `floor` tier or better, on its base group.
 ///
-/// `example` is one of the archetype's matches (`demand.archetype_match`); None when no core
+/// `example` is one of the archetype's matches (`candidate.archetype_match`); None when no core
 /// mod has a trade stat.
 pub fn archetype_query(db: &ModDB, example: &ItemMatch, keys: &[&str], floor: i64, td: &TradeData) -> Option<Value> {
     let grp = gear::group(db, example);

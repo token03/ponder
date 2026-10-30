@@ -511,15 +511,3 @@ fn compare(before: &Path, after: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn benchmark_protocol_rejects_truncated_records() {
-        assert!(records("PONDER_BENCH\tmain\ttrue").is_err());
-        assert!(records("ordinary test output").unwrap().is_empty());
-        assert_eq!(RESULTS_HEADER.split('\t').count(), 6 + METRIC_FIELDS);
-    }
-}

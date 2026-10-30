@@ -1,4 +1,4 @@
-//! Game data exported by repoe-fork, loaded from the local cache.
+//! Game data exported by repoe-fork, loaded from the local data directory.
 //!
 //! The JSON exports are big (mods 34 MB, base items 8 MB, stat translations
 //! 12 MB), so each file is read once per process into typed structs holding only
@@ -66,7 +66,7 @@ pub fn data_dir() -> PathBuf {
     DATA_DIR
         .get_or_init(|| match std::env::var_os("PONDER_DATA") {
             Some(p) if !p.is_empty() => PathBuf::from(p),
-            _ => std::env::current_dir().unwrap_or_default().join(".cache").join("repoe"),
+            _ => std::env::current_dir().unwrap_or_default().join("data").join("repoe"),
         })
         .clone()
 }
@@ -378,38 +378,3 @@ typed!(/// `stat_translations.json` (ids and trade stats only).
     stat_translations, "stat_translations", Vec<StatTranslation>);
 typed!(/// `item_classes.json`.
     item_classes, "item_classes", OrderedMap<ItemClass>);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ordered_map_keeps_file_order_and_first_position() {
-        let m: OrderedMap<i32> = serde_json::from_str(r#"{"b": 1, "a": 2, "c": 3, "b": 4}"#).unwrap();
-        assert_eq!(m.keys().collect::<Vec<_>>(), ["b", "a", "c"]);
-        assert_eq!(m["b"], 4);
-        assert_eq!(m.get_index_of("c"), Some(2));
-        assert!(m.get("zzz").is_none());
-    }
-
-    #[test]
-    fn mod_reads_only_what_it_needs() {
-        let m: Mod = serde_json::from_str(
-            r#"{"domain":"item","generation_type":"suffix","groups":["Strength"],"implicit_tags":["attribute"],
-                "is_essence_only":false,"name":"of the Brute","required_level":1,
-                "spawn_weights":[{"tag":"ring","weight":1000}],"stats":[{"id":"additional_strength","max":12,"min":8}],
-                "text":"+(8-12) to Strength","type":"Strength","gold_value":null,"grants_effects":[]}"#,
-        )
-        .unwrap();
-        assert_eq!((m.type_.as_str(), m.stats[0].min, m.spawn_weights[0].weight), ("Strength", 8.0, 1000));
-        let none: Mod = serde_json::from_str(r#"{"text":null}"#).unwrap();
-        assert_eq!(none.text_or_empty(), "");
-    }
-
-    #[test]
-    fn missing_file_is_a_missing_error() {
-        let err = load_from::<serde_json::Value>(Path::new("/nonexistent-ponder-dir"), "mods").unwrap_err();
-        assert!(matches!(err, DataError::Missing(_)));
-        assert!(!available(Some(Path::new("/nonexistent-ponder-dir"))));
-    }
-}

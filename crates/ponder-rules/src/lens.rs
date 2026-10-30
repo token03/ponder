@@ -191,6 +191,10 @@ type Expand<'a> = dyn Fn(State, u8, &mut dyn FnMut(f64, State, u8)) + 'a;
 
 impl<'g> Lens<'g> {
     pub fn new(game: &'g Game, kind: Kind, targets: Vec<Target>, ops: &[&dyn Operation], inputs: &[&Item]) -> Lens<'g> {
+        Self::try_new(game, kind, targets, ops, inputs).expect("supported lens context")
+    }
+
+    pub fn try_new(game: &'g Game, kind: Kind, targets: Vec<Target>, ops: &[&dyn Operation], inputs: &[&Item]) -> Result<Lens<'g>, String> {
         let steps = ops.iter().flat_map(|op| op.steps()).cloned().collect();
         Lens::build(game, kind, targets, (steps, inputs.iter().map(|i| (*i).clone()).collect()), false)
     }
@@ -202,7 +206,7 @@ impl<'g> Lens<'g> {
     /// through it.
     pub fn relaxed(&self) -> (Lens<'g>, Relaxation) {
         let targets = self.targets.iter().map(|t| t.target.clone()).collect();
-        let relaxed = Lens::build(self.game, self.kind, targets, self.source.clone(), true);
+        let relaxed = Lens::build(self.game, self.kind, targets, self.source.clone(), true).expect("relaxation fits the original lens");
         let mut class = vec![usize::MAX; self.classes.len()];
         for (m, &c) in &self.class_of {
             class[c] = relaxed.class_of[m];
@@ -211,14 +215,16 @@ impl<'g> Lens<'g> {
         (relaxed, Relaxation { class, classes })
     }
 
-    fn build(game: &'g Game, kind: Kind, targets: Vec<Target>, source: (Vec<Step>, Vec<Item>), relaxed: bool) -> Lens<'g> {
+    fn build(game: &'g Game, kind: Kind, targets: Vec<Target>, source: (Vec<Step>, Vec<Item>), relaxed: bool) -> Result<Lens<'g>, String> {
         let mut offsets = Vec::new();
         let mut bits = 0;
         for t in &targets {
             offsets.push(bits);
             bits += t.needs.len();
         }
-        assert!(bits <= 128, "at most 128 needs per lens");
+        if bits > 128 {
+            return Err("goal exceeds 128 tracked requirements".into());
+        }
         let serves = |m: ModId| -> u128 {
             let mut s = 0u128;
             for (t, off) in targets.iter().zip(&offsets) {
@@ -281,7 +287,9 @@ impl<'g> Lens<'g> {
         read.extend(filters.iter().filter_map(|f| f.map(|t| t.0)));
         read.extend(bans.iter().map(|b| b.1));
         let read_tags: Vec<TagId> = read.into_iter().collect();
-        assert!(read_tags.len() <= 32, "at most 32 read tags per lens");
+        if read_tags.len() > 32 {
+            return Err("operations exceed 32 tracked tags".into());
+        }
         let tag_bits =
             |m: ModId| read_tags.iter().enumerate().filter(|(_, t)| game.def(m).tags.contains(t)).fold(0u32, |b, (i, _)| b | 1 << i);
         let rank_of =
@@ -362,7 +370,9 @@ impl<'g> Lens<'g> {
                 .push(m);
         }
 
-        assert!(keys.len() <= CLASSES, "at most {CLASSES} classes per lens");
+        if keys.len() > CLASSES {
+            return Err(format!("goal and operations need {} modifier classes; supported limit is {CLASSES}", keys.len()));
+        }
         let mut classes = Vec::new();
         let mut class_of = HashMap::default();
         let mut group_classes: HashMap<GroupId, Vec<usize>> = HashMap::default();
@@ -495,7 +505,7 @@ impl<'g> Lens<'g> {
             })
             .collect();
         lens.source = source;
-        lens
+        Ok(lens)
     }
 
     pub fn is_tracked(&self, c: usize) -> bool {
@@ -706,16 +716,20 @@ impl<'g> Lens<'g> {
             .map(|(_, partner)| {
                 let header = partner.first()?.1;
                 let output = (header.influences, header.eldritch);
-                let donor = self.recombination_table(ctx, states, partner, &value, Heir { input: None, output, fractured: false })?;
                 let headers: BTreeSet<_> = states.iter().map(|s| (s.influences, s.eldritch)).collect();
-                let heirs = headers
-                    .into_iter()
-                    .filter_map(|header| {
-                        let heir = Heir { input: Some(header), output: header, fractured: true };
-                        self.recombination_table(ctx, states, partner, &value, heir).map(|table| (header, table))
-                    })
-                    .collect();
-                Some(RecombinationTables { donor, heirs })
+                let (donor, heirs) = rayon::join(
+                    || self.recombination_table(ctx, states, partner, &value, Heir { input: None, output, fractured: false }),
+                    || {
+                        headers
+                            .into_par_iter()
+                            .filter_map(|header| {
+                                let heir = Heir { input: Some(header), output: header, fractured: true };
+                                self.recombination_table(ctx, states, partner, &value, heir).map(|table| (header, table))
+                            })
+                            .collect()
+                    },
+                );
+                Some(RecombinationTables { donor: donor?, heirs })
             })
             .collect();
         move |state, steps| {
@@ -854,10 +868,11 @@ impl<'g> Lens<'g> {
                         counts[c as usize] += 1;
                     }
                     let pool: Vec<_> = counts.into_iter().enumerate().filter(|&(_, count)| count > 0).collect();
+                    let samples = [self.kept(ctx, &pool, limit, false, heir.output.0), self.kept(ctx, &pool, limit, true, heir.output.0)];
                     for (mode, (excluded, selected)) in
                         [(false, None), (false, Some(false)), (false, Some(true)), (true, None)].into_iter().enumerate()
                     {
-                        let samples = self.kept(ctx, &pool, limit, excluded, heir.output.0);
+                        let samples = &samples[usize::from(excluded)];
                         let mut row = Vec::new();
                         for (p, chosen) in samples.iter() {
                             let exclusive = pool.iter().zip(chosen).any(|(&(c, _), &count)| count > 0 && self.classes[c % n].exclusive);

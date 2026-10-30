@@ -20,14 +20,8 @@ use crate::item::{split_lines, trim_text};
 /// Share-site URL patterns and the raw-code URL each maps to (`{}` is the captured id).
 static RAW_URLS: LazyLock<[(Regex, &'static str); 2]> = LazyLock::new(|| {
     [
-        (
-            Regex::new(r"^https?://pobb\.in/([\w-]+)/?$").unwrap(),
-            "https://pobb.in/{}/raw",
-        ),
-        (
-            Regex::new(r"^https?://pastebin\.com/(?:raw/)?(\w+)/?$").unwrap(),
-            "https://pastebin.com/raw/{}",
-        ),
+        (Regex::new(r"^https?://pobb\.in/([\w-]+)/?$").unwrap(), "https://pobb.in/{}/raw"),
+        (Regex::new(r"^https?://pastebin\.com/(?:raw/)?(\w+)/?$").unwrap(), "https://pastebin.com/raw/{}"),
     ]
 });
 
@@ -66,9 +60,7 @@ pub struct Build {
 fn engine() -> GeneralPurpose {
     GeneralPurpose::new(
         &alphabet::STANDARD,
-        GeneralPurposeConfig::new()
-            .with_decode_padding_mode(DecodePaddingMode::Indifferent)
-            .with_decode_allow_trailing_bits(true),
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent).with_decode_allow_trailing_bits(true),
     )
 }
 
@@ -84,13 +76,9 @@ pub fn decode(code: &str) -> Result<String, PobError> {
         })
         .filter(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/')
         .collect();
-    let raw = engine()
-        .decode(clean)
-        .map_err(|e| PobError(format!("bad PoB code: {e}")))?;
+    let raw = engine().decode(clean).map_err(|e| PobError(format!("bad PoB code: {e}")))?;
     let mut xml = Vec::new();
-    flate2::read::ZlibDecoder::new(raw.as_slice())
-        .read_to_end(&mut xml)
-        .map_err(|e| PobError(format!("bad PoB code: {e}")))?;
+    flate2::read::ZlibDecoder::new(raw.as_slice()).read_to_end(&mut xml).map_err(|e| PobError(format!("bad PoB code: {e}")))?;
     String::from_utf8(xml).map_err(|e| PobError(format!("bad PoB code: {e}")))
 }
 
@@ -99,10 +87,7 @@ pub fn encode(xml: &str) -> String {
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     z.write_all(xml.as_bytes()).unwrap();
     let raw = z.finish().unwrap();
-    base64::engine::general_purpose::STANDARD
-        .encode(raw)
-        .replace('+', "-")
-        .replace('/', "_")
+    base64::engine::general_purpose::STANDARD.encode(raw).replace('+', "-").replace('/', "_")
 }
 
 /// The raw-code URL for a share-site link (pobb.in, pastebin), if `source` is one.
@@ -110,9 +95,7 @@ pub fn encode(xml: &str) -> String {
 /// NETWORK: the caller downloads it; this crate does no I/O of that kind.
 pub fn raw_url(source: &str) -> Option<String> {
     let source = trim_text(source);
-    RAW_URLS
-        .iter()
-        .find_map(|(re, raw)| re.captures(source).map(|m| raw.replace("{}", &m[1])))
+    RAW_URLS.iter().find_map(|(re, raw)| re.captures(source).map(|m| raw.replace("{}", &m[1])))
 }
 
 /// A PoB code from a file path, or the code itself (share URLs go through [`raw_url`] first).
@@ -130,20 +113,13 @@ pub fn read_code(source: &str) -> String {
 /// A build from text already in hand: PoB XML, or an export code (what a download of a share URL holds).
 pub fn load_text(code_or_xml: &str) -> Result<Build, PobError> {
     let text = trim_text(code_or_xml);
-    if text.starts_with('<') {
-        parse(text)
-    } else {
-        parse(&decode(text)?)
-    }
+    if text.starts_with('<') { parse(text) } else { parse(&decode(text)?) }
 }
 
 /// Load a build from a share URL, a file holding a code or XML, or a code.
 ///
 /// `fetch` downloads a URL's body (the net crate supplies it); it is called only for share URLs.
-pub fn load_with(
-    source: &str,
-    fetch: impl Fn(&str) -> Result<String, String>,
-) -> Result<Build, PobError> {
+pub fn load_with(source: &str, fetch: impl Fn(&str) -> Result<String, String>) -> Result<Build, PobError> {
     let text = match raw_url(source) {
         Some(url) => trim_text(&fetch(&url).map_err(PobError)?).to_string(),
         None => read_code(source),
@@ -152,8 +128,7 @@ pub fn load_with(
 }
 
 fn children<'a, 'b>(node: Node<'a, 'b>, tag: &'static str) -> impl Iterator<Item = Node<'a, 'b>> {
-    node.children()
-        .filter(move |c| c.is_element() && c.tag_name().name() == tag)
+    node.children().filter(move |c| c.is_element() && c.tag_name().name() == tag)
 }
 
 fn child<'a, 'b>(node: Node<'a, 'b>, tag: &'static str) -> Option<Node<'a, 'b>> {
@@ -173,9 +148,7 @@ pub fn parse(xml: &str) -> Result<Build, PobError> {
         level: if level_text.is_empty() {
             0
         } else {
-            trim_text(level_text)
-                .parse()
-                .map_err(|_| PobError(format!("bad level {level_text:?}")))?
+            trim_text(level_text).parse().map_err(|_| PobError(format!("bad level {level_text:?}")))?
         },
         main_skill: main_skill(root, attr("mainSocketGroup")),
         items: Vec::new(),
@@ -187,38 +160,17 @@ pub fn parse(xml: &str) -> Result<Build, PobError> {
     let usage = item_usage(items_el);
     for item_el in children(items_el, "Item") {
         let id = item_el.attribute("id").unwrap_or("").to_string();
-        let raw: String = item_el
-            .descendants()
-            .filter(|n| n.is_text())
-            .map(|n| n.text().unwrap_or(""))
-            .collect();
-        let text = split_lines(trim_text(&raw))
-            .into_iter()
-            .map(trim_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let uses = usage
-            .iter()
-            .find(|(k, _)| *k == id)
-            .map(|(_, v)| v.as_slice())
-            .unwrap_or(&[]);
-        let slot = uses
-            .iter()
-            .find(|u| u.2)
-            .map(|u| u.1.clone())
-            .or_else(|| uses.first().map(|u| u.1.clone()));
+        let raw: String = item_el.descendants().filter(|n| n.is_text()).map(|n| n.text().unwrap_or("")).collect();
+        let text = split_lines(trim_text(&raw)).into_iter().map(trim_text).collect::<Vec<_>>().join("\n");
+        let uses = usage.iter().find(|(k, _)| *k == id).map(|(_, v)| v.as_slice()).unwrap_or(&[]);
+        let slot = uses.iter().find(|u| u.2).map(|u| u.1.clone()).or_else(|| uses.first().map(|u| u.1.clone()));
         let mut sets: Vec<String> = Vec::new();
         for (title, _, _) in uses {
             if !title.is_empty() && !sets.contains(title) {
                 sets.push(title.clone());
             }
         }
-        build.items.push(PobItem {
-            id,
-            text,
-            slot,
-            sets,
-        });
+        build.items.push(PobItem { id, text, slot, sets });
     }
     Ok(build)
 }
@@ -252,11 +204,7 @@ fn item_usage(items_el: Node) -> Vec<(String, Vec<Use>)> {
             if item_id == "0" || name.contains("Swap") {
                 continue;
             }
-            let entry = (
-                trim_text(&COLOR.replace_all(&title, "")).to_string(),
-                name.to_string(),
-                is_active,
-            );
+            let entry = (trim_text(&COLOR.replace_all(&title, "")).to_string(), name.to_string(), is_active);
             match usage.iter_mut().find(|(k, _)| k == item_id) {
                 Some((_, v)) => v.push(entry),
                 None => usage.push((item_id.to_string(), vec![entry])),
@@ -271,12 +219,7 @@ fn main_skill(root: Node, main_group: Option<&str>) -> Option<String> {
     let skills = child(root, "Skills")?;
     let active = skills.attribute("activeSkillSet");
     let skill_sets: Vec<Node> = children(skills, "SkillSet").collect();
-    let container = skill_sets
-        .iter()
-        .find(|s| s.attribute("id") == active)
-        .or_else(|| skill_sets.first())
-        .copied()
-        .unwrap_or(skills);
+    let container = skill_sets.iter().find(|s| s.attribute("id") == active).or_else(|| skill_sets.first()).copied().unwrap_or(skills);
     let groups: Vec<Node> = children(container, "Skill").collect();
     // Python indexes groups[int(group) - 1]: a negative index counts from the end.
     let mut i: i64 = trim_text(main_group?).parse::<i64>().ok()? - 1;
@@ -285,9 +228,6 @@ fn main_skill(root: Node, main_group: Option<&str>) -> Option<String> {
     }
     let group = groups.get(usize::try_from(i).ok()?)?;
     let gems: Vec<Node> = children(*group, "Gem").collect();
-    let gem = gems
-        .iter()
-        .find(|g| !g.attribute("skillId").unwrap_or("").contains("Support"))
-        .or_else(|| gems.first())?;
+    let gem = gems.iter().find(|g| !g.attribute("skillId").unwrap_or("").contains("Support")).or_else(|| gems.first())?;
     gem.attribute("nameSpec").map(String::from)
 }

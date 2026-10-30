@@ -548,6 +548,49 @@ fn a_sparse_band_policy_keeps_its_exact_geometric_value() {
 }
 
 #[test]
+fn an_acyclic_policy_can_finish_through_a_retrying_leaf() {
+    let model = Chain {
+        goal: 3,
+        actions: vec![
+            vec![(1.0, vec![(1.0, 1)]), (50.0, vec![(1.0, 2)])],
+            vec![(2.0, vec![(1.0, 2)]), (100.0, vec![(1.0, 0)])],
+            vec![(3.0, vec![(0.75, 2), (0.25, 3)]), (100.0, vec![(1.0, 1)])],
+            vec![],
+        ],
+    };
+    let solution = solve(&model, &[(1.0, 0)], 4).unwrap();
+    for (state, expected) in [(0, 15.0), (1, 14.0), (2, 12.0)] {
+        assert!((solution.values[solution.index[&state]] - expected).abs() < 1e-10);
+        assert_eq!(solution.policy[solution.index[&state]], Some(0));
+    }
+}
+
+#[test]
+fn separate_sparse_policy_components_preserve_their_boundary_values() {
+    let size = 65;
+    let count = size * 2;
+    let expected = |i: u32| if i == count { 0.0 } else { 100.0 + f64::from(i) };
+    let mut actions: Vec<_> = (0..count)
+        .map(|i| {
+            let group = i / size * size;
+            let next = group + (i + 1) % size;
+            let previous = group + (i + size - 1) % size;
+            let exit = if group == 0 { count } else { i - size };
+            let transitions = vec![(0.4, next), (0.1, previous), (0.25, exit), (0.25, count)];
+            let cost = expected(i) - transitions.iter().map(|&(p, t)| p * expected(t)).sum::<f64>();
+            vec![(cost, transitions), (1000.0, vec![(1.0, (i + size) % count)])]
+        })
+        .collect();
+    actions.push(Vec::new());
+    let model = Chain { goal: count, actions };
+    let solution = ponder_solve::solve_everywhere(&model, &[(1.0, 0)], 200).unwrap();
+    for state in 0..count {
+        assert!((solution.values[solution.index[&state]] - expected(state)).abs() < 1e-9);
+        assert_eq!(solution.policy[solution.index[&state]], Some(0));
+    }
+}
+
+#[test]
 fn only_the_finished_policy_is_retained() {
     let m = Chain { goal: 1, actions: vec![vec![(1.0, vec![(1.0, 1)]), (2.0, vec![(1.0, 2)])], vec![], vec![(100.0, vec![(1.0, 1)])]] };
     let s = solve(&m, &[(1.0, 0)], 3).unwrap();
@@ -558,4 +601,60 @@ fn only_the_finished_policy_is_retained() {
     assert!(!s.index.contains_key(&2));
     assert_eq!(ends(&m, &s, &[(1.0, 0)]), vec![(1.0, 1)]);
     assert_eq!(solve(&m, &[(1.0, 0)], 2).unwrap_err(), Error::TooManyStates(2));
+}
+
+#[test]
+fn a_sparse_retry_policy_preserves_its_goal_distribution() {
+    struct SplitGoals(Chain);
+
+    impl Model for SplitGoals {
+        type State = u32;
+
+        fn is_goal(&self, s: &u32) -> bool {
+            *s >= self.0.goal
+        }
+
+        fn actions(&self, s: &u32) -> Vec<(usize, f64)> {
+            self.0.actions(s)
+        }
+
+        fn outcomes(&self, s: &u32, action: usize) -> Vec<(f64, u32)> {
+            self.0.outcomes(s, action)
+        }
+    }
+
+    let count = 129;
+    let mut actions: Vec<_> = (0..count).map(|i| vec![(1.0, vec![(0.7, (i + 1) % count), (0.1, count), (0.2, count + 1)])]).collect();
+    actions.extend([Vec::new(), Vec::new()]);
+    let model = SplitGoals(Chain { goal: count, actions });
+    let solution = solve(&model, &[(1.0, 0)], 200).unwrap();
+    assert!((solution.cost - 10.0 / 3.0).abs() < 1e-10);
+    let distribution: std::collections::BTreeMap<_, _> = ends(&model, &solution, &[(1.0, 0)]).into_iter().map(|(p, s)| (s, p)).collect();
+    assert_eq!(distribution.len(), 2);
+    assert!((distribution[&count] - 1.0 / 3.0).abs() < 1e-12);
+    assert!((distribution[&(count + 1)] - 2.0 / 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn proper_policies_can_have_negative_expected_cost_from_credits() {
+    struct Credits;
+    impl Model for Credits {
+        type State = u8;
+        fn is_goal(&self, &s: &u8) -> bool {
+            s == 2
+        }
+        fn actions(&self, &s: &u8) -> Vec<(usize, f64)> {
+            if s == 0 { vec![(0, -3.0), (1, 2.0)] } else { vec![(0, 1.0)] }
+        }
+        fn outcomes(&self, &s: &u8, action: usize) -> Vec<(f64, u8)> {
+            match (s, action) {
+                (0, 0) => vec![(1.0, 1)],
+                (0, 1) => vec![(1.0, 2)],
+                _ => vec![(0.5, 1), (0.5, 2)],
+            }
+        }
+    }
+    let plan = solve(&Credits, &[(1.0, 0)], 10).unwrap();
+    assert_eq!(plan.cost, -1.0);
+    assert_eq!(plan.policy[plan.index[&0]], Some(0));
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ponder_rules::item::Item;
 use ponder_rules::lens::{Lens, Relaxation, State};
-use ponder_rules::ops::{Ctx, Operation, Step, Supply};
+use ponder_rules::ops::{Ctx, Operation, Sides, Step, Supply};
 use ponder_solve::{IndexedOutcomes, Model};
 use rayon::prelude::*;
 
@@ -79,7 +79,8 @@ impl<'a> Craft<'a> {
                     let mechanic = |k: usize| ops[k].0.name().split(':').next().map(String::from);
                     (ops[j].1 < ops[i].1 || (ops[j].1 == ops[i].1 && j < i))
                         && mechanic(i) == mechanic(j)
-                        && lens.same_effect(ops[j].0.steps(), ops[i].0.steps())
+                        && (lens.same_effect(ops[j].0.steps(), ops[i].0.steps())
+                            || mechanic(i).as_deref() == Some("bench") && ops[j].0.steps() == ops[i].0.steps())
                 })
             })
             .collect();
@@ -396,6 +397,7 @@ impl Model for Craft<'_> {
         if let Node::Item(s) = n
             && i < self.ops.len()
             && self.hubs[i].is_none()
+            && self.phases[i] != Phase::Fracture
         {
             self.lens.for_each_outcome(self.ctx, self.ops[i].0.steps(), s, &mut |p, t| {
                 let node = if self.lens.holds(self.goal, &t) {
@@ -488,7 +490,7 @@ impl Model for Craft<'_> {
 
 /// When in a craft an operation may be used. These restrict the policy, not the rules: each
 /// rules out uses that would add a whole copy of the craft's states and rarely pay
-/// (docs/phased-crafts-handoff.md has the measurements).
+/// (docs/RESEARCH.md#historical-phase-experiments has the measurements).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Any,
@@ -509,6 +511,9 @@ impl Phase {
             Phase::Fracture
         } else if has(|s| matches!(s, Step::Eldritch(_))) {
             Phase::Eldritch
+        } else if has(|s| matches!(s, Step::Clear { sides: Sides::Eldritch, .. })) {
+            // Eldritch Chaos requires the implicit; it is a finishing reroll, not a restart.
+            Phase::Any
         } else if has(|s| {
             matches!(s, Step::Clear { .. } | Step::Rarity(_) | Step::Settle | Step::RollCount | Step::Recombine(_) | Step::Influence(_))
         }) {
@@ -558,10 +563,31 @@ pub struct Followed {
     pub error: f64,
     pub uses: Vec<(String, f64)>,
     pub lost: usize,
+    pub truncated: usize,
     /// The first run's actions, repeats collapsed: (action, times in a row).
     pub example: Vec<(String, usize)>,
     /// The finished items.
     pub items: Vec<Item>,
+}
+
+struct FollowRun {
+    cost: f64,
+    counts: Vec<usize>,
+    actions: Vec<(usize, usize)>,
+    item: Option<Item>,
+    truncated: bool,
+}
+
+impl FollowRun {
+    fn record(&mut self, op: usize, trace: bool) {
+        self.counts[op] += 1;
+        if trace {
+            match self.actions.last_mut() {
+                Some((last, count)) if *last == op => *count += 1,
+                _ => self.actions.push((op, 1)),
+            }
+        }
+    }
 }
 
 impl Craft<'_> {
@@ -572,61 +598,71 @@ impl Craft<'_> {
 
     /// Runs start at the market; run `r` is seeded with `seed + r`.
     pub fn follow(&self, solution: &ponder_solve::Solution<Node>, runs: usize, seed: u64) -> Followed {
+        self.follow_with_limit(solution, runs, seed, 200_000)
+    }
+
+    pub fn follow_with_limit(&self, solution: &ponder_solve::Solution<Node>, runs: usize, seed: u64, steps: usize) -> Followed {
         let policy = |n: &Node| solution.index.get(n).and_then(|&i| solution.policy[i]);
-        // One run: its cost, its actions in order, and the finished item (none if lost).
         let run = |r: u64| {
             let rng = &mut ponder_rules::rng::Rng::new(seed + r);
-            let mut item: Option<Item> = None;
-            let (mut cost, mut actions) = (0.0, Vec::new());
-            for _ in 0..200_000 {
-                let state = item.as_ref().map(|i| self.lens.project(i));
+            let mut run = FollowRun { cost: 0.0, counts: vec![0; self.restart() + 1], actions: Vec::new(), item: None, truncated: false };
+            for _ in 0..steps {
+                let state = run.item.as_ref().map(|i| self.lens.project(i));
                 if state.as_ref().is_some_and(|s| !self.lens.viable(self.goal, s)) {
-                    actions.push(self.restart());
-                    item = None;
+                    run.record(self.restart(), r == 0);
+                    run.item = None;
                     continue;
                 }
                 let node = state.map_or(Node::Market, Node::Item);
                 if self.is_goal(&node) {
-                    return (cost, actions, item);
+                    return run;
                 }
-                let Some(op) = policy(&node) else { return (cost, actions, None) };
-                actions.push(op);
+                let Some(op) = policy(&node) else {
+                    run.item = None;
+                    return run;
+                };
+                run.record(op, r == 0);
                 if op == self.restart() {
-                    item = None;
+                    run.item = None;
                 } else if let Some(b) = self.start_of(op) {
-                    item = Some(b.item(rng));
-                    cost += b.price();
+                    run.item = Some(b.item(rng));
+                    run.cost += b.price();
                 } else {
                     let (operation, price) = self.ops[op];
-                    ponder_rules::ops::run(self.ctx, operation.steps(), item.as_mut().unwrap(), rng);
-                    cost += price;
+                    ponder_rules::ops::run(self.ctx, operation.steps(), run.item.as_mut().unwrap(), rng);
+                    run.cost += price;
                     if self.phases[op] == Phase::Fracture
-                        && item.as_ref().is_some_and(|i| self.spare_fracture(&Node::Item(self.lens.project(i))))
+                        && run.item.as_ref().is_some_and(|i| self.spare_fracture(&Node::Item(self.lens.project(i))))
                     {
-                        actions.push(self.restart());
-                        item = None;
+                        run.record(self.restart(), r == 0);
+                        run.item = None;
                     }
                 }
             }
-            (cost, actions, None)
+            run.item = None;
+            run.truncated = true;
+            run
         };
-        let done: Vec<(f64, Vec<usize>, Option<Item>)> = (0..runs as u64).into_par_iter().map(run).collect();
+        let done: Vec<_> = (0..runs as u64).into_par_iter().map(run).collect();
         let mut uses = vec![0usize; self.restart() + 1];
-        for &op in done.iter().flat_map(|d| &d.1) {
-            uses[op] += 1;
-        }
-        let mut example: Vec<(String, usize)> = Vec::new();
-        for &op in &done[0].1 {
-            match example.last_mut() {
-                Some((last, n)) if *last == self.action_name(op) => *n += 1,
-                _ => example.push((self.action_name(op), 1)),
+        for run in &done {
+            for (total, count) in uses.iter_mut().zip(&run.counts) {
+                *total += count;
             }
         }
-        let lost = done.iter().filter(|d| d.2.is_none()).count();
-        let mean = done.iter().map(|d| d.0).sum::<f64>() / runs as f64;
-        let var = done.iter().map(|d| (d.0 - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
+        let mut example: Vec<(String, usize)> = Vec::new();
+        for &(op, count) in &done[0].actions {
+            match example.last_mut() {
+                Some((last, n)) if *last == self.action_name(op) => *n += count,
+                _ => example.push((self.action_name(op), count)),
+            }
+        }
+        let lost = done.iter().filter(|d| d.item.is_none()).count();
+        let truncated = done.iter().filter(|d| d.truncated).count();
+        let mean = done.iter().map(|d| d.cost).sum::<f64>() / runs as f64;
+        let var = done.iter().map(|d| (d.cost - mean).powi(2)).sum::<f64>() / (runs as f64 - 1.0);
         let uses = uses.iter().enumerate().filter(|(_, n)| **n > 0).map(|(i, n)| (self.action_name(i), *n as f64 / runs as f64)).collect();
-        let items = done.into_iter().filter_map(|d| d.2).collect();
-        Followed { mean, error: (var / runs as f64).sqrt(), uses, lost, example, items }
+        let items = done.into_iter().filter_map(|d| d.item).collect();
+        Followed { mean, error: (var / runs as f64).sqrt(), uses, lost, truncated, example, items }
     }
 }

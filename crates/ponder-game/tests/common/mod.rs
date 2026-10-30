@@ -1,15 +1,25 @@
 #![allow(dead_code, unused_imports)]
 
-#[path = "../../../../tests/support/mod.rs"]
+#[path = "../../../../fixtures/support.rs"]
 mod support;
-#[path = "../../../../tests/support/game.rs"]
-mod game;
 
-pub use support::*;
-pub use game::*;
 use ponder_game::item::{Item, ModLine};
 use ponder_game::mods::ItemMatch;
+use ponder_game::{data, mods::ModDB};
 use serde_json::{Value, json};
+use std::sync::OnceLock;
+pub use support::*;
+
+pub fn setup() {
+    static SETUP: OnceLock<()> = OnceLock::new();
+    SETUP.get_or_init(|| data::set_data_dir(fixtures().join("repoe")).expect("test data configured before loading"));
+}
+
+pub fn db() -> &'static ModDB {
+    static DB: OnceLock<ModDB> = OnceLock::new();
+    setup();
+    DB.get_or_init(|| ModDB::load().expect("fixed game data"))
+}
 
 pub fn expected(name: &str) -> Value {
     fixture(&format!("expected/items/{name}.json.gz"))
@@ -58,14 +68,7 @@ pub fn normalized(mut m: Value, with_tags: bool) -> Value {
     } else {
         // A tag with two influence suffixes ("helmet_shaper_elder") is spelled in Python's set
         // iteration order, which varies per run: keep their number, not their spelling.
-        const INF: [&str; 6] = [
-            "shaper",
-            "elder",
-            "crusader",
-            "eyrie",
-            "basilisk",
-            "adjudicator",
-        ];
+        const INF: [&str; 6] = ["shaper", "elder", "crusader", "eyrie", "basilisk", "adjudicator"];
         let tags = o.get_mut("tags").unwrap().as_array_mut().unwrap();
         let multi = |t: &Value| {
             let parts: Vec<&str> = t.as_str().unwrap().rsplitn(3, '_').collect();

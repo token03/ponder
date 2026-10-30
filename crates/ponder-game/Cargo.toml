@@ -4,11 +4,11 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Game data (repoe), item parsing and mod matching, currency actions, craft problems."
+description = "Game data (repoe), item parsing and mod matching."
 
 [dependencies]
-ponder-core.workspace = true
-serde.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 indexmap.workspace = true
 regex.workspace = true
