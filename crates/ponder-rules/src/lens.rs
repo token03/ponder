@@ -516,9 +516,9 @@ impl<'g> Lens<'g> {
         // count rolls as the level below it.
         let changes: Vec<usize> = (0..memory.len()).filter(|&s| s == 0 || memory[s] != memory[s - 1]).collect();
         let levels: Vec<usize> = (0..STRAND_LEVELS)
-            .filter_map(|k| changes.iter().copied().filter(|&c| c <= k * memory.len() / STRAND_LEVELS).last())
+            .filter_map(|k| changes.iter().copied().rfind(|&c| c <= k * memory.len() / STRAND_LEVELS))
             .collect();
-        let memory: Vec<usize> = (0..memory.len()).map(|s| memory[*levels.iter().filter(|&&l| l <= s).last().unwrap()]).collect();
+        let memory: Vec<usize> = (0..memory.len()).map(|s| memory[*levels.iter().rfind(|&&l| l <= s).unwrap()]).collect();
         let pools: Vec<_> =
             pools.iter().enumerate().map(|(i, p)| (p.clone(), memories.iter().map(|classes| classes[i].clone()).collect())).collect();
         let unveil = class_weights(&weight_of, &|m, w| unveil_weight(game, game.def(m), m, w));

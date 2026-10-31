@@ -145,12 +145,33 @@ pub enum Error {
 struct Edge {
     action: usize,
     cost: f64,
-    to: Transitions<usize>,
+    to: Transitions<Outcome>,
+}
+
+/// A probability and the state it leads to, packed: graphs hold tens of millions.
+#[derive(Clone, Copy)]
+#[repr(C, packed(4))]
+struct Outcome {
+    p: f64,
+    to: u32,
+}
+
+impl Outcome {
+    fn new((p, to): (f64, usize)) -> Self {
+        Self { p, to: u32::try_from(to).expect("state numbers fit in 32 bits") }
+    }
 }
 
 impl Edge {
-    fn outcomes(&self) -> &[(f64, usize)] {
-        self.to.outcomes()
+    fn outcomes(&self) -> impl ExactSizeIterator<Item = (f64, usize)> + '_ {
+        self.to.outcomes().iter().map(|o| (o.p, o.to as usize))
+    }
+
+    fn single(&self) -> Option<(f64, usize)> {
+        match self.to.outcomes() {
+            [o] => Some((o.p, o.to as usize)),
+            _ => None,
+        }
     }
 
     fn constant(&self) -> f64 {
@@ -159,18 +180,18 @@ impl Edge {
 }
 
 enum Transitions<S> {
-    Known(Box<[(f64, S)]>),
-    Single((f64, S)),
+    Known(Box<[S]>),
+    Single(S),
     Optimistic,
     Deferred,
 }
 
 impl<S> Transitions<S> {
-    fn known(mut to: Vec<(f64, S)>) -> Self {
+    fn known(mut to: Vec<S>) -> Self {
         if to.len() == 1 { Self::Single(to.pop().unwrap()) } else { Self::Known(to.into_boxed_slice()) }
     }
 
-    fn outcomes(&self) -> &[(f64, S)] {
+    fn outcomes(&self) -> &[S] {
         match self {
             Self::Known(to) => to,
             Self::Single(to) => std::slice::from_ref(to),
@@ -284,7 +305,7 @@ fn solve_keeping<M: Model>(
 type Futures = Vec<(usize, Option<f64>)>;
 
 /// The actions of a state with their costs and outcomes.
-type Expansion<S> = Vec<(usize, f64, Transitions<S>)>;
+type Expansion<S> = Vec<(usize, f64, Transitions<(f64, S)>)>;
 
 const EXPANSION_BATCH: usize = 256;
 
@@ -470,10 +491,10 @@ fn solve_within<M: Model>(
                 Transitions::Known(to) => Transitions::known(
                     to.iter()
                         .filter(|o| o.0 > 0.0)
-                        .map(|(p, t)| intern(t, states, index, limit).map(|i| (*p, i)))
+                        .map(|(p, t)| intern(t, states, index, limit).map(|i| Outcome::new((*p, i))))
                         .collect::<Result<_, _>>()?,
                 ),
-                Transitions::Single((p, t)) if p > 0.0 => Transitions::Single((p, intern(&t, states, index, limit)?)),
+                Transitions::Single((p, t)) if p > 0.0 => Transitions::Single(Outcome::new((p, intern(&t, states, index, limit)?))),
                 Transitions::Single(_) => Transitions::Known(Box::new([])),
                 Transitions::Optimistic => Transitions::Optimistic,
                 Transitions::Deferred => Transitions::Deferred,
@@ -611,7 +632,7 @@ fn solve_within<M: Model>(
                         edges[s]
                             .extract_if(.., |e| {
                                 !e.to.pending()
-                                    && (!e.outcomes().iter().all(|&(_, t)| alive[t]) || !e.outcomes().iter().any(|&(_, t)| t != s))
+                                    && (!e.outcomes().all(|(_, t)| alive[t]) || !e.outcomes().any(|(_, t)| t != s))
                             })
                             .map(|e| (s, e)),
                     );
@@ -903,14 +924,14 @@ fn solve_within<M: Model>(
                         rooms.push((s, room));
                         if let Some((action, cost, _)) = selected {
                             if let Some(to) = transitions.as_ref().and_then(|link| link(&states[s], action)) {
-                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.into_vec()) }]));
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.iter().copied().map(Outcome::new).collect()) }]));
                                 return (updates, checks, rooms);
                             }
                             let out = model.outcomes(&states[s], action);
-                            let linked: Option<Box<[_]>> =
-                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(states, t).map(|&t| (*p, t))).collect();
+                            let linked: Option<Vec<_>> =
+                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(states, t).map(|&t| Outcome::new((*p, t)))).collect();
                             if let Some(to) = linked {
-                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.into_vec()) }]));
+                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to) }]));
                             } else {
                                 updates.push(Update::Deferred(s, vec![(action, cost, Transitions::known(out))]));
                             }
@@ -991,11 +1012,11 @@ fn all_reach_terminal(edges: &[Vec<Edge>], end: &[bool]) -> bool {
     let mut reached: Vec<_> = edges
         .iter()
         .enumerate()
-        .map(|(s, out)| end[s] || out.iter().rev().any(|e| e.to.optimistic() || matches!(e.outcomes(), [(_, t)] if end[*t])))
+        .map(|(s, out)| end[s] || out.iter().rev().any(|e| e.to.optimistic() || e.single().is_some_and(|(_, t)| end[t])))
         .collect();
     for s in (0..edges.len()).rev() {
         if !reached[s]
-            && edges[s].iter().any(|e| e.to.optimistic() || !e.outcomes().is_empty() && e.outcomes().iter().all(|&(_, t)| reached[t]))
+            && edges[s].iter().any(|e| e.to.optimistic() || e.outcomes().len() > 0 && e.outcomes().all(|(_, t)| reached[t]))
         {
             reached[s] = true;
         }
@@ -1014,7 +1035,7 @@ fn policy_reach(edges: &[Vec<Edge>], choice: &[usize], starts: &[(f64, usize)]) 
     }
     while let Some(s) = stack.pop() {
         if let Some(edge) = edges[s].get(choice[s]) {
-            for &(_, t) in edge.outcomes() {
+            for (_, t) in edge.outcomes() {
                 if !seen[t] {
                     seen[t] = true;
                     stack.push(t);
@@ -1061,7 +1082,7 @@ fn discover(
             if backup {
                 stack.push((s, true));
             }
-            for &(_, t) in edge.outcomes() {
+            for (_, t) in edge.outcomes() {
                 if !seen[t] {
                     seen[t] = true;
                     stack.push((t, false));
@@ -1098,7 +1119,7 @@ fn discover(
 }
 
 fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl Iterator<Item = usize> + 'a {
-    edges.iter().flat_map(|e| e.outcomes().iter().map(|o| o.1)).filter(move |&t| {
+    edges.iter().flat_map(|e| e.outcomes().map(|o| o.1)).filter(move |&t| {
         let new = seen[t] != s;
         seen[t] = s;
         new
@@ -1106,7 +1127,7 @@ fn successors<'a>(edges: &'a [Edge], seen: &'a mut [usize], s: usize) -> impl It
 }
 
 fn q(e: &Edge, values: &[f64]) -> f64 {
-    e.constant() + e.outcomes().iter().map(|&(p, t)| p * values[t]).sum::<f64>()
+    e.constant() + e.outcomes().map(|(p, t)| p * values[t]).sum::<f64>()
 }
 
 /// The best action by current values; the lowest id wins ties.
@@ -1140,8 +1161,8 @@ fn improve_regenerative(
             choice[s] = edges[s]
                 .iter()
                 .rposition(|edge| {
-                    let [(p, t)] = edge.outcomes() else { return false };
-                    edge.cost == 0.0 && *p == 1.0 && end[*t] && affine[*t].a == 0.0 && affine[*t].b == 1.0
+                    let Some((p, t)) = edge.single() else { return false };
+                    edge.cost == 0.0 && p == 1.0 && end[t] && affine[t].a == 0.0 && affine[t].b == 1.0
                 })
                 .unwrap_or(usize::MAX);
         }
@@ -1286,7 +1307,7 @@ fn solve_component(
                 if ranked[i] {
                     continue;
                 }
-                let exits = |e: &Edge| e.to.optimistic() || e.outcomes().iter().any(|&(_, t)| position(t).is_none_or(|j| ranked[j]));
+                let exits = |e: &Edge| e.to.optimistic() || e.outcomes().any(|(_, t)| position(t).is_none_or(|j| ranked[j]));
                 let action = if chosen[i] == usize::MAX {
                     edges[s].iter().position(exits)
                 } else {
@@ -1302,7 +1323,7 @@ fn solve_component(
                 let repair = states.iter().enumerate().filter(|(i, _)| !ranked[*i]).find_map(|(i, &s)| {
                     edges[s]
                         .iter()
-                        .position(|e| e.to.optimistic() || e.outcomes().iter().any(|&(_, t)| position(t).is_none_or(|j| ranked[j])))
+                        .position(|e| e.to.optimistic() || e.outcomes().any(|(_, t)| position(t).is_none_or(|j| ranked[j])))
                         .map(|a| (i, a))
                 });
                 if let Some((i, a)) = repair {
@@ -1382,13 +1403,13 @@ fn evaluate(
     let mut pending = Vec::new();
     for (i, &s) in states.iter().enumerate() {
         let edge = chosen(i);
-        if edge.outcomes().iter().any(|&(_, t)| t != s && position(t).is_some()) {
+        if edge.outcomes().any(|(_, t)| t != s && position(t).is_some()) {
             pending.push(i);
             continue;
         }
         let mut value = Affine { a: edge.constant(), b: 0.0 };
         let mut diagonal: f64 = 1.0;
-        for &(p, t) in edge.outcomes() {
+        for (p, t) in edge.outcomes() {
             if t == s {
                 diagonal -= p;
             } else {
@@ -1406,7 +1427,7 @@ fn evaluate(
         active[i] = true;
     }
     let parts = components_from(states.len(), pending.into_iter(), |i| {
-        chosen(i).outcomes().iter().filter_map(|&(_, t)| position(t).filter(|&j| active[j]))
+        chosen(i).outcomes().filter_map(|(_, t)| position(t).filter(|&j| active[j]))
     });
     for part in parts.iter() {
         let n = part.len();
@@ -1415,7 +1436,7 @@ fn evaluate(
             let edge = chosen(i);
             let mut value = Affine { a: edge.constant(), b: 0.0 };
             let mut diagonal: f64 = 1.0;
-            for &(p, t) in edge.outcomes() {
+            for (p, t) in edge.outcomes() {
                 if t == states[i] {
                     diagonal -= p;
                     continue;
@@ -1440,7 +1461,7 @@ fn evaluate(
         for (k, &i) in part.iter().enumerate() {
             let e = chosen(i);
             ra[k] = e.constant();
-            for &(p, t) in e.outcomes() {
+            for (p, t) in e.outcomes() {
                 let known = match position(t) {
                     Some(j) if place[j] != usize::MAX => {
                         rows.push(place[j], p);

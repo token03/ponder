@@ -23,8 +23,8 @@ fn action_name(craft: &Craft, node: &Node, action: usize) -> String {
 }
 
 fn description(craft: &Craft, node: &Node) -> String {
-    match node {
-        Node::Item(s) | Node::Hub(_, s) | Node::Foreseen(_, s, _) => {
+    match node.state() {
+        Some(s) => {
             let view = craft.lens.view(s);
             let n = craft.lens.classes();
             let classes: Vec<_> = (0..n)
@@ -42,7 +42,7 @@ fn description(craft: &Craft, node: &Node) -> String {
                 classes.join(", ")
             )
         }
-        other => format!("{other:?}"),
+        None => format!("{node:?}"),
     }
 }
 

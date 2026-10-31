@@ -24,9 +24,19 @@ pub enum Node {
     Hub(usize, State),
     /// A locked item showing what an operation would make of it: apply the operation, or use
     /// the lock up on the cheapest currency that changes nothing.
-    Foreseen(usize, State, State),
+    Foreseen(Box<(usize, State, State)>),
     /// Back to the market: worth what the market is worth.
     Restart,
+}
+
+impl Node {
+    pub fn state(&self) -> Option<&State> {
+        match self {
+            Node::Item(s) | Node::Hub(_, s) => Some(s),
+            Node::Foreseen(shown) => Some(&shown.1),
+            Node::Market | Node::Goal | Node::Restart => None,
+        }
+    }
 }
 
 pub struct Craft<'a> {
@@ -419,9 +429,10 @@ impl Model for Craft<'_> {
                 ops.chain([(self.restart(), 0.0)]).collect()
             }
             Node::Hub(i, _) => vec![(*i, 0.0)],
-            Node::Foreseen(i, ..) => {
+            Node::Foreseen(shown) => {
+                let i = shown.0;
                 let burn = self.burn.map(|j| (j, self.ops[j].1));
-                [(*i, self.ops[*i].1)].into_iter().chain(burn).chain([(self.restart(), 0.0)]).collect()
+                [(i, self.ops[i].1)].into_iter().chain(burn).chain([(self.restart(), 0.0)]).collect()
             }
             Node::Goal | Node::Restart => Vec::new(),
         }
@@ -447,9 +458,9 @@ impl Model for Craft<'_> {
         };
         match (n, self.start_of(i)) {
             (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
-            (Node::Item(s), None) if s.foreseen => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Foreseen(i, *s, t))).collect(),
-            (Node::Foreseen(shown, _, t), None) if i == *shown => self.nodes([(1.0, *t)].into_iter()),
-            (Node::Foreseen(_, s, _), None) => self.nodes(self.outcomes_of(s, i).into_iter()),
+            (Node::Item(s), None) if s.foreseen => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Foreseen(Box::new((i, *s, t))))).collect(),
+            (Node::Foreseen(shown), None) if i == shown.0 => self.nodes([(1.0, shown.2)].into_iter()),
+            (Node::Foreseen(shown), None) => self.nodes(self.outcomes_of(&shown.1, i).into_iter()),
             (Node::Item(s), None) => match self.start_operation(s, i) {
                 Some(out) => out.into_iter().map(|(p, t)| (p, Node::Hub(self.continuations[i], t))).collect(),
                 None if self.phases[i] == Phase::Fracture => {
@@ -740,7 +751,7 @@ impl Craft<'_> {
                     ponder_rules::ops::run(self.ctx, operation.steps(), &mut outcome, rng);
                     run.cost += price;
                     if item.foreseen {
-                        match policy(&Node::Foreseen(op, self.lens.project(&item), self.lens.project(&outcome))) {
+                        match policy(&Node::Foreseen(Box::new((op, self.lens.project(&item), self.lens.project(&outcome))))) {
                             Some(a) if a == op => {}
                             Some(a) if Some(a) == self.burn => {
                                 run.counts[op] -= 1;
