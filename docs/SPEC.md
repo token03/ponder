@@ -291,7 +291,7 @@ caches.
 | Strands in solver states | Rounded down to one of four levels: the last change in class weights at or below 0, 25, 50 and 75 strands | Abstraction; overstates cost slightly, never understates it. |
 | Orb of Dominance | Remove a random influenced mod no lock protects, then upgrade a random influenced mod, locked or not: a tier up, the best tier to its elevated mod | Order and lock reach inferred from guides. Low. |
 | Wild Bristle Matron | Adds a "Cannot Be Changed" lock that fits, either as likely | Guess. Low. |
-| Imprints in plans | An imprint serves the one operation after it; then the plan restores it or lets it go | Search restriction, not a game rule. |
+| Imprints in plans | An imprint serves the one operation after it; then the plan restores it or lets it go. The ladder does not offer imprints | Search restriction, not a game rule: on the ladder sample imprints never lowered a cost and multiplied states up to 10x. |
 | Hinekora's Lock | A Craicic Croaker and a Black Mórrígan lock a magic item: the next currency's result shows before it is used, and any currency uses the lock up (a chromatic, to decline) | [poewiki](https://www.poewiki.net/wiki/Hinekora%27s_Lock). Medium. |
 | Affix limits from implicits | Cogwork, Simplex and Focused limits change every rarity's, never below none | Unverified. Low. |
 

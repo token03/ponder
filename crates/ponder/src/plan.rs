@@ -127,7 +127,8 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Met
             .map(String::from),
         );
     }
-    names.extend(["remembrance", "imprint", "restore", "beast:wild-bristle-matron"].map(String::from));
+    // Imprints never paid on the ladder sample and multiplied its states (SPEC §10).
+    names.extend(["remembrance", "beast:wild-bristle-matron"].map(String::from));
     if target.influences.0 != 0 {
         names.extend(["harvest:reforge-influence", "dominance"].map(String::from));
     }
