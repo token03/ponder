@@ -13,7 +13,7 @@
 //!
 
 use rustc_hash::FxHashMap as HashMap;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 
 use rayon::prelude::*;
 
@@ -42,6 +42,10 @@ pub trait Model: Sync {
     /// an action that costs that much is never best: the solver leaves those unexplored.
     fn restarts_anywhere(&self) -> bool {
         false
+    }
+    /// An upper bound on every action's immediate cost, including purchases and restarts.
+    fn action_cost_bound(&self) -> Option<f64> {
+        None
     }
     /// A lower bound on a state's cost to the goal, if the model knows one. The solver leaves
     /// such a state unexpanded, worth its bound, until the best policy reaches it.
@@ -205,6 +209,12 @@ pub enum Numerics {
     Hybrid,
 }
 
+#[derive(Clone, Copy)]
+enum Evaluation {
+    Fast,
+    Full(Numerics),
+}
+
 pub fn solve<M: Model>(model: &M, start: &[(f64, M::State)], limit: usize) -> Result<Solution<M::State>, Error> {
     solve_keeping(model, start, Some(limit), false, Numerics::Iterative)
 }
@@ -245,6 +255,10 @@ fn solve_keeping<M: Model>(
     let mut stats = Stats::default();
     let mut graph = Graph::new();
     if !model.restarts_anywhere() {
+        return solve_within(model, start, limit, f64::INFINITY, keep_all, &mut graph, &mut stats, numerics)
+            .map(|s| Solution { stats, ..s.0 });
+    }
+    if model.action_cost_bound().is_some() {
         return solve_within(model, start, limit, f64::INFINITY, keep_all, &mut graph, &mut stats, numerics)
             .map(|s| Solution { stats, ..s.0 });
     }
@@ -315,7 +329,7 @@ fn expand_deferred<M: Model>(model: &M, state: &M::State, edges: &[Edge]) -> Exp
 /// The states explored so far and their actions under `ceiling`.
 struct Graph<S> {
     states: Vec<S>,
-    index: HashMap<S, usize>,
+    index: StateIndex,
     edges: Vec<Vec<Edge>>,
     /// Worth a fixed value rather than its actions: goals, restarts, unexpanded states, states
     /// given up.
@@ -337,7 +351,7 @@ impl<S> Graph<S> {
     fn new() -> Graph<S> {
         Graph {
             states: Vec::new(),
-            index: HashMap::default(),
+            index: StateIndex::default(),
             edges: Vec::new(),
             end: Vec::new(),
             tip: Vec::new(),
@@ -352,9 +366,35 @@ impl<S> Graph<S> {
     }
 }
 
+#[derive(Default)]
+struct StateIndex {
+    buckets: HashMap<u64, usize>,
+    previous: Vec<usize>,
+}
+
+impl StateIndex {
+    fn get<'a, S: Eq + Hash>(&'a self, states: &[S], state: &S) -> Option<&'a usize> {
+        let hash = rustc_hash::FxBuildHasher.hash_one(state);
+        let mut entry = self.buckets.get(&hash)?;
+        while *entry != usize::MAX {
+            if states[*entry] == *state {
+                return Some(entry);
+            }
+            entry = &self.previous[*entry];
+        }
+        None
+    }
+
+    fn insert<S: Hash>(&mut self, state: &S, index: usize) {
+        let hash = rustc_hash::FxBuildHasher.hash_one(state);
+        let previous = self.buckets.insert(hash, index).unwrap_or(usize::MAX);
+        self.previous.push(previous);
+    }
+}
+
 /// The graph's number for a state, numbering it if new.
-fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<S, usize>, limit: Option<usize>) -> Result<usize, Error> {
-    if let Some(&i) = index.get(s) {
+fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut StateIndex, limit: Option<usize>) -> Result<usize, Error> {
+    if let Some(&i) = index.get(states, s) {
         return Ok(i);
     }
     if let Some(limit) = limit
@@ -362,7 +402,7 @@ fn intern<S: Clone + Eq + Hash>(s: &S, states: &mut Vec<S>, index: &mut HashMap<
     {
         return Err(Error::TooManyStates(limit));
     }
-    index.insert(s.clone(), states.len());
+    index.insert(s, states.len());
     states.push(s.clone());
     Ok(states.len() - 1)
 }
@@ -420,7 +460,7 @@ fn solve_within<M: Model>(
     // The edges of an expansion, numbering the states it finds.
     let link = |out: Expansion<M::State>,
                 states: &mut Vec<M::State>,
-                index: &mut HashMap<M::State, usize>,
+                index: &mut StateIndex,
                 found: &mut std::collections::BTreeMap<usize, usize>|
      -> Result<Vec<Edge>, Error> {
         let mut successors = Vec::new();
@@ -638,7 +678,17 @@ fn solve_within<M: Model>(
         let mut w = if restarts { initial.unwrap_or(1e12) } else { 0.0 };
         let mut first = true;
         let mut solved = None;
-        for _ in 0..200 {
+        let regenerative = restarts
+            && nonnegative
+            && order.iter().any(|component| component.len() >= 1024)
+            && !edges.iter().flatten().any(|e| e.to.pending())
+            && !tip.iter().any(|&t| t);
+        if regenerative {
+            let (value, price, iterations) = improve_regenerative(edges, end, &order, &starts, &mut choice, &mut affine, numerics)?;
+            stats.newton += iterations;
+            solved = Some((value, price));
+        }
+        for _ in 0..if regenerative { 0 } else { 200 } {
             stats.newton += 1;
             let mut values: Vec<f64> = affine.iter().map(|f| f.at(w)).collect();
             let mut stable = true;
@@ -657,8 +707,9 @@ fn solve_within<M: Model>(
                     w,
                     rounds,
                     nonnegative,
-                    numerics,
-                );
+                    Evaluation::Full(numerics),
+                )
+                .unwrap_or(false);
                 for &s in component {
                     local[s] = usize::MAX;
                 }
@@ -732,7 +783,8 @@ fn solve_within<M: Model>(
             let clock = std::time::Instant::now();
             let inspect = |s: usize| w < ceiling || reachable[s];
             let finite = known.iter().all(|v| v.is_finite() && *v >= 0.0);
-            let lookup = |t: &M::State| index.get(t).map_or_else(|| model.bound(t).filter(|v| v.is_finite()).unwrap_or(0.0), |&t| known[t]);
+            let lookup =
+                |t: &M::State| index.get(states, t).map_or_else(|| model.bound(t).filter(|v| v.is_finite()).unwrap_or(0.0), |&t| known[t]);
             let tolerance = |v: f64| 1e-10 * v.abs().max(1.0);
             // A deferred action's worth falls at most as far as any value has since the last
             // check. A state whose deferred actions all stayed further above its value than
@@ -778,7 +830,7 @@ fn solve_within<M: Model>(
                     }
                 }
                 let mut updates = Vec::new();
-                let missing = |t: &M::State| !index.contains_key(t) && !model.is_goal(t);
+                let missing = |t: &M::State| index.get(states, t).is_none() && !model.is_goal(t);
                 for (action, sources) in candidates {
                     let inputs: Vec<_> = sources.iter().map(|&s| &states[s]).collect();
                     let new = model.discover_successors(&inputs, action, &missing);
@@ -796,7 +848,7 @@ fn solve_within<M: Model>(
             for (k, (s, _)) in futures.iter().enumerate() {
                 at[*s] = k;
             }
-            let lookup_index = |t: &M::State| index.get(t).copied();
+            let lookup_index = |t: &M::State| index.get(states, t).copied();
             let link_states: Vec<_> = link_states.into_iter().map(|s| states[s].clone()).collect();
             let transitions = (!link_states.is_empty()).then(|| model.prepare_transitions(&link_states, &lookup_index));
             let (mut updates, checks, rooms) = (0..n)
@@ -856,7 +908,7 @@ fn solve_within<M: Model>(
                             }
                             let out = model.outcomes(&states[s], action);
                             let linked: Option<Box<[_]>> =
-                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(t).map(|&t| (*p, t))).collect();
+                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(states, t).map(|&t| (*p, t))).collect();
                             if let Some(to) = linked {
                                 updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.into_vec()) }]));
                             } else {
@@ -1069,6 +1121,136 @@ fn best(edges: &[Edge], values: &[f64]) -> (f64, usize) {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
+fn improve_regenerative(
+    edges: &[Vec<Edge>],
+    end: &[bool],
+    order: &[Vec<usize>],
+    starts: &[(f64, usize)],
+    choice: &mut [usize],
+    affine: &mut [Affine],
+    numerics: Numerics,
+) -> Result<(Affine, f64, usize), Error> {
+    if let Ok(solution) = improve_regenerative_from(edges, end, order, starts, choice, affine, numerics, true) {
+        return Ok(solution);
+    }
+    for s in 0..edges.len() {
+        if !end[s] {
+            affine[s] = Affine::INFINITE;
+            choice[s] = edges[s]
+                .iter()
+                .rposition(|edge| {
+                    let [(p, t)] = edge.outcomes() else { return false };
+                    edge.cost == 0.0 && *p == 1.0 && end[*t] && affine[*t].a == 0.0 && affine[*t].b == 1.0
+                })
+                .unwrap_or(usize::MAX);
+        }
+    }
+    improve_regenerative_from(edges, end, order, starts, choice, affine, numerics, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn improve_regenerative_from(
+    edges: &[Vec<Edge>],
+    end: &[bool],
+    order: &[Vec<usize>],
+    starts: &[(f64, usize)],
+    choice: &mut [usize],
+    affine: &mut [Affine],
+    numerics: Numerics,
+    fast: bool,
+) -> Result<(Affine, f64, usize), Error> {
+    let n = edges.len();
+    if !(0..n).any(|s| end[s] && affine[s].b == 0.0) {
+        return Err(Error::Unreachable);
+    }
+    let mut local = vec![usize::MAX; n];
+    let mut seeded = false;
+    let evaluation = if fast { Evaluation::Fast } else { Evaluation::Full(numerics) };
+    let mut bootstrap = 0;
+    for _ in 0..200 {
+        bootstrap += 1;
+        let mut values: Vec<_> = affine.iter().map(|f| f.at(1e12)).collect();
+        let mut stable = true;
+        let mut failed = false;
+        for component in order {
+            for (i, &s) in component.iter().enumerate() {
+                local[s] = i;
+            }
+            let result = solve_component(component, &local, edges, &mut values, choice, affine, &[], 1e12, 2, true, evaluation);
+            stable &= result.unwrap_or(false);
+            failed |= result.is_none();
+            for &s in component {
+                local[s] = usize::MAX;
+            }
+        }
+        let start = starts
+            .iter()
+            .fold(Affine { a: 0.0, b: 0.0 }, |value, &(p, s)| Affine { a: value.a + p * affine[s].a, b: value.b + p * affine[s].b });
+        if !failed && start.a.is_finite() && start.b < 1.0 {
+            seeded = true;
+            break;
+        }
+        if failed && fast {
+            return Err(Error::Unreachable);
+        } else if stable {
+            return Err(Error::Unreachable);
+        }
+    }
+    if !seeded {
+        return Err(Error::Unreachable);
+    }
+    for iteration in 1..=200 {
+        if iteration > 1 {
+            for component in order {
+                for (i, &s) in component.iter().enumerate() {
+                    local[s] = i;
+                }
+                let chosen: Vec<_> = component.iter().map(|&s| choice[s]).collect();
+                let values = evaluate(component, &local, edges, &chosen, affine, &[], true, evaluation).ok_or(Error::Unreachable)?;
+                for (&s, value) in component.iter().zip(values) {
+                    affine[s] = value;
+                    local[s] = usize::MAX;
+                }
+            }
+        }
+        let start = starts
+            .iter()
+            .fold(Affine { a: 0.0, b: 0.0 }, |value, &(p, s)| Affine { a: value.a + p * affine[s].a, b: value.b + p * affine[s].b });
+        let price = start.a / (1.0 - start.b);
+        if !price.is_finite() || price < 0.0 {
+            return Err(Error::Unreachable);
+        }
+        let values: Vec<_> = affine.iter().map(|f| f.at(price)).collect();
+        let improved: Vec<_> = (0..n)
+            .into_par_iter()
+            .map(|s| {
+                if end[s] || choice[s] == usize::MAX {
+                    return choice[s];
+                }
+                let current = q(&edges[s][choice[s]], &values);
+                let (mut value, mut action) = (current, choice[s]);
+                for (candidate, edge) in edges[s].iter().enumerate() {
+                    if candidate == choice[s] || edge.cost >= value {
+                        continue;
+                    }
+                    let next = q(edge, &values);
+                    if next < value - 1e-12 * next.abs().max(1.0) {
+                        value = next;
+                        action = candidate;
+                    }
+                }
+                if value < current - 1e-10 * current.abs().max(1.0) { action } else { choice[s] }
+            })
+            .collect();
+        if improved == choice {
+            return Ok((start, price, bootstrap + iteration));
+        }
+        choice.copy_from_slice(&improved);
+    }
+    Err(Error::Unreachable)
+}
+
 /// Values of one component, all of whose successors outside it are already solved.
 ///
 /// Policy iteration from a proper policy: one that leaves the component with certainty. The
@@ -1091,8 +1273,8 @@ fn solve_component(
     w: f64,
     rounds: usize,
     nonnegative: bool,
-    numerics: Numerics,
-) -> bool {
+    numerics: Evaluation,
+) -> Option<bool> {
     let position = |t: usize| (local[t] != usize::MAX).then_some(local[t]);
     let mut chosen: Vec<usize> = states.iter().map(|&s| choice[s]).collect();
     if chosen.contains(&usize::MAX) {
@@ -1133,13 +1315,15 @@ fn solve_component(
         debug_assert!(ranked.iter().all(|r| *r), "pruning leaves every live state a way out");
     }
     // The last policy evaluated, so values and choices agree even if an improvement fails to
-    // evaluate (at a huge first `w`, rounding can pick an improper one).
+    // evaluate (at a huge first `w`, rounding can pick an improper one). A policy that failed to
+    // evaluate is not stable: its values are the previous policy's.
     let mut kept = chosen.clone();
     let mut stable = true;
+    let mut failed = false;
     for _ in 0..rounds {
         stable = false;
         let Some(v) = evaluate(states, local, edges, &chosen, affine, seed, nonnegative, numerics) else {
-            stable = true;
+            failed = true;
             break;
         };
         kept = chosen.clone();
@@ -1169,7 +1353,7 @@ fn solve_component(
     for (i, &s) in states.iter().enumerate() {
         choice[s] = kept[i];
     }
-    stable
+    (!failed).then_some(stable)
 }
 
 /// Policy improvements per component and Newton step.
@@ -1188,7 +1372,7 @@ fn evaluate(
     affine: &[Affine],
     seed: &[Affine],
     nonnegative: bool,
-    numerics: Numerics,
+    numerics: Evaluation,
 ) -> Option<Vec<Affine>> {
     let policy: Vec<&Edge> = states.iter().zip(choice).map(|(&s, &a)| &edges[s][a]).collect();
     let chosen = |i: usize| policy[i];
@@ -1290,18 +1474,19 @@ fn evaluate(
                     })
                     .collect()
             };
-            let mut system = match numerics {
-                Numerics::Iterative => SparseSystem::new(&rows),
-                Numerics::Hybrid => SparseSystem::hybrid(&rows),
-            };
-            vec![system.solve(&ra, start(|f| f.a))?, system.solve(&rb, start(|f| f.b))?]
+            linear::solve_policy(&rows, &[ra, rb], &[start(|f| f.a), start(|f| f.b)], numerics)?
         };
         for (k, &i) in part.iter().enumerate() {
             out[i] = Affine { a: x[0][k], b: x[1][k] };
             place[i] = usize::MAX;
         }
     }
-    out.iter().all(|f| f.a.is_finite() && (!nonnegative || f.a >= 0.0) && f.b.is_finite() && f.b >= -1e-9).then_some(out)
+    // The chance of starting over is a probability; a policy that rarely leaves its loop is
+    // ill-conditioned and solves to one a rounding error outside [0, 1].
+    for f in &mut out {
+        f.b = f.b.clamp(0.0, 1.0);
+    }
+    out.iter().all(|f| f.a.is_finite() && (!nonnegative || f.a >= 0.0) && f.b.is_finite()).then_some(out)
 }
 
 /// Largest policy component solved by dense elimination; larger ones iterate.

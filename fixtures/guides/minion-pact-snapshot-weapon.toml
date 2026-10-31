@@ -1,6 +1,6 @@
 sheet = "Minion Pact Snapshot weapon"
 scope = "The Harvest enchant is not modelled."
-base = "Convoking Wand"
+base = "Spine Bow"
 
 [goal]
 mods = [

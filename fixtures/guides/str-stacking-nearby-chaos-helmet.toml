@@ -1,6 +1,6 @@
 sheet = "Str StackingNearby -Chaos Armou"
 scope = "The foulborn finish is not modelled."
-base = "Royal Burgonet"
+base = "Giantslayer Helmet"
 quality = 29
 influences = ["warlord", "hunter"]
 

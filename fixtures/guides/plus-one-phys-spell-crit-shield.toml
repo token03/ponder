@@ -1,14 +1,18 @@
 sheet = "+1 Phys SpellCritSpelldmg Shiel"
 scope = "The optional veiled finish is not modelled."
-base = "Titanium Spirit Shield"
+base = "Chiming Spirit Shield"
 
 [goal]
 mods = [
   { text = "#% increased Spell Damage" },
-  { text = "+# to Level of Socketed Gems", tier = "any" },
+  { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" },
   { text = "+# to maximum Life", tier = 4 },
   { text = "#% increased Spell Critical Strike Chance" },
 ]
+
+[stages.magic]
+rarity = "magic"
+mods = []
 
 [stages.spell_damage]
 mods = [{ text = "#% increased Spell Damage" }]
@@ -16,19 +20,23 @@ open_suffix = 1
 max_prefix = 1
 
 [stages.socketed]
-mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems", tier = "any" }]
+mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" }]
 
 [stages.prefixes]
-mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of Socketed Gems", tier = "any" }, { text = "+# to maximum Life", tier = 4 }]
+mods = [{ text = "#% increased Spell Damage" }, { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" }, { text = "+# to maximum Life", tier = 4 }]
 
 [[steps]]
-do = ["buy:base", "alteration", "augmentation", "imprint", "annulment"]
+do = ["buy:base", "transmutation"]
+until = "magic"
+
+[[steps]]
+do = ["alteration", "augmentation", "annulment"]
 until = "spell_damage"
 
 [[steps]]
-do = ["bench:prefixes-cannot-be-changed", "regal", "harvest:reforge-physical", "annulment"]
+do = ["restore", "imprint", "regal", "bench:prefixes-cannot-be-changed", "harvest:reforge-physical"]
 until = "socketed"
-note = "Restore the imprint and repeat when the regal adds a prefix or the reforge fails."
+note = "Restore the imprint and repeat when the reforge fails."
 
 [[steps]]
 do = ["bench:cannot-roll-caster", "annulment", "bench:multimod", "bench:any-suffix", "bench:prefixes-cannot-be-changed", "harvest:add-remove-life"]

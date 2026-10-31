@@ -1,9 +1,9 @@
 sheet = "8Link Proj Gloves "
 base = "Fingerless Silk Gloves"
 quality = 28
-influences = ["elder", "shaper"]
 
 [goal]
+influences = ["elder", "shaper"]
 mods = [
   { text = "#% increased Cast Speed / Socketed Gems are Supported by Level # Faster Casting", tier = 1 },
   { text = "Socketed Spells have +#% to Critical Strike Multiplier", tier = 1 },
@@ -33,8 +33,9 @@ mods = [
 
 [[steps]]
 item = "elder"
-do = ["buy:base", "influence-exalted:elder"]
+do = ["buy:base", "alchemy", "influence-exalted:elder"]
 until = "elder"
+note = "The sheet leaves out making the base rare; an influence exalt needs a rare."
 
 [[steps]]
 item = "shaper"
@@ -65,3 +66,4 @@ until = "goal"
 
 [stages.shaper_donor]
 influences = ["shaper"]
+price = 10.0 # rough market estimate for any Shaper glove base, not from the guide

@@ -1,7 +1,7 @@
 //! Influence: conqueror and Shaper/Elder exalted orbs (add the influence and one of its mods),
-//! and influence orbs (add the influence only).
+//! influence orbs (add the influence only), and the Orb of Dominance.
 
-use super::{Cost, Ctx, Operation, Pick, Pool, Sides, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Pool, Sides, Spend, Step, View};
 use crate::goal::{Influence, Rarity};
 
 pub struct Exalt {
@@ -18,6 +18,7 @@ impl Exalt {
         let mut steps = vec![Step::Influence(influence)];
         if !orb {
             steps.push(Step::Draw(Pick { sides: Sides::Both, tag: None, pool: Pool::Influence(influence) }));
+            steps.push(Step::Forget(Spend::Exalt));
         }
         Some(Exalt { influence, orb, steps })
     }
@@ -31,6 +32,30 @@ fn name(i: Influence) -> &'static str {
         Influence::Redeemer => "redeemer",
         Influence::Hunter => "hunter",
         Influence::Warlord => "warlord",
+    }
+}
+
+/// The Orb of Dominance: on magic or rare armour with two influenced mods or more, remove one
+/// influenced mod and upgrade another (see [`Step::Dominate`]).
+pub struct Dominance;
+
+const ARMOUR: [&str; 4] = ["Body Armour", "Boots", "Gloves", "Helmet"];
+
+impl Operation for Dominance {
+    fn name(&self) -> String {
+        "dominance".into()
+    }
+
+    fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
+        item.rarity() != Rarity::Normal && ARMOUR.contains(&item.item_class()) && item.influenced_mods() >= 2
+    }
+
+    fn steps(&self) -> &[Step] {
+        &[Step::Dominate]
+    }
+
+    fn cost(&self) -> Cost {
+        Cost::of("mavens-orb", 1.0, 2.0)
     }
 }
 

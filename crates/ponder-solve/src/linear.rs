@@ -104,6 +104,7 @@ impl Workspace {
 pub(super) struct SparseSystem<'a> {
     matrix: &'a SparseMatrix,
     factor: OnceCell<Option<Ilu>>,
+    ordered_factor: OnceCell<Option<Ilu>>,
     direct: OnceCell<Option<DirectSystem>>,
     direct_fallback: bool,
     workspace: Workspace,
@@ -111,7 +112,14 @@ pub(super) struct SparseSystem<'a> {
 
 impl<'a> SparseSystem<'a> {
     pub(super) fn new(matrix: &'a SparseMatrix) -> Self {
-        Self { matrix, factor: OnceCell::new(), direct: OnceCell::new(), direct_fallback: false, workspace: Workspace::new(matrix.len()) }
+        Self {
+            matrix,
+            factor: OnceCell::new(),
+            ordered_factor: OnceCell::new(),
+            direct: OnceCell::new(),
+            direct_fallback: false,
+            workspace: Workspace::new(matrix.len()),
+        }
     }
 
     pub(super) fn hybrid(matrix: &'a SparseMatrix) -> Self {
@@ -119,8 +127,43 @@ impl<'a> SparseSystem<'a> {
     }
 
     pub(super) fn solve(&mut self, rhs: &[f64], initial: Vec<f64>) -> Option<Vec<f64>> {
-        let guess = self.bicgstab(rhs, initial);
+        if self.matrix.diagonal.iter().any(|d| *d < 1e-14) {
+            return None;
+        }
+        let ordered = self.ordered_factor.get().is_some_and(|factor| factor.is_some());
+        let mut guess = self.iterate(rhs, initial, ordered, if ordered { 10_000 } else { ITERATIVE_STEPS });
+        if !ordered {
+            for _ in 0..ITERATIVE_STEPS {
+                if self.sweep(rhs, &mut guess) < 1e-12 {
+                    return Some(guess);
+                }
+            }
+            if self.ordered_factor.get_or_init(|| Ilu::ordered(self.matrix)).is_some() {
+                guess = self.iterate(rhs, guess, true, 10_000);
+            }
+        }
         self.gauss_seidel(rhs, guess)
+    }
+
+    fn fast(&mut self, rhs: &[f64], initial: Vec<f64>) -> Option<Vec<f64>> {
+        if self.matrix.diagonal.iter().any(|d| *d < 1e-14) {
+            return None;
+        }
+        let mut guess = self.iterate(rhs, initial, false, ITERATIVE_STEPS);
+        for _ in 0..ITERATIVE_STEPS {
+            if self.sweep(rhs, &mut guess) < 1e-12 {
+                return Some(guess);
+            }
+        }
+        if self.ordered_factor.get_or_init(|| Ilu::ordered(self.matrix)).is_some() {
+            guess = self.iterate(rhs, guess, true, ITERATIVE_STEPS);
+            for _ in 0..ITERATIVE_STEPS {
+                if self.sweep(rhs, &mut guess) < 1e-12 {
+                    return Some(guess);
+                }
+            }
+        }
+        None
     }
 
     pub(super) fn gauss_seidel(&self, rhs: &[f64], mut x: Vec<f64>) -> Option<Vec<f64>> {
@@ -134,13 +177,7 @@ impl<'a> SparseSystem<'a> {
             {
                 return Some(solved);
             }
-            let mut moved = 0.0f64;
-            for (k, row) in self.matrix.rows().enumerate() {
-                let inflow: f64 = row.iter().filter(|e| e.0 != k).map(|&(j, p)| p * x[j]).sum();
-                let v = (rhs[k] + inflow) / self.matrix.diagonal[k];
-                moved = moved.max((v - x[k]).abs() / v.abs().max(1.0));
-                x[k] = v;
-            }
+            let moved = self.sweep(rhs, &mut x);
             if moved < 1e-12 {
                 return Some(x);
             }
@@ -148,7 +185,22 @@ impl<'a> SparseSystem<'a> {
         None
     }
 
-    pub(super) fn bicgstab(&mut self, rhs: &[f64], mut x: Vec<f64>) -> Vec<f64> {
+    fn sweep(&self, rhs: &[f64], x: &mut [f64]) -> f64 {
+        let mut moved = 0.0f64;
+        for (k, row) in self.matrix.rows().enumerate() {
+            let inflow: f64 = row.iter().filter(|e| e.0 != k).map(|&(j, p)| p * x[j]).sum();
+            let value = (rhs[k] + inflow) / self.matrix.diagonal[k];
+            moved = moved.max((value - x[k]).abs() / value.abs().max(1.0));
+            x[k] = value;
+        }
+        moved
+    }
+
+    pub(super) fn bicgstab(&mut self, rhs: &[f64], initial: Vec<f64>) -> Vec<f64> {
+        self.iterate(rhs, initial, false, 10_000)
+    }
+
+    fn iterate(&mut self, rhs: &[f64], mut x: Vec<f64>, ordered: bool, steps: usize) -> Vec<f64> {
         let n = self.matrix.len();
         let Workspace { r, rhat, v, p, y, s, z, t } = &mut self.workspace;
         self.matrix.apply(&x, v);
@@ -162,7 +214,7 @@ impl<'a> SparseSystem<'a> {
         let mut best = x.clone();
         let mut least = norm(r);
         let rhs_norm = norm(rhs);
-        for iteration in 0..10_000 {
+        for iteration in 0..steps {
             let scale = norm(&x).max(rhs_norm).max(1.0);
             if least <= 1e-13 * scale {
                 break;
@@ -179,7 +231,12 @@ impl<'a> SparseSystem<'a> {
             for k in 0..n {
                 p[k] = r[k] + beta * (p[k] - omega * v[k]);
             }
-            precondition(self.matrix, &self.factor, p, y);
+            let ordered_factor = if ordered { self.ordered_factor.get().and_then(|factor| factor.as_ref()) } else { None };
+            if let Some(factor) = ordered_factor {
+                factor.apply(p, y);
+            } else {
+                precondition(self.matrix, &self.factor, p, y);
+            }
             self.matrix.apply(y, v);
             alpha = rho / dot(rhat, v);
             for k in 0..n {
@@ -194,7 +251,11 @@ impl<'a> SparseSystem<'a> {
                 }
                 break;
             }
-            precondition(self.matrix, &self.factor, s, z);
+            if let Some(factor) = ordered_factor {
+                factor.apply(s, z);
+            } else {
+                precondition(self.matrix, &self.factor, s, z);
+            }
             self.matrix.apply(z, t);
             omega = dot(t, s) / dot(t, t);
             for k in 0..n {
@@ -212,6 +273,51 @@ impl<'a> SparseSystem<'a> {
         }
         best
     }
+}
+
+pub(super) fn solve_policy(
+    matrix: &SparseMatrix,
+    rhs: &[Vec<f64>],
+    initial: &[Vec<f64>],
+    numerics: crate::Evaluation,
+) -> Option<Vec<Vec<f64>>> {
+    if matrix.rows().filter(|row| row.len() == 1).count() < matrix.len() / 4 {
+        let mut system = match numerics {
+            crate::Evaluation::Fast | crate::Evaluation::Full(crate::Numerics::Iterative) => SparseSystem::new(matrix),
+            crate::Evaluation::Full(crate::Numerics::Hybrid) => SparseSystem::hybrid(matrix),
+        };
+        return rhs
+            .iter()
+            .zip(initial)
+            .map(|(rhs, initial)| match numerics {
+                crate::Evaluation::Fast => system.fast(rhs, initial.clone()),
+                _ => system.solve(rhs, initial.clone()),
+            })
+            .collect();
+    }
+    let outcomes: Vec<Vec<_>> = matrix.rows().map(|row| row.iter().map(|&(j, p)| (p, j)).collect()).collect();
+    let reduction = Reduction::new(&outcomes);
+    let (offsets, rewards) = reduction.right_hand_sides(&outcomes, rhs);
+    let mut reduced = SparseMatrix::new(reduction.rows.len());
+    for row in &reduction.rows {
+        for &(p, j) in row {
+            reduced.push(j, p);
+        }
+        reduced.finish_row();
+    }
+    let mut system = match numerics {
+        crate::Evaluation::Fast | crate::Evaluation::Full(crate::Numerics::Iterative) => SparseSystem::new(&reduced),
+        crate::Evaluation::Full(crate::Numerics::Hybrid) => SparseSystem::hybrid(&reduced),
+    };
+    let values = rewards
+        .iter()
+        .zip(initial)
+        .map(|(rhs, initial)| match numerics {
+            crate::Evaluation::Fast => system.fast(rhs, reduction.project(initial)),
+            _ => system.solve(rhs, reduction.project(initial)),
+        })
+        .collect::<Option<_>>()?;
+    Some(reduction.expand(offsets, values))
 }
 
 pub(super) struct DirectSystem {

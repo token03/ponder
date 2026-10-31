@@ -41,6 +41,7 @@ const MECHANICS: &[&str] = &[
     "awakener",
     "dominance",
     "imprint",
+    "restore",
     "beast",
     "remembrance",
     "chromatic",

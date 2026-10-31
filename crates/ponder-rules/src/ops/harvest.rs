@@ -2,6 +2,7 @@
 //!
 //! - `reforge-X`: reroll any normal, magic or rare item as rare, guaranteeing one mod tagged X. The guaranteed mod is drawn
 //!   first, then the rest as usual; "Cannot Be Changed" keeps the locked mods.
+//! - `reforge-influence`: the same for an influenced rare, guaranteeing one of its influences' mods.
 //! - `add-remove-X` (guides also say `augment-X`): add a new X mod, then remove another random
 //!   mod; non-influenced items only. `add-X-remove-non-X` only removes mods without the tag.
 
@@ -31,7 +32,19 @@ const CRAFTS: [(&str, &str, &str, f64); 15] = [
 /// Lifeforce for an add/remove craft, as a multiple of the reforge's. Unverified (SPEC §10).
 const ADD_REMOVE_FACTOR: f64 = 10.0;
 
+/// Lifeforce for the influence reforge, from poedb's Horticrafting list.
+const INFLUENCE_REFORGE: [(&str, f64); 2] = [("primal-lifeforce", 5000.0), ("sacred-lifeforce", 1.0)];
+
 pub fn parse(game: &Game, arg: &str) -> Option<Box<dyn Operation>> {
+    if arg == "reforge-influence" {
+        let add = Pick { sides: Sides::Both, tag: None, pool: Pool::Influenced };
+        return Some(Box::new(Harvest {
+            name: arg.into(),
+            kind: Kind::InfluenceReforge,
+            steps: reforge(add),
+            cost: Cost { items: INFLUENCE_REFORGE.iter().map(|&(id, n)| (id.into(), n)).collect(), seconds: 4.0 },
+        }));
+    }
     let (kind, which) = if let Some(w) = arg.strip_prefix("reforge-") {
         (Kind::Reforge, w)
     } else if let Some(w) = arg.strip_prefix("add-remove-").or_else(|| arg.strip_prefix("augment-")) {
@@ -47,22 +60,13 @@ pub fn parse(game: &Game, arg: &str) -> Option<Box<dyn Operation>> {
     let tag = game.tag_id(tag)?;
     let add = Pick { sides: Sides::Both, tag: Some((tag, true)), pool: Pool::Natural(None) };
     let (steps, amount) = match kind {
-        Kind::Reforge => (
-            vec![
-                Step::Clear { sides: Sides::Both, respect_lock: true },
-                Step::Rarity(Rarity::Rare),
-                Step::RollCount,
-                Step::Draw(add.clone()),
-                Step::Fill(Pick::ANY),
-            ],
-            amount,
-        ),
+        Kind::Reforge | Kind::InfluenceReforge => (reforge(add.clone()), amount),
         Kind::AddRemove { only_other } => {
             (vec![Step::Swap { add, remove: only_other.then_some((tag, false)) }], amount * ADD_REMOVE_FACTOR)
         }
     };
     let label = match kind {
-        Kind::Reforge => format!("reforge-{name}"),
+        Kind::Reforge | Kind::InfluenceReforge => format!("reforge-{name}"),
         Kind::AddRemove { only_other: false } => arg.to_string(),
         Kind::AddRemove { only_other: true } => format!("add-{name}-remove-non-{name}"),
     };
@@ -74,9 +78,20 @@ pub fn reforges(game: &Game) -> Vec<(Box<dyn Operation>, crate::game::TagId)> {
     CRAFTS.iter().filter_map(|c| Some((parse(game, &format!("reforge-{}", c.0))?, game.tag_id(c.1)?))).collect()
 }
 
+fn reforge(add: Pick) -> Vec<Step> {
+    vec![
+        Step::Clear { sides: Sides::Both, respect_lock: true },
+        Step::Rarity(Rarity::Rare),
+        Step::RollCount,
+        Step::Draw(add),
+        Step::Fill(Pick::ANY),
+    ]
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Reforge,
+    InfluenceReforge,
     AddRemove { only_other: bool },
 }
 
@@ -96,6 +111,7 @@ impl Operation for Harvest {
         match self.kind {
             // Any normal, magic or rare item.
             Kind::Reforge => true,
+            Kind::InfluenceReforge => item.rarity() == Rarity::Rare && item.influenced(),
             Kind::AddRemove { .. } => item.rarity() != Rarity::Normal && !item.influenced() && item.room(Sides::Both) && item.mods() > 0,
         }
     }

@@ -1,6 +1,6 @@
 //! Basic currency orbs.
 
-use super::{Cost, Ctx, Operation, Pick, Sides, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Sides, Spend, Step, View};
 use crate::game::Side;
 use crate::goal::Rarity;
 
@@ -19,15 +19,31 @@ pub enum Currency {
 }
 
 const ANY: Pick = Pick::ANY;
-const REMAKE_MAGIC: &[Step] =
-    &[Step::Clear { sides: Sides::Both, respect_lock: false }, Step::Rarity(Rarity::Magic), Step::RollCount, Step::Fill(ANY)];
-const REMAKE_RARE: &[Step] =
-    &[Step::Clear { sides: Sides::Both, respect_lock: false }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(ANY)];
+const REMAKE_MAGIC: &[Step] = &[
+    Step::Clear { sides: Sides::Both, respect_lock: false },
+    Step::Rarity(Rarity::Magic),
+    Step::RollCount,
+    Step::Fill(ANY),
+    Step::Forget(Spend::Upto(8)),
+];
+const REMAKE_RARE: &[Step] = &[
+    Step::Clear { sides: Sides::Both, respect_lock: false },
+    Step::Rarity(Rarity::Rare),
+    Step::RollCount,
+    Step::Fill(ANY),
+    Step::Forget(Spend::Upto(50)),
+];
 /// Under a lock, chaos keeps the locked mods; new ones may land on either side (SPEC §4.7).
-const CHAOS: &[Step] =
-    &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(ANY)];
-const ADD: &[Step] = &[Step::Draw(ANY)];
-const REGAL: &[Step] = &[Step::Rarity(Rarity::Rare), Step::Draw(ANY)];
+const CHAOS: &[Step] = &[
+    Step::Clear { sides: Sides::Both, respect_lock: true },
+    Step::Rarity(Rarity::Rare),
+    Step::RollCount,
+    Step::Fill(ANY),
+    Step::Forget(Spend::Upto(50)),
+];
+const AUGMENT: &[Step] = &[Step::Draw(ANY), Step::Forget(Spend::Upto(8))];
+const EXALT: &[Step] = &[Step::Draw(ANY), Step::Forget(Spend::Exalt)];
+const REGAL: &[Step] = &[Step::Rarity(Rarity::Rare), Step::Draw(ANY), Step::Forget(Spend::Upto(16))];
 const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true, respect_bans: true }];
 const SCOUR: &[Step] = &[Step::Clear { sides: Sides::Both, respect_lock: true }, Step::Settle];
 const FRACTURE: &[Step] = &[Step::Fracture];
@@ -93,7 +109,8 @@ impl Operation for Currency {
             Currency::Transmutation | Currency::Alteration => REMAKE_MAGIC,
             Currency::Alchemy => REMAKE_RARE,
             Currency::Chaos => CHAOS,
-            Currency::Augmentation | Currency::Exalted => ADD,
+            Currency::Augmentation => AUGMENT,
+            Currency::Exalted => EXALT,
             Currency::Regal => REGAL,
             Currency::Annulment => ANNUL,
             Currency::Scouring => SCOUR,

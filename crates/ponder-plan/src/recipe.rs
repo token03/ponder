@@ -9,7 +9,9 @@
 //! are skipped on the way forward. A `buy:` replaces the item with a fresh purchase, so falling
 //! back to a step that buys starts over. A lock ("Cannot Be Changed") that cannot be crafted
 //! abandons the attempt instead: to the `else` step, or to the first step (buying afresh)
-//! without one.
+//! without one. On an item under a Hinekora's Lock, an operation goes ahead only when what it
+//! shows meets the step's stage (or the goal); otherwise the lock is used up, by the step's
+//! next operation in a guide.
 //!
 //! A guide that works on several items has one recipe per item (`item` on its steps). An
 //! item made from others starts from one of them, bought at what making it costs, and falling
@@ -98,6 +100,11 @@ impl Recipe {
         }
     }
 
+    /// Does an attempt at step `i` take an outcome a lock shows?
+    fn accepts(&self, i: usize, holds: impl Fn(usize) -> bool) -> bool {
+        self.steps[i].until.is_none_or(&holds) || holds(self.goal)
+    }
+
     /// Where an attempt at step `i` goes when it cannot lock.
     fn abandon(&self, i: usize) -> usize {
         self.steps[i].fallback.unwrap_or(0)
@@ -133,10 +140,11 @@ impl Recipe {
             let mut done = Vec::new();
             let mut abandoned = false;
             for &a in self.steps[i].ops.iter().skip(j) {
-                let (applied, _) = self.apply(craft, a, &mut item, rng);
+                let (applied, _) = self.apply(craft, a, &mut item, |t| self.accepts(i, |u| holds(u, t)), rng);
                 done.push(match applied {
                     Applied::Done => craft.action_name(a),
                     Applied::Skipped => format!("({} skipped)", craft.action_name(a)),
+                    Applied::Declined => format!("({} foreseen and declined)", craft.action_name(a)),
                     Applied::Abandon => format!("(cannot {}: abandoned)", craft.action_name(a)),
                 });
                 abandoned = applied == Applied::Abandon;
@@ -157,8 +165,9 @@ impl Recipe {
         out
     }
 
-    /// Apply action `a` to a real item if it can: what happened, and the cost.
-    fn apply(&self, craft: &Craft, a: Action, item: &mut Item, rng: &mut Rng) -> (Applied, f64) {
+    /// Apply action `a` to a real item if it can (and, under a lock, if the step `accepts` what
+    /// it shows): what happened, and the cost.
+    fn apply(&self, craft: &Craft, a: Action, item: &mut Item, accepts: impl Fn(&Item) -> bool, rng: &mut Rng) -> (Applied, f64) {
         if let Some(b) = craft.start_of(a) {
             *item = b.item(rng);
             return (Applied::Done, b.price());
@@ -167,7 +176,13 @@ impl Recipe {
         if !op.applies(craft.ctx, &(craft.ctx.game, &*item)) {
             return (if is_lock(craft, a) { Applied::Abandon } else { Applied::Skipped }, 0.0);
         }
-        run(craft.ctx, op.steps(), item, rng);
+        let mut outcome = item.clone();
+        run(craft.ctx, op.steps(), &mut outcome, rng);
+        if item.foreseen && !accepts(&outcome) {
+            item.foreseen = false;
+            return (Applied::Declined, 0.0);
+        }
+        *item = outcome;
         (Applied::Done, price)
     }
 
@@ -197,7 +212,7 @@ impl Recipe {
                     }
                     let mut abandoned = false;
                     for &a in self.steps[i].ops.iter().skip(j) {
-                        let (applied, c) = self.apply(craft, a, &mut item, rng);
+                        let (applied, c) = self.apply(craft, a, &mut item, |t| self.accepts(i, |u| holds(u, t)), rng);
                         cost += c;
                         abandoned = applied == Applied::Abandon;
                         if abandoned || holds(self.goal, &item) {
@@ -228,6 +243,7 @@ pub struct Simulated {
 enum Applied {
     Done,
     Skipped,
+    Declined,
     Abandon,
 }
 
@@ -248,13 +264,14 @@ pub struct Following<'a> {
 }
 
 /// Before the first purchase, at (step, operation within the step, failed attempts, item),
-/// partway through that operation (as [`crate::craft::Node::Hub`]), or buying
-/// again: worth what the fresh start is worth.
+/// partway through that operation (as [`crate::craft::Node::Hub`]), shown what the operation
+/// would make of a locked item, or buying again: worth what the fresh start is worth.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Position {
     Fresh,
     At(u8, u8, u16, State),
     Hub(u8, u8, u16, State),
+    Foreseen(u8, u8, u16, State, State),
     Restart,
 }
 
@@ -299,19 +316,30 @@ impl Model for Following<'_> {
     }
 
     /// One action: 0 applies the step's next action (buying again restarts), 1 skips an
-    /// operation that does not apply, 2 abandons the attempt for want of a lock.
+    /// operation that does not apply (or declines what a lock shows), 2 abandons the attempt for
+    /// want of a lock, 3 looks at what the operation would make of a locked item.
     fn actions(&self, p: &Position) -> Vec<(usize, f64)> {
         let (i, j, s) = match p {
             Position::Fresh => return vec![(0, self.craft.starts[self.recipe.start].price())],
             Position::At(i, j, _, s) => (*i as usize, *j as usize, s),
             Position::Hub(..) => return vec![(0, 0.0)],
+            Position::Foreseen(i, j, _, _, t) => {
+                let a = self.recipe.steps[*i as usize].ops[*j as usize];
+                return if self.recipe.accepts(*i as usize, |u| self.craft.lens.holds(u, t)) {
+                    vec![(0, self.craft.ops[a].1)]
+                } else {
+                    vec![(1, 0.0)]
+                };
+            }
             Position::Restart => return Vec::new(),
         };
         let Some(step) = self.recipe.steps.get(i) else { return Vec::new() };
         let a = step.ops[j];
         match self.craft.start_of(a) {
             Some(_) => vec![(0, 0.0)],
-            None if self.craft.ops[a].0.applies(self.craft.ctx, &self.craft.lens.view(s)) => vec![(0, self.craft.ops[a].1)],
+            None if self.craft.ops[a].0.applies(self.craft.ctx, &self.craft.lens.view(s)) => {
+                vec![if s.foreseen { (3, 0.0) } else { (0, self.craft.ops[a].1) }]
+            }
             None if is_lock(self.craft, a) => vec![(2, 0.0)],
             None => vec![(1, 0.0)],
         }
@@ -329,14 +357,17 @@ impl Model for Following<'_> {
                     })
                     .collect();
             }
-            Position::At(i, j, k, s) | Position::Hub(i, j, k, s) => (*i as usize, *j as usize, *k, s),
+            Position::At(i, j, k, s) | Position::Hub(i, j, k, s) | Position::Foreseen(i, j, k, s, _) => (*i as usize, *j as usize, *k, s),
             Position::Restart => return Vec::new(),
         };
         let a = self.recipe.steps[i].ops[j];
         let hub = matches!(p, Position::Hub(..));
-        match action {
-            1 => vec![(1.0, self.advance(i, j + 1, k, *s))],
-            2 => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, *s))],
+        match (action, p) {
+            (0, Position::Foreseen(.., t)) => vec![(1.0, self.advance(i, j + 1, k, *t))],
+            (1, Position::Foreseen(..)) => vec![(1.0, self.advance(i, j + 1, k, State { foreseen: false, ..*s }))],
+            (1, _) => vec![(1.0, self.advance(i, j + 1, k, *s))],
+            (2, _) => vec![(1.0, Position::At(self.recipe.abandon(i) as u8, 0, 0, *s))],
+            (3, _) => self.outcomes_of(s, a, false).into_iter().map(|(p, t)| (p, Position::Foreseen(i as u8, j as u8, k, *s, t))).collect(),
             _ if self.craft.start_of(a).is_some() => vec![(1.0, Position::Restart)],
             _ if !hub && let Some(out) = self.craft.start_operation(s, a) => {
                 out.into_iter().map(|(p, t)| (p, Position::Hub(i as u8, j as u8, k, t))).collect()

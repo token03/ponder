@@ -1,6 +1,6 @@
 sheet = "Dagger +2 ExplodeSynthBase"
 scope = "Marked removed in 3.29: synthesis implicits moved to Vaal orbs. Kept as a historical case."
-base = "Sai"
+base = "Imperial Skean"
 
 [goal]
 mods = [
@@ -14,6 +14,12 @@ rarity = "magic"
 mods = [{ text = "+# to Level of all Spell Skill Gems", tier = "any" }]
 max_suffix = 0
 
+[stages.regalled]
+rarity = "rare"
+mods = [{ text = "+# to Level of all Spell Skill Gems", tier = "any" }]
+max_prefix = 1
+max_suffix = 0
+
 [stages.prefixes]
 mods = [{ text = "+# to Level of all Spell Skill Gems", tier = "any" }, { text = "+# to Level of all Physical Spell Skill Gems", tier = "any" }]
 
@@ -22,14 +28,14 @@ do = ["buy:base", "scouring", "transmutation", "alteration", "annulment"]
 until = "spell_gems"
 
 [[steps]]
-do = ["imprint", "regal", "annulment"]
-until = "spell_gems"
-note = "Regal for a suffix; annul a regalled prefix; restore the imprint on failure."
+do = ["restore", "imprint", "regal", "annulment"]
+until = "regalled"
+note = "Regal, then annul the new mod; restore the imprint when the annulment takes the spell gems."
 
 [[steps]]
 do = ["bench:multimod", "bench:cannot-roll-attack", "bench:prefixes-cannot-be-changed", "harvest:augment-physical"]
 until = "prefixes"
 
 [[steps]]
-do = ["bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:augment-caster"]
+do = ["bench:remove-crafted", "bench:multimod", "bench:prefixes-cannot-be-changed", "bench:any-prefix", "harvest:augment-caster"]
 until = "goal"

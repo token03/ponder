@@ -16,15 +16,16 @@
 use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::game::{Game, GroupId, Influences, Kind, ModId, Side, TagId};
+use crate::game::{Game, GroupId, Influences, Kind, MAX_STRANDS, ModId, Side, TagId};
 use crate::goal::{Influence, Rarity, Source};
 use crate::item::Item;
 use crate::ops::{
-    Ctx, Operation, Pick, Pool, Sides, Step, SupplyRef, TagFilter, UNVEIL_OFFERS, View, count_table, pool_weight, resolve, unveil_weight,
+    Ctx, Operation, Pick, Pool, Sides, Step, SupplyRef, TagFilter, UNVEIL_OFFERS, View, count_table, influenced_mod, pool_weight, resolve,
+    unveil_weight,
 };
-use crate::target::{Need, Target, matches};
+use crate::target::{Target, matches};
 
 mod side;
 mod transitions;
@@ -38,6 +39,11 @@ pub struct State {
     pub rarity: Rarity,
     pub influences: u8,
     pub eldritch: Option<Side>,
+    pub strands: u8,
+    /// The unused imprint: its key in the lens's imprints, or 0 for none.
+    pub imprint: u32,
+    /// Does a lock show what the next currency will do?
+    pub foreseen: bool,
     /// Per class: normal affixes, then (after the lens's classes) fractured ones.
     pub counts: [u8; 2 * CLASSES],
 }
@@ -84,10 +90,14 @@ pub struct Lens<'g> {
     classes: Vec<Class>,
     class_of: HashMap<ModId, usize>,
     read_tags: Vec<TagId>,
-    /// Class weights per draw (pool and tag filter), and for unveil offers: indexed by how many
-    /// of the class's mods the item holds (see [`Weights`]).
-    pools: Vec<((Pool, TagFilter), Vec<Weights>)>,
+    /// Class weights per draw (pool and tag filter) and memory (see `memory`), and for unveil
+    /// offers: indexed by how many of the class's mods the item holds (see [`Weights`]).
+    pools: Vec<((Pool, TagFilter), Vec<Vec<Weights>>)>,
+    /// The memory each strand count rolls with: strand counts that keep the same tiers out share one.
+    memory: Vec<usize>,
     unveil: Vec<Weights>,
+    /// Per class, the class an Orb of Dominance upgrades its mods into.
+    upgrades: Vec<usize>,
     /// Per untracked class, the chance two of its rolled mods share a group (recombination).
     collide: Vec<f64>,
     targets: Vec<TargetLens>,
@@ -98,6 +108,10 @@ pub struct Lens<'g> {
     bans: Vec<(usize, u32)>,
     partners: Vec<(SupplyRef, Vec<(f64, State)>)>,
     samples: Mutex<SampleCache>,
+    viable_fractures: Vec<OnceLock<Box<[bool; 256]>>>,
+    unveil_kernels: Mutex<HashMap<Vec<(usize, u64)>, Arc<[(usize, f64)]>>>,
+    /// Imprinted states by key (a hash of the state, so keys do not depend on exploration order).
+    imprints: Mutex<HashMap<u32, State>>,
     /// What the lens was built from, to build its relaxation.
     source: (Vec<Step>, Vec<Item>),
 }
@@ -241,14 +255,16 @@ impl<'g> Lens<'g> {
         let steps: Vec<&Step> = source.0.iter().collect();
         let mut partners = Vec::new();
         for step in &steps {
-            if let Step::Recombine(p) = step
+            if let Step::Recombine(p) | Step::Awaken(p) = step
                 && !partners.contains(p)
             {
                 partners.push(p.clone());
             }
         }
         let inputs: Vec<&Item> = source.1.iter().chain(partners.iter().flat_map(|p| p.0.items())).collect();
-        let exclusive = |m: ModId| !partners.is_empty() && game.def(m).recombine_exclusive;
+        let recombines = steps.iter().any(|s| matches!(s, Step::Recombine(_)));
+        let dominates = steps.iter().any(|s| matches!(s, Step::Dominate));
+        let exclusive = |m: ModId| recombines && game.def(m).recombine_exclusive;
         let mut picks: Vec<&Pick> = Vec::new();
         let mut filters: Vec<TagFilter> = Vec::new();
         let mut forced: BTreeSet<ModId> = BTreeSet::new();
@@ -261,12 +277,13 @@ impl<'g> Lens<'g> {
                 Step::Swap { add, remove } => {
                     picks.push(add);
                     filters.push(*remove);
+                    filters.push(add.tag);
                 }
                 Step::Remove { tag, .. } => filters.push(*tag),
                 Step::Force(m) => {
                     forced.insert(*m);
                 }
-                Step::Craft(ms) => forced.extend(ms.iter().copied()),
+                Step::Craft(ms) | Step::CraftAny(ms) => forced.extend(ms.iter().copied()),
                 Step::Unveil(p) => prefs.push(p),
                 Step::Influence(i) => influences |= 1 << *i as u8,
                 Step::Veil(_) => forced.extend(game.veils),
@@ -281,8 +298,9 @@ impl<'g> Lens<'g> {
             .filter_map(|(i, t)| Some((*game.metamods.get(i)?, game.tag_id(t)?)))
             .filter(|(m, _)| forced.contains(m) || inputs.iter().any(|i| i.affixes.iter().any(|a| a.id == *m)))
             .collect();
-        // Tags read off the mods an item holds (tagged removals, bans) keep those mods apart; a
-        // tagged draw only weighs each mod by its own tags.
+        // Tags read off the mods an item holds (tagged removals, bans) keep those mods apart, and
+        // so do the tags of adds onto a held item, whose groups the held mods block; a tagged
+        // reroll draw only weighs each mod by its own tags.
         let mut read: BTreeSet<TagId> = BTreeSet::new();
         read.extend(filters.iter().filter_map(|f| f.map(|t| t.0)));
         read.extend(bans.iter().map(|b| b.1));
@@ -337,6 +355,18 @@ impl<'g> Lens<'g> {
         // A blocker in the relaxation is still kept out by a need present but no longer blocks one.
         let blocker = |m: ModId| relaxed && serves(m) == 0 && game.def(m).groups.iter().any(|g| tracked_groups.contains(g));
         let tracked = |m: ModId| -> Vec<GroupId> { game.def(m).groups.iter().copied().filter(|g| tracked_groups.contains(g)).collect() };
+        // Dominance moves tracked influenced mods up a tier at a time: they need a class each,
+        // and so does what they become.
+        let tier_tracked = |m: ModId| (dominates && influenced_mod(game.def(m)) && !tracked(m).is_empty()).then_some(m);
+        if dominates {
+            forced.extend(
+                rolls
+                    .iter()
+                    .filter(|&&(m, _)| tier_tracked(m).is_some())
+                    .map(|&(m, _)| game.upgrade(kind, m))
+                    .filter(|m| !roll_ids.contains(m)),
+            );
+        }
 
         let mut keys: BTreeMap<Key, Vec<ModId>> = BTreeMap::new();
         for &(m, w) in &rolls {
@@ -347,24 +377,39 @@ impl<'g> Lens<'g> {
             let origin = Origin::Natural(def.influence.filter(|_| def.source == Source::Influence));
             let rank = if def.source == Source::Veiled { rank_of(m) } else { 0 };
             // Junk splits by the pools that can roll it: a mod a pool cannot roll (an earlier
-            // fossil's) must not count as one of that pool's draws. Draw tags only weigh it.
+            // fossil's) must not count as one of that pool's draws. Draw tags only weigh it. An
+            // unveiled junk mod is junk like any other, counted where its natural kind would be.
             // The relaxation merges junk the pools roll differently and its unveil ranks.
             let junk = group.is_empty();
-            let rolled_by = if junk && !relaxed {
-                pools.iter().enumerate().filter(|(_, p)| pool_weight(def, m, w, &p.0) > 0.0).fold(0u32, |b, (i, _)| b | 1 << i)
-            } else {
-                0
+            let rolls = |p: &Pool| match p {
+                Pool::Natural(bias) if def.source == Source::Veiled => bias.as_ref().is_none_or(|b| b.factor(def) > 0.0),
+                _ => pool_weight(def, m, w, p) > 0.0,
             };
+            let rolled_by =
+                if junk && !relaxed { pools.iter().enumerate().filter(|(_, p)| rolls(&p.0)).fold(0u32, |b, (i, _)| b | 1 << i) } else { 0 };
             let rank = if relaxed && junk { 0 } else { rank };
-            keys.entry((def.side, group, serves(m), tag_bits(m), origin, None, rank, rolled_by, blocker(m), exclusive(m), native(m)))
-                .or_default()
-                .push(m);
+            keys.entry((
+                def.side,
+                group,
+                serves(m),
+                tag_bits(m),
+                origin,
+                tier_tracked(m),
+                rank,
+                rolled_by,
+                blocker(m),
+                exclusive(m),
+                native(m),
+            ))
+            .or_default()
+            .push(m);
         }
         for &m in forced.iter().filter(|m| !roll_ids.contains(m)) {
             let def = game.def(m);
             let fixed = (def.source == Source::Crafted || game.veils.contains(&m)).then_some(m);
             let group = tracked(m);
             let origin = fixed.map_or(Origin::Natural(def.influence), |_| Origin::Fixed);
+            let fixed = fixed.or(tier_tracked(m));
             keys.entry((def.side, group, serves(m), tag_bits(m), origin, fixed, 0, 0, blocker(m), exclusive(m), native(m)))
                 .or_default()
                 .push(m);
@@ -403,6 +448,15 @@ impl<'g> Lens<'g> {
                 conflicts: Vec::new(),
             });
         }
+        // What Dominance makes of an untracked influenced mod is as untracked, in its class.
+        if dominates {
+            for &(m, _) in &rolls {
+                let up = game.upgrade(kind, m);
+                if let (Some(&c), false) = (class_of.get(&m), class_of.contains_key(&up)) {
+                    class_of.insert(up, c);
+                }
+            }
+        }
         let mut members: Vec<Vec<ModId>> = vec![Vec::new(); classes.len()];
         for (m, c) in &class_of {
             members[*c].push(*m);
@@ -426,7 +480,7 @@ impl<'g> Lens<'g> {
         let in_pool = |m: ModId, w: f64, (p, tag): &(Pool, TagFilter)| {
             if tag.is_none_or(|(t, want)| game.def(m).tags.contains(&t) == want) { pool_weight(game.def(m), m, w, p) } else { 0.0 }
         };
-        let class_weights = |f: &dyn Fn(ModId, f64) -> f64| -> Vec<Weights> {
+        let class_weights = |weight_of: &HashMap<ModId, f64>, f: &dyn Fn(ModId, f64) -> f64| -> Vec<Weights> {
             members
                 .iter()
                 .map(|ms| {
@@ -440,8 +494,25 @@ impl<'g> Lens<'g> {
                 })
                 .collect()
         };
-        let pools: Vec<_> = pools.iter().map(|p| (p.clone(), class_weights(&|m, w| in_pool(m, w, p)))).collect();
-        let unveil = class_weights(&|m, w| unveil_weight(game, game.def(m), m, w));
+        // Strand counts that leave every pool's class weights alike roll alike.
+        let remembers = steps.iter().any(|s| matches!(s, Step::Remember)) || inputs.iter().any(|i| i.strands > 0);
+        let alike = |a: &[Vec<Weights>], b: &[Vec<Weights>]| {
+            a.iter().flatten().flatten().zip(b.iter().flatten().flatten()).all(|(x, y)| (x - y).abs() <= 1e-9 * x.abs().max(1.0))
+        };
+        let mut memories: Vec<Vec<Vec<Weights>>> = Vec::new();
+        let mut memory = Vec::new();
+        for strands in 0..=if remembers { MAX_STRANDS } else { 0 } {
+            let weights: HashMap<ModId, f64> =
+                rolls.iter().map(|&(m, w)| (m, w * game.strand_factor(&pool, kind.ilvl, strands, m))).collect();
+            let classes: Vec<Vec<Weights>> = pools.iter().map(|p| class_weights(&weights, &|m, w| in_pool(m, w, p))).collect();
+            memory.push(memories.iter().position(|known| alike(known, &classes)).unwrap_or_else(|| {
+                memories.push(classes);
+                memories.len() - 1
+            }));
+        }
+        let pools: Vec<_> =
+            pools.iter().enumerate().map(|(i, p)| (p.clone(), memories.iter().map(|classes| classes[i].clone()).collect())).collect();
+        let unveil = class_weights(&weight_of, &|m, w| unveil_weight(game, game.def(m), m, w));
         // Two rolled mods of an untracked class share a group with chance sum(w_g^2) / (sum w)^2.
         let collide = members
             .iter()
@@ -455,11 +526,17 @@ impl<'g> Lens<'g> {
                 if c.tracked || all <= 0.0 { 0.0 } else { groups.values().map(|w| w * w).sum::<f64>() / (all * all) }
             })
             .collect();
+        let upgrades = (0..classes.len())
+            .map(|c| match members[c][..] {
+                [m] if dominates && game.def(m).source == Source::Influence => class_of[&game.upgrade(kind, m)],
+                _ => c,
+            })
+            .collect();
         let class_for = |key: Option<&ModId>| key.and_then(|m| class_of.get(m).copied());
         let lock = [class_for(game.metamods.first()), class_for(game.metamods.get(1))];
         let metamods = game.metamods.iter().filter_map(|m| class_of.get(m).copied()).collect();
         let bans = bans.iter().filter_map(|(m, t)| Some((*class_of.get(m)?, 1u32 << read_tags.iter().position(|x| x == t)?))).collect();
-        let targets = targets
+        let targets: Vec<_> = targets
             .into_iter()
             .zip(offsets)
             .map(|(target, offset)| {
@@ -478,6 +555,7 @@ impl<'g> Lens<'g> {
                 TargetLens { target, offset, classes: relevant, distinct }
             })
             .collect();
+        let viable_fractures = (0..targets.len() * classes.len()).map(|_| OnceLock::new()).collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
         let mut lens = Lens {
             game,
@@ -487,7 +565,9 @@ impl<'g> Lens<'g> {
             class_of,
             read_tags,
             pools,
+            memory,
             unveil,
+            upgrades,
             collide,
             targets,
             lock,
@@ -495,17 +575,34 @@ impl<'g> Lens<'g> {
             bans,
             partners: Vec::new(),
             samples: Mutex::default(),
+            viable_fractures,
+            unveil_kernels: Mutex::default(),
+            imprints: Mutex::default(),
             source: (Vec::new(), Vec::new()),
         };
         lens.partners = partners
             .into_iter()
             .map(|p| {
-                let states = lens.project_items(p.0.items());
+                // A partner is used up: an imprint of it can never be restored.
+                let items: Vec<Item> = p.0.items().iter().map(|i| Item { imprint: None, ..i.clone() }).collect();
+                let states = lens.project_items(&items);
                 (p, states)
             })
             .collect();
         lens.source = source;
         Ok(lens)
+    }
+
+    /// Strands as a state keeps them: the fewest that roll alike (SPEC §10: rounding down
+    /// understates what later currency leaves, never what this roll gets).
+    fn remembered(&self, strands: u8) -> u8 {
+        let memory = self.memory[strands as usize];
+        self.memory.iter().position(|&m| m == memory).unwrap() as u8
+    }
+
+    /// Can items here hold memory strands?
+    pub fn remembers(&self) -> bool {
+        self.memory.len() > 1
     }
 
     pub fn is_tracked(&self, c: usize) -> bool {
@@ -518,6 +615,10 @@ impl<'g> Lens<'g> {
 
     pub fn clear_cache(&mut self) {
         *self.samples.get_mut().unwrap() = HashMap::default();
+        for cached in &mut self.viable_fractures {
+            *cached = OnceLock::new();
+        }
+        *self.unveil_kernels.get_mut().unwrap() = HashMap::default();
     }
 
     /// One class for diagnostics: its fields and a few of its mods.
@@ -534,7 +635,16 @@ impl<'g> Lens<'g> {
             let c = *self.class_of.get(&a.id).unwrap_or_else(|| panic!("{} is outside the lens", self.game.def(a.id).key));
             counts[c + if a.fractured { n } else { 0 }] += 1;
         }
-        State { rarity: item.rarity, influences: item.kind.influences.0, eldritch: item.eldritch, counts }
+        let imprint = item.imprint.as_ref().map_or(0, |saved| self.imprint(self.project(saved)));
+        State {
+            rarity: item.rarity,
+            influences: item.kind.influences.0,
+            eldritch: item.eldritch,
+            strands: self.remembered(item.strands),
+            imprint,
+            foreseen: item.foreseen,
+            counts,
+        }
     }
 
     pub fn project_items(&self, items: &[Item]) -> Vec<(f64, State)> {
@@ -579,11 +689,7 @@ impl<'g> Lens<'g> {
     pub fn holds(&self, t: usize, state: &State) -> bool {
         let predicate = &self.targets[t];
         let TargetLens { target, offset, .. } = predicate;
-        let v = self.view(state);
-        if self.kind.ilvl < target.ilvl
-            || state.influences & target.influences.0 != target.influences.0
-            || !target.shape(state.rarity, Side::BOTH.map(|s| v.count(s)), Side::BOTH.map(|s| v.open(s)))
-        {
+        if self.kind.ilvl < target.ilvl || state.influences & target.influences.0 != target.influences.0 {
             return false;
         }
         let n = self.classes.len();
@@ -591,6 +697,10 @@ impl<'g> Lens<'g> {
             classes.iter().map(|&c| state.counts[c + n] as usize + if need.fractured { 0 } else { state.counts[c] as usize }).sum::<usize>()
                 < need.count as usize
         }) {
+            return false;
+        }
+        let v = self.view(state);
+        if !target.shape(state.rarity, Side::BOTH.map(|s| v.count(s)), Side::BOTH.map(|s| v.open(s))) {
             return false;
         }
         if predicate.distinct {
@@ -604,16 +714,44 @@ impl<'g> Lens<'g> {
     }
 
     /// How many of target `t`'s needs the item does not hold.
+    pub fn needs(&self, t: usize) -> usize {
+        self.targets[t].target.needs.len()
+    }
+
     pub fn missing_needs(&self, t: usize, state: &State) -> usize {
         let n = self.classes.len();
-        let TargetLens { target, offset, .. } = &self.targets[t];
-        let held = |(i, need): &(usize, &Need)| {
-            let bit = 1u128 << (offset + i);
-            let have: usize =
-                (0..n).filter(|&c| self.classes[c].serves & bit != 0).map(|c| (state.counts[c] + state.counts[c + n]) as usize).sum();
-            have >= need.count as usize
-        };
-        target.needs.iter().enumerate().filter(|n| !held(n)).count()
+        let predicate = &self.targets[t];
+        predicate
+            .target
+            .needs
+            .iter()
+            .zip(&predicate.classes)
+            .filter(|(need, classes)| {
+                classes.iter().map(|&c| (state.counts[c] + state.counts[c + n]) as usize).sum::<usize>() < need.count as usize
+            })
+            .count()
+    }
+
+    /// Unmet needs that cannot be finished with an ordinary bench craft.
+    pub fn missing_rolled_needs(&self, t: usize, state: &State) -> usize {
+        let n = self.classes.len();
+        let predicate = &self.targets[t];
+        predicate
+            .target
+            .needs
+            .iter()
+            .zip(&predicate.classes)
+            .filter(|(need, classes)| {
+                if !need.fractured && classes.iter().any(|&c| self.classes[c].crafted) {
+                    return false;
+                }
+                classes
+                    .iter()
+                    .map(|&c| state.counts[c + n] as usize + if need.fractured { 0 } else { state.counts[c] as usize })
+                    .sum::<usize>()
+                    < need.count as usize
+            })
+            .count()
     }
 
     /// Whether some fractured mod on the item serves none of target `t`'s needs.
@@ -629,10 +767,25 @@ impl<'g> Lens<'g> {
             return true;
         }
         let n = self.classes.len();
-        let fixed: Vec<_> = (0..n).filter(|&c| state.counts[c + n] > 0).collect();
-        if fixed.is_empty() {
-            return true;
+        let mut fixed = (0..n).filter(|&c| state.counts[c + n] > 0);
+        let Some(first) = fixed.next() else { return true };
+        if state.counts[first + n] == 1 && fixed.next().is_none() {
+            let values = self.viable_fractures[t * n + first].get_or_init(|| {
+                let mut values = Box::new([false; 256]);
+                for (influences, value) in values.iter_mut().enumerate() {
+                    let projected = State { influences: influences as u8, ..*state };
+                    *value = self.viable_fixed(t, &projected, &[first]);
+                }
+                values
+            });
+            return values[state.influences as usize];
         }
+        let fixed: Vec<_> = (0..n).filter(|&c| state.counts[c + n] > 0).collect();
+        self.viable_fixed(t, state, &fixed)
+    }
+
+    fn viable_fixed(&self, t: usize, state: &State, fixed: &[usize]) -> bool {
+        let n = self.classes.len();
         let TargetLens { target, offset, .. } = &self.targets[t];
         if state.influences & target.influences.0 != target.influences.0 {
             return false;
@@ -654,33 +807,54 @@ impl<'g> Lens<'g> {
 
     /// The exact outcome distribution of `steps` on `state`.
     pub fn run(&self, ctx: &Ctx, steps: &[Step], state: &State) -> Vec<(f64, State)> {
-        let mut dist: Vec<(f64, State, u8)> = vec![(1.0, *state, 0)];
-        let merge = |dist: Vec<(f64, State, u8)>, f: &Expand| {
-            let mut next: HashMap<(State, u8), f64> = HashMap::default();
-            for (p, s, total) in dist {
-                f(s, total, &mut |q, s2, t2| *next.entry((s2, t2)).or_default() += p * q);
-            }
-            next.into_iter().map(|((s, t), p)| (p, s, t)).collect::<Vec<_>>()
-        };
-        for step in steps {
-            if matches!(step, Step::RecombineBonus) && ctx.assumptions.recombine_bonus == 0.0 {
-                continue;
-            }
-            if let Step::Fill(pick) = step {
-                // One draw at a time, merging in between: at most six affixes.
-                for _ in 0..6 {
-                    if dist.iter().all(|(_, s, total)| self.view(s).total() as u8 >= *total) {
-                        break;
+        let state = &State { foreseen: false, ..*state };
+        let mut out: Vec<(f64, State)> = if let [step] = steps
+            && !matches!(step, Step::Fill(_) | Step::RecombineBonus)
+        {
+            let mut out = Vec::new();
+            self.step(ctx, step, *state, 0, &mut |p, s, _| out.push((p, s)));
+            out
+        } else {
+            let mut dist: Vec<(f64, State, u8)> = vec![(1.0, *state, 0)];
+            let merge = |mut dist: Vec<(f64, State, u8)>, f: &Expand| {
+                if dist.len() == 1 {
+                    let (p, s, total) = dist.pop().unwrap();
+                    f(s, total, &mut |q, state, count| dist.push((p * q, state, count)));
+                    if dist.len() == 1 {
+                        return dist;
                     }
-                    dist = merge(dist, &|s, total, emit| {
-                        if (self.view(&s).total() as u8) < total { self.draw(s, total, pick, emit) } else { emit(1.0, s, total) }
-                    });
+                    let mut next: HashMap<(State, u8), f64> = HashMap::default();
+                    for (p, s, total) in dist {
+                        *next.entry((s, total)).or_default() += p;
+                    }
+                    return next.into_iter().map(|((s, t), p)| (p, s, t)).collect();
                 }
-            } else {
-                dist = merge(dist, &|s, total, emit| self.step(ctx, step, s, total, emit));
+                let mut next: HashMap<(State, u8), f64> = HashMap::default();
+                for (p, s, total) in dist {
+                    f(s, total, &mut |q, s2, t2| *next.entry((s2, t2)).or_default() += p * q);
+                }
+                next.into_iter().map(|((s, t), p)| (p, s, t)).collect::<Vec<_>>()
+            };
+            for step in steps {
+                if matches!(step, Step::RecombineBonus) && ctx.assumptions.recombine_bonus == 0.0 {
+                    continue;
+                }
+                if let Step::Fill(pick) = step {
+                    // One draw at a time, merging in between: at most six affixes.
+                    for _ in 0..6 {
+                        if dist.iter().all(|(_, s, total)| self.view(s).total() as u8 >= *total) {
+                            break;
+                        }
+                        dist = merge(dist, &|s, total, emit| {
+                            if (self.view(&s).total() as u8) < total { self.draw(s, total, pick, emit) } else { emit(1.0, s, total) }
+                        });
+                    }
+                } else {
+                    dist = merge(dist, &|s, total, emit| self.step(ctx, step, s, total, emit));
+                }
             }
-        }
-        let mut out: Vec<(f64, State)> = dist.into_iter().map(|(p, s, _)| (p, s)).collect();
+            dist.into_iter().map(|(p, s, _)| (p, s)).collect()
+        };
         out.sort_by_key(|a| a.1);
         out.dedup_by(|a, b| {
             if a.1 != b.1 {
@@ -856,7 +1030,8 @@ impl<'g> Lens<'g> {
         let donors =
             [0, 1].map(|side| donor_keys.iter().map(|(_, keys)| keys[side]).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
         let donor_ids = [0, 1].map(|side| donors[side].iter().enumerate().map(|(i, &key)| (key, i)).collect::<HashMap<_, _>>());
-        let limit = self.view(&State { rarity: Rarity::Rare, ..header }).limit();
+        let rare = State { rarity: Rarity::Rare, ..header };
+        let limits = Side::BOTH.map(|side| self.view(&rare).limit(side));
         let kernel = |side: usize| {
             let mut outputs = Vec::new();
             let mut index = HashMap::default();
@@ -868,6 +1043,7 @@ impl<'g> Lens<'g> {
                         counts[c as usize] += 1;
                     }
                     let pool: Vec<_> = counts.into_iter().enumerate().filter(|&(_, count)| count > 0).collect();
+                    let limit = limits[side];
                     let samples = [self.kept(ctx, &pool, limit, false, heir.output.0), self.kept(ctx, &pool, limit, true, heir.output.0)];
                     for (mode, (excluded, selected)) in
                         [(false, None), (false, Some(false)), (false, Some(true)), (true, None)].into_iter().enumerate()
@@ -909,7 +1085,15 @@ impl<'g> Lens<'g> {
     }
 
     fn recombination_state(&self, prefix: &SideKey, suffix: &SideKey, header: Header) -> State {
-        let mut state = State { rarity: Rarity::Rare, counts: [0; 2 * CLASSES], influences: header.0, eldritch: header.1 };
+        let mut state = State {
+            rarity: Rarity::Rare,
+            counts: [0; 2 * CLASSES],
+            influences: header.0,
+            eldritch: header.1,
+            strands: 0,
+            imprint: 0,
+            foreseen: false,
+        };
         for &c in prefix.iter().chain(suffix).filter(|&&c| c != u8::MAX) {
             state.counts[c as usize] += 1;
         }
@@ -1010,6 +1194,21 @@ impl<'g> Lens<'g> {
                 }
                 emit(1.0, s, total);
             }
+            Step::CraftAny(mods) => {
+                let fit: Vec<usize> = mods.iter().filter(|&&m| self.view(&s).fits(m)).map(|m| self.class_of[m]).collect();
+                if fit.is_empty() {
+                    return emit(1.0, s, total);
+                }
+                for c in &fit {
+                    let mut t = s;
+                    t.counts[*c] += 1;
+                    emit(1.0 / fit.len() as f64, t, total);
+                }
+            }
+            Step::Dominate => self.dominate(s, total, emit),
+            Step::Imprint => emit(1.0, State { imprint: self.imprint(s), ..s }, total),
+            Step::Restore => emit(1.0, self.imprints.lock().unwrap()[&s.imprint], total),
+            Step::Foresee => emit(1.0, State { foreseen: true, ..s }, total),
             Step::Draw(pick) => self.draw(s, total, pick, emit),
             Step::Fill(_) => unreachable!("run expands Fill"),
             Step::Remove { sides, tag, respect_lock, respect_bans } => {
@@ -1096,17 +1295,33 @@ impl<'g> Lens<'g> {
                 let partner = &self.partners.iter().find(|(supply, _)| supply == p).expect("partner read by an operation").1;
                 self.recombine(ctx, &s, total, partner, emit);
             }
+            Step::Awaken(p) => {
+                let donors = &self.partners.iter().find(|(supply, _)| supply == p).expect("partner read by an operation").1;
+                self.awaken(&s, total, donors, emit);
+            }
+            Step::Forget(_) if s.strands == 0 => emit(1.0, s, total),
+            Step::Forget(spend) => {
+                let most = spend.most(self.view(&s).total());
+                for spent in 0..=most {
+                    emit(1.0 / (most as f64 + 1.0), State { strands: self.remembered(s.strands.saturating_sub(spent)), ..s }, total);
+                }
+            }
+            Step::Remember => {
+                for strands in 1..=MAX_STRANDS {
+                    emit(1.0 / MAX_STRANDS as f64, State { strands: self.remembered(strands), ..s }, total);
+                }
+            }
             Step::RecombineBonus => {
                 let rare = State { rarity: Rarity::Rare, ..s };
-                let limit = self.view(&rare).limit();
+                let limits = Side::BOTH.map(|side| self.view(&rare).limit(side));
                 let v = self.view(&s);
                 let (prefixes, suffixes) = (v.count(Side::Prefix), v.count(Side::Suffix));
-                if prefixes + suffixes >= 2 * limit {
+                if prefixes + suffixes >= limits.iter().sum() {
                     return emit(1.0, s, total);
                 }
                 let bonus = ctx.assumptions.recombine_bonus;
                 emit(1.0 - bonus, s, total);
-                let sides = crate::ops::bonus_sides(s.rarity, prefixes, suffixes, limit);
+                let sides = crate::ops::bonus_sides(s.rarity, prefixes, suffixes, limits);
                 self.draw(rare, total, &Pick { sides, ..Pick::ANY }, &mut |p, t, total| emit(bonus * p, self.settled(t), total));
             }
         }
@@ -1148,17 +1363,112 @@ impl<'g> Lens<'g> {
         1 << self.read_tags.iter().position(|x| *x == t).expect("tag read by an operation")
     }
 
-    /// One weighted draw; the state is unchanged when nothing fits.
-    /// Rarity from what is left: no mods normal, at most one per side magic, else rare.
+    fn is_influenced(&self, c: usize) -> bool {
+        matches!(self.classes[c].origin, Origin::Natural(Some(_)))
+    }
+
+    /// See [`Step::Dominate`]: fractured mods are counted after the lens's classes, so only the
+    /// first `n` counts take part.
+    fn dominate(&self, s: State, total: u8, emit: &mut dyn FnMut(f64, State, u8)) {
+        let n = self.classes.len();
+        let locked = self.view(&s).locked();
+        let weighted = |s: &State, keep: &dyn Fn(usize) -> bool| -> Vec<(usize, f64)> {
+            (0..n).filter(|&c| s.counts[c] > 0 && self.is_influenced(c) && keep(c)).map(|c| (c, s.counts[c] as f64)).collect()
+        };
+        let removable = weighted(&s, &|c| !locked[self.classes[c].side as usize]);
+        let removals: Vec<(f64, State)> = if removable.is_empty() {
+            vec![(1.0, s)]
+        } else {
+            let all: f64 = removable.iter().map(|r| r.1).sum();
+            removable
+                .iter()
+                .map(|&(c, k)| {
+                    let mut t = s;
+                    t.counts[c] -= 1;
+                    (k / all, t)
+                })
+                .collect()
+        };
+        for (p, t) in removals {
+            let upgradable = weighted(&t, &|_| true);
+            let all: f64 = upgradable.iter().map(|u| u.1).sum();
+            if upgradable.is_empty() {
+                emit(p, t, total);
+            }
+            for (c, k) in upgradable {
+                let mut u = t;
+                u.counts[c] -= 1;
+                u.counts[self.upgrades[c]] += 1;
+                emit(p * k / all, u, total);
+            }
+        }
+    }
+
+    /// Does `s` hold an imprint of an item it no longer is?
+    pub fn moved_on(&self, s: &State) -> bool {
+        s.imprint != 0 && self.imprints.lock().unwrap()[&s.imprint] != State { imprint: 0, ..*s }
+    }
+
+    /// Save `s` as an imprint: its key.
+    fn imprint(&self, s: State) -> u32 {
+        use std::hash::{Hash, Hasher};
+        let saved = State { imprint: 0, ..s };
+        let mut hasher = std::hash::DefaultHasher::new();
+        saved.hash(&mut hasher);
+        let key = (hasher.finish() as u32).max(1);
+        let known = *self.imprints.lock().unwrap().entry(key).or_insert(saved);
+        assert_eq!(known, saved, "two imprinted states share a key");
+        key
+    }
+
+    /// Rarity from what is left: the lowest whose limits hold it.
     fn settled(&self, mut s: State) -> State {
         let v = self.view(&s);
-        let most = Side::BOTH.iter().map(|x| v.count(*x)).max().unwrap_or(0);
-        s.rarity = match most {
-            0 => Rarity::Normal,
-            1 => Rarity::Magic,
-            _ => Rarity::Rare,
-        };
+        s.rarity = crate::item::settled(self.game, self.kind.base, Side::BOTH.map(|x| v.count(x)));
         s
+    }
+
+    /// Influenced mods by class, each counted once per affix (fractured ones never: the
+    /// Awakener does not admit fractured items).
+    fn influenced(&self, s: &State) -> Vec<(usize, f64)> {
+        (0..self.classes.len())
+            .filter(|&c| s.counts[c] > 0 && matches!(self.classes[c].origin, Origin::Natural(Some(_))))
+            .map(|c| (c, s.counts[c] as f64))
+            .collect()
+    }
+
+    /// The Awakener with each donor state: one random influenced mod of each side survives,
+    /// a group conflict drops one of the two at random, and the result is a bare rare with both
+    /// influences.
+    fn awaken(&self, s: &State, total: u8, donors: &[(f64, State)], emit: &mut dyn FnMut(f64, State, u8)) {
+        let options = |s: &State| -> Vec<(Option<usize>, f64)> {
+            let held = self.influenced(s);
+            let all: f64 = held.iter().map(|h| h.1).sum();
+            if all == 0.0 { vec![(None, 1.0)] } else { held.into_iter().map(|(c, k)| (Some(c), k / all)).collect() }
+        };
+        let kept = options(s);
+        for (q, donor) in donors {
+            let bare = State { rarity: Rarity::Rare, influences: s.influences | donor.influences, counts: [0; 2 * CLASSES], ..*s };
+            for &(a, pa) in &kept {
+                for (b, pb) in options(donor) {
+                    let p = q * pa * pb;
+                    let with = |mods: &[usize]| {
+                        let mut t = bare;
+                        for &c in mods {
+                            t.counts[c] += 1;
+                        }
+                        t
+                    };
+                    match (a, b) {
+                        (Some(a), Some(b)) if self.classes[a].conflicts.contains(&b) => {
+                            emit(p / 2.0, with(&[a]), total);
+                            emit(p / 2.0, with(&[b]), total);
+                        }
+                        _ => emit(p, with(&a.into_iter().chain(b).collect::<Vec<_>>()), total),
+                    }
+                }
+            }
+        }
     }
 
     /// A recombination with each partner state: per heir (whose influences and Eldritch
@@ -1211,7 +1521,7 @@ impl<'g> Lens<'g> {
     fn recombine_parts(&self, ctx: &Ctx, s: &State, partner: &[(f64, State)], emit: &mut dyn FnMut(Recombination<'_>)) {
         let n = self.classes.len();
         let rare = State { rarity: Rarity::Rare, ..*s };
-        let limit = self.view(&rare).limit();
+        let limits = Side::BOTH.map(|side| self.view(&rare).limit(side));
         for (q, o) in partner {
             let heirs = if (s.influences, s.eldritch, &s.counts[n..2 * n]) == (o.influences, o.eldritch, &o.counts[n..2 * n]) {
                 vec![s]
@@ -1230,10 +1540,10 @@ impl<'g> Lens<'g> {
                 let coupled = pools.iter().all(|pool| pool.iter().any(|&(c, _)| self.classes[c % n].exclusive));
                 for first in 0..if coupled { 2 } else { 1 } {
                     let second = 1 - first;
-                    let leading = self.kept(ctx, &pools[first], limit, false, heir.influences);
+                    let leading = self.kept(ctx, &pools[first], limits[first], false, heir.influences);
                     let has_exclusive = pools[first].iter().any(|&(c, _)| self.classes[c % n].exclusive);
                     for exclusive in [false, true].into_iter().take(if has_exclusive { 2 } else { 1 }) {
-                        let trailing = self.kept(ctx, &pools[second], limit, exclusive, heir.influences);
+                        let trailing = self.kept(ctx, &pools[second], limits[second], exclusive, heir.influences);
                         emit(Recombination {
                             probability: q / if coupled { 2.0 } else { 1.0 },
                             influences: heir.influences,
@@ -1393,7 +1703,8 @@ impl<'g> Lens<'g> {
     /// Classes a draw can land in, with their available weight.
     fn options(&self, s: &State, pick: &Pick) -> Vec<(usize, f64)> {
         let v = self.view(s);
-        let weights = &self.pools.iter().find(|((p, t), _)| *p == pick.pool && *t == pick.tag).expect("pool read by an operation").1;
+        let memories = &self.pools.iter().find(|((p, t), _)| *p == pick.pool && *t == pick.tag).expect("pool read by an operation").1;
+        let weights = &memories[self.memory[s.strands as usize]];
         let allowed = resolve(pick.sides, s.eldritch);
         let open = Side::BOTH.map(|x| allowed[x as usize] && v.open(x) > 0);
         let banned = self.bans.iter().filter(|(c, _)| v.present(*c)).fold(0u32, |b, (_, bit)| b | bit);
@@ -1429,7 +1740,6 @@ impl<'g> Lens<'g> {
             return emit(1.0, s, total);
         }
         // Offers in order, each without the mod before it: (prob, weights left, first, best).
-        let mut kept: BTreeMap<usize, f64> = BTreeMap::new();
         fn walk(
             lens: &Lens,
             offers: &[(usize, f64, f64)],
@@ -1458,9 +1768,17 @@ impl<'g> Lens<'g> {
                 left[i] = saved;
             }
         }
-        let mut left: Vec<f64> = offers.iter().map(|o| o.1).collect();
-        walk(self, &offers, &mut left, (1.0, None, None, 0), &mut kept);
-        for (c, p) in kept {
+        let key: Vec<_> = offers.iter().map(|&(c, weight, _)| (c, weight.to_bits())).collect();
+        let cached = self.unveil_kernels.lock().unwrap().get(&key).cloned();
+        let kept = cached.unwrap_or_else(|| {
+            let mut probabilities = BTreeMap::new();
+            let mut left: Vec<f64> = offers.iter().map(|o| o.1).collect();
+            walk(self, &offers, &mut left, (1.0, None, None, 0), &mut probabilities);
+            let probabilities: Arc<[(usize, f64)]> = probabilities.into_iter().collect::<Vec<_>>().into();
+            self.unveil_kernels.lock().unwrap().insert(key, probabilities.clone());
+            probabilities
+        });
+        for &(c, p) in kept.iter() {
             let mut t = s;
             t.counts[c] += 1;
             emit(p, t, total);
@@ -1498,14 +1816,8 @@ impl View for StateView<'_> {
     fn count(&self, side: Side) -> usize {
         self.counts[side as usize]
     }
-    fn limit(&self) -> usize {
-        let jewel = self.lens.class_name.contains("Jewel");
-        match self.state.rarity {
-            Rarity::Normal => 0,
-            Rarity::Magic => 1,
-            Rarity::Rare if jewel => 2,
-            Rarity::Rare => 3,
-        }
+    fn limit(&self, side: Side) -> usize {
+        crate::item::limit(self.lens.game, self.lens.kind.base, self.state.rarity, side)
     }
     fn crafted(&self) -> usize {
         self.crafted
@@ -1526,8 +1838,10 @@ impl View for StateView<'_> {
     }
     fn fixed_blocks(&self, m: ModId) -> bool {
         let n = self.lens.classes.len();
-        let Some(&c) = self.lens.class_of.get(&m) else { return false };
-        self.lens.classes[c].conflicts.iter().any(|&o| self.state.counts[o + n] > 0)
+        let side = self.lens.game.def(m).side;
+        let fractured: usize = (0..n).filter(|&c| self.lens.classes[c].side == side).map(|c| self.state.counts[c + n] as usize).sum();
+        fractured >= crate::item::limit(self.lens.game, self.lens.kind.base, Rarity::Rare, side)
+            || self.lens.class_of.get(&m).is_some_and(|&c| self.lens.classes[c].conflicts.iter().any(|&o| self.state.counts[o + n] > 0))
     }
     fn locked(&self) -> [bool; 2] {
         self.lens.lock.map(|c| c.is_some_and(|c| self.present(c)))
@@ -1535,8 +1849,18 @@ impl View for StateView<'_> {
     fn has_metamod(&self) -> bool {
         self.lens.metamods.iter().any(|&c| self.present(c))
     }
-    fn influenced(&self) -> bool {
-        self.state.influences != 0
+    fn influences(&self) -> u8 {
+        self.state.influences
+    }
+    fn imprinted(&self) -> bool {
+        self.state.imprint != 0
+    }
+    fn foreseen(&self) -> bool {
+        self.state.foreseen
+    }
+    fn influenced_mods(&self) -> usize {
+        let n = self.lens.classes.len();
+        (0..n).filter(|&c| self.lens.is_influenced(c)).map(|c| (self.state.counts[c] + self.state.counts[c + n]) as usize).sum()
     }
     fn eldritch(&self) -> Option<Side> {
         self.state.eldritch

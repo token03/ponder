@@ -1,12 +1,12 @@
 sheet = "0.8 Strike Range Gloves"
-scope = "The foulborn finish is not modelled."
+scope = "The foulborn finish is not modelled. Elder gloves roll range only with melee damage now, so the elder range is that hybrid."
 base = "Spiked Gloves"
 ilvl = 85
 influences = ["warlord", "elder"]
 
 [goal]
 mods = [
-  { text = "+# metres to Melee Strike Range", source = "elevated", count = 2 },
+  { text = ["+# metres to Melee Strike Range", "#% increased Melee Damage / +# metres to Melee Strike Range"], source = "elevated", count = 2 },
   { text = "+# to Accuracy Rating", tier = 2 },
   { text = "+# to maximum Life", tier = 2 },
 ]
@@ -28,10 +28,10 @@ max_prefix = 0
 
 [stages.elder_range]
 influences = ["elder"]
-mods = [{ text = "+# metres to Melee Strike Range", source = "elevated" }]
+mods = [{ text = ["+# metres to Melee Strike Range", "#% increased Melee Damage / +# metres to Melee Strike Range"], source = "elevated" }]
 
 [stages.awakened]
-mods = [{ text = "+# metres to Melee Strike Range", source = "elevated", count = 2 }, { text = "+# to Accuracy Rating", tier = 2 }]
+mods = [{ text = ["+# metres to Melee Strike Range", "#% increased Melee Damage / +# metres to Melee Strike Range"], source = "elevated", count = 2 }, { text = "+# to Accuracy Rating", tier = 2 }]
 open_prefix = 1
 
 [[steps]]

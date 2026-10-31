@@ -5,7 +5,7 @@ quality = 28
 
 [goal]
 mods = [
-  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
   { text = "+# to maximum Life", tier = 1 },
   { text = "#% of Physical Damage Converted to Cold Damage", source = "veiled" },
@@ -14,7 +14,7 @@ mods = [
 
 [stages.donor_clean]
 base = "Slink Gloves"
-mods = [{ text = "Curse Enemies with Frostbite on Hit", source = "legacy" }]
+mods = [{ text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", source = "legacy" }]
 max_suffix = 1
 max_prefix = 0
 
@@ -24,22 +24,22 @@ max_suffix = 1
 min_mods = 4
 
 [stages.transferred]
-mods = [{ text = "Curse Enemies with Frostbite on Hit", source = "legacy" }]
+mods = [{ text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", source = "legacy" }]
 max_suffix = 1
 min_mods = 4
 
 [stages.fractured]
-mods = [{ text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" }]
+mods = [{ text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", fractured = true, source = "legacy" }]
 
 [stages.suppress]
 mods = [
-  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
 ]
 
 [stages.life]
 mods = [
-  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
   { text = "+# to maximum Life", tier = 1 },
 ]
@@ -47,7 +47,7 @@ max_prefix = 1
 
 [stages.converted]
 mods = [
-  { text = "Curse Enemies with Frostbite on Hit", fractured = true, source = "legacy" },
+  { text = "+#% to Cold Resistance / #% increased Damage with Hits against Chilled Enemies", fractured = true, source = "legacy" },
   { text = "+#% chance to Suppress Spell Damage", tier = 1 },
   { text = "+# to maximum Life", tier = 1 },
   { text = "#% of Physical Damage Converted to Cold Damage", source = "veiled" },

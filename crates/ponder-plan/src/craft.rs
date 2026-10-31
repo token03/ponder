@@ -22,6 +22,9 @@ pub enum Node {
     Item(State),
     /// Partway through an operation (shared continuation, intermediate item).
     Hub(usize, State),
+    /// A locked item showing what an operation would make of it: apply the operation, or use
+    /// the lock up on the cheapest currency that changes nothing.
+    Foreseen(usize, State, State),
     /// Back to the market: worth what the market is worth.
     Restart,
 }
@@ -45,6 +48,8 @@ pub struct Craft<'a> {
     upper_bound: f64,
     nonnegative: bool,
     finishes: Vec<usize>,
+    /// The cheapest operation that changes nothing, to use a lock up on.
+    burn: Option<usize>,
     /// The relaxed craft's values (see [`Craft::solve`]).
     relaxed: Option<(Relaxation, ponder_solve::Solution<Node>)>,
     side_bound: Option<SideBound>,
@@ -94,14 +99,16 @@ impl<'a> Craft<'a> {
             .collect();
         let continuations = (0..ops.len())
             .map(|i| {
-                hubs[i]
-                    .map_or(i, |k| (0..i).find(|&j| hubs[j].is_some_and(|l| ops[j].0.steps()[l..] == ops[i].0.steps()[k..])).unwrap_or(i))
+                hubs[i].map_or(i, |k| {
+                    (0..i).find(|&j| hubs[j].is_some_and(|l| same_tail(lens, &ops[j].0.steps()[l..], &ops[i].0.steps()[k..]))).unwrap_or(i)
+                })
             })
             .collect();
         let start_states = starts.iter().map(|s| lens.project_items(s.items())).collect();
         let phases = ops.iter().map(|(op, _)| Phase::of(op.steps())).collect();
         let finishes = ops.iter().enumerate().filter(|(_, (op, _))| op.steps().iter().all(deterministic)).map(|(i, _)| i).collect();
         let nonnegative = ops.iter().all(|(_, price)| *price >= 0.0) && starts.iter().all(|s| s.price() >= 0.0);
+        let burn = (0..ops.len()).filter(|&i| ops[i].0.steps().is_empty()).min_by(|&a, &b| ops[a].1.total_cmp(&ops[b].1));
         let mut craft = Craft {
             ctx,
             lens,
@@ -116,6 +123,7 @@ impl<'a> Craft<'a> {
             upper_bound: f64::INFINITY,
             nonnegative,
             finishes,
+            burn,
             relaxed: None,
             side_bound: None,
         };
@@ -147,6 +155,15 @@ impl<'a> Craft<'a> {
                 ponder_solve::solve(self, &start, limit)
             }
             solved => solved,
+        }
+    }
+
+    /// Allow remove-and-veil before the finishing phase for unrestricted comparisons.
+    pub fn allow_early_veiled_exalted(&mut self) {
+        for phase in &mut self.phases {
+            if *phase == Phase::VeilExalted {
+                *phase = Phase::Any;
+            }
         }
     }
 
@@ -189,6 +206,17 @@ impl<'a> Craft<'a> {
     pub fn finish_operation(&self, s: &State, i: usize) -> Vec<(f64, State)> {
         let k = self.hubs[i].expect("an operation with a continuation");
         self.lens.run(self.ctx, &self.ops[i].0.steps()[k..], s)
+    }
+
+    /// Does action `a` at `n` apply an operation (and not just show what it would do)?
+    pub fn applies_operation(&self, n: &Node, a: usize) -> bool {
+        a < self.ops.len() && (matches!(n, Node::Item(s) if !s.foreseen) || matches!(n, Node::Foreseen(..)))
+    }
+
+    /// An imprint serves the one operation after it: an item that has moved on from its
+    /// imprint restores it or lets it go (SPEC §10).
+    fn releases(&self, s: &State, i: usize) -> bool {
+        i < self.ops.len() && !self.ops[i].0.steps().contains(&Step::Restore) && self.lens.moved_on(s)
     }
 
     /// A just-fractured item whose fractured mod serves no need: the craft starts over.
@@ -328,6 +356,15 @@ impl Model for Craft<'_> {
         true
     }
 
+    fn action_cost_bound(&self) -> Option<f64> {
+        if self.start_states.iter().flatten().any(|(_, s)| self.lens.missing_needs(self.goal, s) < 4) {
+            return None;
+        }
+        let operations = self.ops.iter().zip(&self.dominated).filter(|(_, dominated)| !**dominated).map(|((_, cost), _)| *cost);
+        let purchases = self.starts.iter().filter(|s| s.price() <= self.upper_bound).map(|s| s.price());
+        Some(operations.chain(purchases).fold(0.0, f64::max))
+    }
+
     fn bound(&self, n: &Node) -> Option<f64> {
         if let Some(bound) = &self.side_bound {
             return Some(bound.value(n));
@@ -359,27 +396,51 @@ impl Model for Craft<'_> {
                 let view = self.lens.view(s);
                 let missing = self.lens.missing_needs(self.goal, s);
                 let ops = (0..self.ops.len())
-                    .filter(|&i| !self.dominated[i] && self.phases[i].allows(s, missing) && self.ops[i].0.applies(self.ctx, &view))
-                    .map(|i| (i, self.ops[i].1));
+                    .filter(|&i| {
+                        !self.dominated[i]
+                            && self.phases[i].allows(
+                                s,
+                                if self.phases[i] == Phase::VeilExalted { self.lens.missing_rolled_needs(self.goal, s) } else { missing },
+                                self.lens.needs(self.goal),
+                            )
+                            && self.ops[i].0.applies(self.ctx, &view)
+                            && !(s.foreseen && Some(i) == self.burn)
+                    })
+                    .map(|i| (i, if s.foreseen { 0.0 } else { self.ops[i].1 }));
                 ops.chain([(self.restart(), 0.0)]).collect()
             }
             Node::Hub(i, _) => vec![(*i, 0.0)],
+            Node::Foreseen(i, ..) => {
+                let burn = self.burn.map(|j| (j, self.ops[j].1));
+                [(*i, self.ops[*i].1)].into_iter().chain(burn).chain([(self.restart(), 0.0)]).collect()
+            }
             Node::Goal | Node::Restart => Vec::new(),
         }
     }
 
     fn defers(&self, n: &Node, i: usize) -> bool {
         self.nonnegative
-            && matches!(n, Node::Item(s) if !self.lens.clean(s))
             && self.ops.get(i).is_some_and(|op| op.0.steps().iter().any(|s| matches!(s, Step::Recombine(_))))
+            && matches!(n, Node::Item(s) if !self.lens.clean(s))
     }
 
     fn outcomes(&self, n: &Node, i: usize) -> Vec<(f64, Node)> {
         if i == self.restart() {
             return vec![(1.0, Node::Restart)];
         }
+        let released;
+        let n = match n {
+            Node::Item(s) if self.releases(s, i) => {
+                released = Node::Item(State { imprint: 0, ..*s });
+                &released
+            }
+            _ => n,
+        };
         match (n, self.start_of(i)) {
             (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
+            (Node::Item(s), None) if s.foreseen => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Foreseen(i, *s, t))).collect(),
+            (Node::Foreseen(shown, _, t), None) if i == *shown => self.nodes([(1.0, *t)].into_iter()),
+            (Node::Foreseen(_, s, _), None) => self.nodes(self.outcomes_of(s, i).into_iter()),
             (Node::Item(s), None) => match self.start_operation(s, i) {
                 Some(out) => out.into_iter().map(|(p, t)| (p, Node::Hub(self.continuations[i], t))).collect(),
                 None if self.phases[i] == Phase::Fracture => {
@@ -395,6 +456,7 @@ impl Model for Craft<'_> {
 
     fn for_each_outcome(&self, n: &Node, i: usize, emit: &mut dyn FnMut(f64, Node)) {
         if let Node::Item(s) = n
+            && !s.foreseen
             && i < self.ops.len()
             && self.hubs[i].is_none()
             && self.phases[i] != Phase::Fracture
@@ -439,7 +501,7 @@ impl Model for Craft<'_> {
             value(&node)
         });
         move |n, i| match n {
-            Node::Item(s) if i < self.ops.len() && self.hubs[i].is_none() => evaluate(s, self.ops[i].0.steps()),
+            Node::Item(s) if !s.foreseen && i < self.ops.len() && self.hubs[i].is_none() => evaluate(s, self.ops[i].0.steps()),
             _ => None,
         }
     }
@@ -448,7 +510,8 @@ impl Model for Craft<'_> {
         if i >= self.ops.len() || self.hubs[i].is_some() {
             return Vec::new();
         }
-        let items: Vec<_> = states.iter().filter_map(|s| if let Node::Item(s) = s { Some(*s) } else { None }).collect();
+        let items: Vec<_> =
+            states.iter().filter_map(|s| if let Node::Item(s) = s { Some(*s) } else { None }).filter(|s| !s.foreseen).collect();
         self.lens
             .recombination_successors(self.ctx, &items, self.ops[i].0.steps())
             .into_iter()
@@ -482,7 +545,7 @@ impl Model for Craft<'_> {
             index(&node)
         });
         move |n, i| match n {
-            Node::Item(s) if i < self.ops.len() && self.hubs[i].is_none() => link(s, self.ops[i].0.steps()),
+            Node::Item(s) if !s.foreseen && i < self.ops.len() && self.hubs[i].is_none() => link(s, self.ops[i].0.steps()),
             _ => None,
         }
     }
@@ -496,12 +559,16 @@ enum Phase {
     Any,
     /// An Eldritch implicit starts the finish: only with at most one need missing.
     Eldritch,
+    /// Remove-and-veil finishes rolled needs; bench-finishing needs may remain.
+    VeilExalted,
     /// Rerolls, rarity changes, recombination and new influences start a craft over. An item
     /// with an Eldritch implicit is being finished and does not take them, or every state of
     /// the craft would exist again with the implicit.
     Restarts,
     /// Fracturing: a fractured mod that serves no need ends the attempt.
     Fracture,
+    /// An imprint saves progress: only of an item holding a need.
+    Imprint,
 }
 
 impl Phase {
@@ -509,13 +576,27 @@ impl Phase {
         let has = |f: fn(&Step) -> bool| steps.iter().any(f);
         if has(|s| matches!(s, Step::Fracture)) {
             Phase::Fracture
+        } else if has(|s| matches!(s, Step::Imprint)) {
+            Phase::Imprint
+        } else if has(|s| matches!(s, Step::Veil(_))) && has(|s| matches!(s, Step::Remove { .. })) {
+            Phase::VeilExalted
         } else if has(|s| matches!(s, Step::Eldritch(_))) {
             Phase::Eldritch
         } else if has(|s| matches!(s, Step::Clear { sides: Sides::Eldritch, .. })) {
             // Eldritch Chaos requires the implicit; it is a finishing reroll, not a restart.
             Phase::Any
         } else if has(|s| {
-            matches!(s, Step::Clear { .. } | Step::Rarity(_) | Step::Settle | Step::RollCount | Step::Recombine(_) | Step::Influence(_))
+            matches!(
+                s,
+                Step::Clear { .. }
+                    | Step::Rarity(_)
+                    | Step::Settle
+                    | Step::RollCount
+                    | Step::Recombine(_)
+                    | Step::Awaken(_)
+                    | Step::Influence(_)
+                    | Step::Remember
+            )
         }) {
             Phase::Restarts
         } else {
@@ -523,10 +604,12 @@ impl Phase {
         }
     }
 
-    fn allows(self, s: &State, missing: usize) -> bool {
+    fn allows(self, s: &State, missing: usize, needs: usize) -> bool {
         match self {
             Phase::Any => true,
+            Phase::Imprint => missing < needs,
             Phase::Eldritch => missing <= 1,
+            Phase::VeilExalted => missing <= 1,
             Phase::Restarts | Phase::Fracture => s.eldritch.is_none(),
         }
     }
@@ -534,11 +617,22 @@ impl Phase {
 
 /// Where an operation's shared continuation begins.
 fn hub(steps: &[Step]) -> Option<usize> {
+    let steps = match steps {
+        [random @ .., Step::Forget(_)] => random,
+        _ => steps,
+    };
     let end = match steps.iter().position(|s| matches!(s, Step::Clear { .. })) {
         Some(clear) => clear + steps[clear..].iter().take_while(|s| deterministic(s)).count(),
         None => steps.iter().position(|s| !deterministic(s))? + 1,
     };
     (end < steps.len() && !steps[..end].iter().any(|s| matches!(s, Step::RollCount))).then_some(end)
+}
+
+/// Do two continuations do the same: equal, or but for using up strands no item has?
+fn same_tail(lens: &Lens, a: &[Step], b: &[Step]) -> bool {
+    let kept =
+        |steps: &[Step]| -> Vec<Step> { steps.iter().filter(|s| lens.remembers() || !matches!(s, Step::Forget(_))).cloned().collect() };
+    a == b || kept(a) == kept(b)
 }
 
 fn deterministic(step: &Step) -> bool {
@@ -629,8 +723,31 @@ impl Craft<'_> {
                     run.cost += b.price();
                 } else {
                     let (operation, price) = self.ops[op];
-                    ponder_rules::ops::run(self.ctx, operation.steps(), run.item.as_mut().unwrap(), rng);
+                    let mut item = run.item.take().unwrap();
+                    if self.releases(&self.lens.project(&item), op) {
+                        item.imprint = None;
+                    }
+                    let mut outcome = item.clone();
+                    ponder_rules::ops::run(self.ctx, operation.steps(), &mut outcome, rng);
                     run.cost += price;
+                    if item.foreseen {
+                        match policy(&Node::Foreseen(op, self.lens.project(&item), self.lens.project(&outcome))) {
+                            Some(a) if a == op => {}
+                            Some(a) if Some(a) == self.burn => {
+                                run.counts[op] -= 1;
+                                run.record(a, r == 0);
+                                outcome = item;
+                                ponder_rules::ops::run(self.ctx, self.ops[a].0.steps(), &mut outcome, rng);
+                                run.cost += self.ops[a].1 - price;
+                            }
+                            _ => {
+                                run.record(self.restart(), r == 0);
+                                run.cost -= price;
+                                continue;
+                            }
+                        }
+                    }
+                    run.item = Some(outcome);
                     if self.phases[op] == Phase::Fracture
                         && run.item.as_ref().is_some_and(|i| self.spare_fracture(&Node::Item(self.lens.project(i))))
                     {

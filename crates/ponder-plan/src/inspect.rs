@@ -24,7 +24,7 @@ fn action_name(craft: &Craft, node: &Node, action: usize) -> String {
 
 fn description(craft: &Craft, node: &Node) -> String {
     match node {
-        Node::Item(s) | Node::Hub(_, s) => {
+        Node::Item(s) | Node::Hub(_, s) | Node::Foreseen(_, s, _) => {
             let view = craft.lens.view(s);
             let n = craft.lens.classes();
             let classes: Vec<_> = (0..n)

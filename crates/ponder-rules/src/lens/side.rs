@@ -59,8 +59,16 @@ impl SideRelaxation {
                 }
             }
         }
-        let state = State { rarity: Rarity::Rare, influences: 0, eldritch: None, counts: [0; 2 * CLASSES] };
-        if lens.view(&state).limit() != 3 {
+        let state = State {
+            rarity: Rarity::Rare,
+            influences: 0,
+            eldritch: None,
+            strands: 0,
+            imprint: 0,
+            foreseen: false,
+            counts: [0; 2 * CLASSES],
+        };
+        if Side::BOTH.iter().any(|&side| lens.view(&state).limit(side) != 3) {
             return None;
         }
         let on_side = lens.classes.iter().map(|c| c.side == side).collect();

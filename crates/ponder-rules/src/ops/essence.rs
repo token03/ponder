@@ -1,6 +1,6 @@
 //! Essences: reforge as rare with one forced mod.
 
-use super::{Cost, Ctx, Operation, Pick, Sides, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Sides, Spend, Step, View};
 use crate::game::{Game, ModId};
 use crate::goal::Rarity;
 
@@ -28,6 +28,7 @@ impl Essence {
                 Step::RollCount,
                 Step::Force(forced),
                 Step::Fill(Pick::ANY),
+                Step::Forget(Spend::Upto(80)),
             ],
         })
     }

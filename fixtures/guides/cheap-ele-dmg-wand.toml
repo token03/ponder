@@ -1,6 +1,6 @@
 sheet = "Cheap Ele Dmg Wand"
 scope = "Quality and the Harvest enchant are not modelled."
-base = "Prophecy Wand"
+base = "Kinetic Wand"
 
 [goal]
 mods = [

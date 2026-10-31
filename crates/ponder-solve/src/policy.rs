@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use std::cell::OnceCell;
 
 use crate::components;
@@ -6,6 +7,12 @@ use crate::linear::{SparseMatrix, direct_solve, solve_dense};
 pub struct PolicySystem {
     outcomes: Vec<Vec<(f64, usize)>>,
     reduction: Reduction,
+}
+
+pub struct PolicyQuotient {
+    pub system: PolicySystem,
+    pub classes: Vec<usize>,
+    pub representatives: Vec<usize>,
 }
 
 impl PolicySystem {
@@ -19,6 +26,59 @@ impl PolicySystem {
         }
         let reduction = Reduction::new(&outcomes);
         Some(Self { outcomes, reduction })
+    }
+
+    /// Merge states with equal labels and equal transition probabilities between classes.
+    /// Small cyclic cores and partitions that do not stabilize use the original system.
+    pub fn quotient(&self, labels: &[usize]) -> Option<PolicyQuotient> {
+        assert_eq!(labels.len(), self.outcomes.len());
+        let rows = &self.reduction.rows;
+        if !components(rows.len(), |s| rows[s].iter().filter(|r| r.0 > 0.0).map(|r| r.1)).iter().any(|part| part.len() >= 4096) {
+            return None;
+        }
+        let mut unique = FxHashMap::default();
+        let mut classes: Vec<_> = labels
+            .iter()
+            .map(|&label| {
+                let next = unique.len();
+                *unique.entry(label).or_insert(next)
+            })
+            .collect();
+        let mut count = unique.len();
+        for _ in 0..32 {
+            let mut unique = FxHashMap::default();
+            let next: Vec<_> = self
+                .outcomes
+                .iter()
+                .enumerate()
+                .map(|(s, row)| {
+                    let key = (classes[s], partition_row(row, &classes));
+                    let next = unique.len();
+                    *unique.entry(key).or_insert(next)
+                })
+                .collect();
+            classes = next;
+            if unique.len() != count {
+                count = unique.len();
+                continue;
+            }
+            if count == self.outcomes.len() {
+                return None;
+            }
+            let mut representatives = vec![usize::MAX; count];
+            for (s, &class) in classes.iter().enumerate() {
+                if representatives[class] == usize::MAX {
+                    representatives[class] = s;
+                }
+            }
+            let outcomes = representatives
+                .iter()
+                .map(|&s| partition_row(&self.outcomes[s], &classes).into_iter().map(|(t, p)| (f64::from_bits(p), t)).collect())
+                .collect();
+            let system = PolicySystem::new(outcomes).expect("partitioning preserves transition probabilities");
+            return Some(PolicyQuotient { system, classes, representatives });
+        }
+        None
     }
 
     pub fn outcomes(&self, state: usize) -> &[(f64, usize)] {
@@ -74,6 +134,22 @@ impl PolicySystem {
     }
 }
 
+fn partition_row(row: &[(f64, usize)], classes: &[usize]) -> Vec<(usize, u64)> {
+    let mut terms: Vec<_> = row.iter().filter(|r| r.0 > 0.0).map(|&(p, t)| (classes[t], p)).collect();
+    terms.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let mut row: Vec<(usize, u64)> = Vec::new();
+    for (class, probability) in terms {
+        if let Some(last) = row.last_mut()
+            && last.0 == class
+        {
+            last.1 = (f64::from_bits(last.1) + probability).to_bits();
+        } else {
+            row.push((class, probability.to_bits()));
+        }
+    }
+    row
+}
+
 pub(super) struct Reduction {
     retained: Vec<bool>,
     states: Vec<usize>,
@@ -84,6 +160,10 @@ pub(super) struct Reduction {
 }
 
 impl Reduction {
+    pub(super) fn project(&self, values: &[f64]) -> Vec<f64> {
+        self.states.iter().map(|&s| values[s]).collect()
+    }
+
     pub(super) fn right_hand_sides(&self, outcomes: &[Vec<(f64, usize)>], rewards: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
         let mut offsets = vec![vec![0.0; outcomes.len()]; rewards.len()];
         for &s in &self.eliminated {

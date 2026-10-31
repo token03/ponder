@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use super::{Cost, Ctx, Operation, Pick, Sides, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Sides, Spend, Step, View};
 use crate::game::{Game, ModId};
 use crate::goal::{Rarity, Source};
 
@@ -22,6 +22,7 @@ const CHAOS: &[Step] = &[
     Step::RollCount,
     Step::Veil(Sides::Both),
     Step::Fill(Pick::ANY),
+    Step::Forget(Spend::Upto(80)),
 ];
 const EXALTED: &[Step] =
     &[Step::Remove { sides: Sides::Both, tag: None, respect_lock: true, respect_bans: false }, Step::Veil(Sides::Both)];

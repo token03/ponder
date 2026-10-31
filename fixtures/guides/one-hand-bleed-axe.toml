@@ -1,6 +1,6 @@
 sheet = "1H Bleed Axe"
 scope = "Method 1 (elder influence, essence of contempt). Tempering is not modelled."
-base = "Runic Hatchet"
+base = "Reaver Axe"
 
 [goal]
 influences = ["elder"]

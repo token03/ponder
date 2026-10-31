@@ -1,38 +1,38 @@
 sheet = "Ele Dmg Wand "
 scope = "Cold, fire and lightning spell damage share a mod group, which recombination also respects (poewiki); the guide's goal needs a mechanic not modelled."
-base = "Prophecy Wand"
+base = "Kinetic Wand"
 
 [goal]
 mods = [
-  { text = "Adds # to # Cold Damage to Spells", tier = 2 },
-  { text = "Adds # to # Fire Damage to Spells", tier = 2 },
-  { text = "Adds # to # Lightning Damage to Spells", tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = "Adds # to # Fire Damage", tier = 2 },
+  { text = "Adds # to # Lightning Damage", tier = 2 },
   { text = ["#% increased Critical Strike Chance / +# to Strength and Intelligence", "#% increased Attack Speed / +# to Dexterity and Intelligence", "+#% to Global Critical Strike Multiplier"], source = "veiled" },
 ]
 
 [stages.cold]
 rarity = "magic"
-mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }]
+mods = [{ text = "Adds # to # Cold Damage", tier = 2 }]
 
 [stages.fire]
 rarity = "magic"
-mods = [{ text = "Adds # to # Fire Damage to Spells", tier = 2 }]
+mods = [{ text = "Adds # to # Fire Damage", tier = 2 }]
 
 [stages.lightning]
 rarity = "magic"
-mods = [{ text = "Adds # to # Lightning Damage to Spells", tier = 2 }]
+mods = [{ text = "Adds # to # Lightning Damage", tier = 2 }]
 
 [stages.cold_fire]
-mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }, { text = "Adds # to # Fire Damage to Spells", tier = 2 }]
+mods = [{ text = "Adds # to # Cold Damage", tier = 2 }, { text = "Adds # to # Fire Damage", tier = 2 }]
 
 [stages.cold_lightning]
-mods = [{ text = "Adds # to # Cold Damage to Spells", tier = 2 }, { text = "Adds # to # Lightning Damage to Spells", tier = 2 }]
+mods = [{ text = "Adds # to # Cold Damage", tier = 2 }, { text = "Adds # to # Lightning Damage", tier = 2 }]
 
 [stages.prefixes]
 mods = [
-  { text = "Adds # to # Cold Damage to Spells", tier = 2 },
-  { text = "Adds # to # Fire Damage to Spells", tier = 2 },
-  { text = "Adds # to # Lightning Damage to Spells", tier = 2 },
+  { text = "Adds # to # Cold Damage", tier = 2 },
+  { text = "Adds # to # Fire Damage", tier = 2 },
+  { text = "Adds # to # Lightning Damage", tier = 2 },
 ]
 
 [[steps]]

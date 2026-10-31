@@ -7,6 +7,7 @@ mods = [
   { text = "+#% to Fire Resistance", tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
   { text = "+# to maximum Life" },
+  { text = "#% increased Fire Damage", tier = "any" },
 ]
 
 [stages.fractured]
@@ -37,12 +38,8 @@ mods = [
 max_prefix = 1
 
 [[steps]]
-do = ["buy:base"]
-note = "Base with damage over time multiplier, made fracture-ready."
-
-[[steps]]
-do = ["fracturing"]
-until = "fractured"
+do = ["buy:fractured"]
+note = "A ring with damage over time multiplier, made fracture-ready and fractured."
 
 [[steps]]
 do = ["essence:deafening-anger"]

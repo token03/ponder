@@ -2,7 +2,7 @@
 //! on: the Searing Exarch (embers) prefixes, the Eater of Worlds (ichors) suffixes. Implicits
 //! are not modelled beyond that side.
 
-use super::{Cost, Ctx, Operation, Pick, Pool, Sides, Step, View};
+use super::{Cost, Ctx, Operation, Pick, Pool, Sides, Spend, Step, View};
 use crate::game::Side;
 use crate::goal::Rarity;
 
@@ -62,9 +62,14 @@ pub enum Orb {
 }
 
 const PICK: Pick = Pick { sides: Sides::Eldritch, tag: None, pool: Pool::Natural(None) };
-const CHAOS: &[Step] =
-    &[Step::Clear { sides: Sides::Eldritch, respect_lock: true }, Step::Rarity(Rarity::Rare), Step::RollCount, Step::Fill(PICK)];
-const EXALTED: &[Step] = &[Step::Draw(PICK)];
+const CHAOS: &[Step] = &[
+    Step::Clear { sides: Sides::Eldritch, respect_lock: true },
+    Step::Rarity(Rarity::Rare),
+    Step::RollCount,
+    Step::Fill(PICK),
+    Step::Forget(Spend::Upto(60)),
+];
+const EXALTED: &[Step] = &[Step::Draw(PICK), Step::Forget(Spend::Exalt)];
 const ANNUL: &[Step] = &[Step::Remove { sides: Sides::Eldritch, tag: None, respect_lock: true, respect_bans: true }];
 
 impl Orb {

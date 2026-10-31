@@ -1,11 +1,12 @@
 sheet = "Socketed CastSpeed ES Gloves"
-base = "Sorcerer Gloves"
+base = "Warlock Gloves"
 quality = 27
 
 [goal]
 mods = [
   { text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, fractured = true },
   { text = "+# to maximum Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield", tier = 2 },
   { text = "+# to Intelligence", tier = 2 },
 ]
 
@@ -21,6 +22,7 @@ mods = [{ text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, f
 mods = [
   { text = "Socketed Gems have #% more Attack and Cast Speed", tier = 2, fractured = true },
   { text = "+# to maximum Energy Shield", tier = 2 },
+  { text = "#% increased Energy Shield", tier = 2 },
 ]
 
 [[steps]]

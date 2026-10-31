@@ -32,7 +32,7 @@ fn kinds(game: &Game) -> impl Iterator<Item = Kind> + '_ {
 /// Everything SPEC §4.1–4.3 and §4.5 say about one item.
 fn check(game: &Game, item: &Item, fractured: &[Affix]) -> Result<(), String> {
     for side in Side::BOTH {
-        if item.count(game, side) > item.limit(game).max(fractured.len()) {
+        if item.count(game, side) > item.limit(game, side).max(fractured.len()) {
             return Err(format!("{side:?} over the limit"));
         }
     }

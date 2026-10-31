@@ -1,6 +1,6 @@
 sheet = "1H Bleed Axe"
 scope = "Method 2: alteration bases and recombinators. Tempering is not modelled."
-base = "Runic Hatchet"
+base = "Reaver Axe"
 
 [goal]
 mods = [

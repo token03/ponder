@@ -35,6 +35,8 @@ pub struct ModDef {
     pub tags: Vec<TagId>,
     pub level: u32,
     pub template: String,
+    /// The stats it grants, by id.
+    pub stats: Vec<String>,
     /// The influence an influenced mod needs on the item.
     pub influence: Option<Influence>,
     /// The first matching tag decides the weight; zero means it cannot roll there.
@@ -48,7 +50,8 @@ pub struct ModDef {
 pub struct BaseDef {
     pub name: String,
     pub class: String,
-    pub unsupported_crafting: Option<String>,
+    /// Affixes the implicit allows beyond the rarity's, per side (Simplex, Focused, Cogwork).
+    pub extra_affixes: [i8; 2],
     tags: Vec<TagId>,
     /// Which mods roll here: RePoE's mod domain (`item`, `misc` for jewels, `abyss_jewel`,
     /// `affliction_jewel` for clusters).
@@ -81,9 +84,12 @@ impl Influences {
 /// spawn weights, and the natural tiers per template.
 pub struct Pool {
     pub mods: Vec<(ModId, f64)>,
-    /// Template -> natural mods of that template on this kind, highest level first.
-    pub tiers: HashMap<String, Vec<ModId>>,
+    /// Template -> natural mods of that template on this kind with their weights, highest level first.
+    pub tiers: HashMap<String, Vec<(ModId, f64)>>,
 }
+
+/// Most memory strands an item holds.
+pub const MAX_STRANDS: u8 = 100;
 
 pub struct Game {
     pub mods: Vec<ModDef>,
@@ -95,6 +101,7 @@ pub struct Game {
     base_ids: HashMap<String, BaseId>,
     /// Lowercased template -> every mod with it.
     templates: HashMap<String, Vec<ModId>>,
+    elevated: Vec<ModId>,
     /// Bench metamods: [prefixes locked, suffixes locked, no attack, no caster, multimod].
     pub metamods: Vec<ModId>,
     pub essences: Vec<data::Essence>,
@@ -116,6 +123,7 @@ impl Game {
             mod_ids: HashMap::new(),
             base_ids: HashMap::new(),
             templates: HashMap::new(),
+            elevated: Vec::new(),
             metamods: Vec::new(),
             essences: repoe.essences.into_values().collect(),
             fossils: repoe.fossils.into_values().collect(),
@@ -164,9 +172,14 @@ impl Game {
                 tags: m.implicit_tags.iter().map(|t| game.tag(t)).collect(),
                 level: m.required_level,
                 template: data::template(&text),
-                influence: Influence::ALL
-                    .into_iter()
-                    .find(|i| m.spawn_weights.iter().any(|w| w.weight > 0 && w.tag.ends_with(&format!("_{}", i.tag())))),
+                stats: m.stats.iter().map(|s| s.id.clone()).collect(),
+                influence: if source == Source::Elevated {
+                    elevated_influence(&m.name)
+                } else {
+                    Influence::ALL
+                        .into_iter()
+                        .find(|i| m.spawn_weights.iter().any(|w| w.weight > 0 && w.tag.ends_with(&format!("_{}", i.tag()))))
+                },
                 spawn: m.spawn_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
                 generation: m.generation_weights.iter().map(|w| (game.tag(&w.tag), w.weight.max(0) as u32)).collect(),
                 domain: m.domain.clone(),
@@ -174,6 +187,9 @@ impl Game {
             let id = ModId(game.mods.len() as u32);
             game.mod_ids.insert(key.clone(), id);
             game.templates.entry(def.template.to_lowercase()).or_default().push(id);
+            if source == Source::Elevated {
+                game.elevated.push(id);
+            }
             game.mods.push(def);
         }
         game.groups = group_ids.into_keys().collect();
@@ -185,17 +201,10 @@ impl Game {
             }
             let tags = b.tags.iter().map(|t| game.tag(t)).collect();
             game.base_ids.insert(b.name.clone(), BaseId(game.bases.len() as u32));
-            let unsupported_crafting = b.implicits.iter().filter_map(|id| repoe.mods.get(id)).find_map(|m| {
-                matches!(m.family.as_str(), "MaxPrefixMaxSuffixImplicit" | "MaxPrefixMaxSuffixModEffectImplicit")
-                    .then(|| format!("{}: implicit affix limits or explicit-modifier magnitudes are not supported", b.name))
-            });
-            game.bases.push(BaseDef {
-                name: b.name.clone(),
-                class: b.item_class.clone(),
-                unsupported_crafting,
-                tags,
-                domain: b.domain.clone(),
-            });
+            let stats: Vec<&data::Stat> = b.implicits.iter().filter_map(|id| repoe.mods.get(id)).flat_map(|m| &m.stats).collect();
+            let extra = |id: &str| stats.iter().filter(|s| s.id == id).map(|s| s.min as i8).sum();
+            let extra_affixes = [extra("local_maximum_prefixes_allowed_+"), extra("local_maximum_suffixes_allowed_+")];
+            game.bases.push(BaseDef { name: b.name.clone(), class: b.item_class.clone(), extra_affixes, tags, domain: b.domain.clone() });
         }
         // A cluster jewel's enchant (its small passives) is fixed and decides which notables
         // roll, so each enchant is a base of its own: "Large Cluster Jewel [affliction_cold_damage]".
@@ -270,7 +279,7 @@ impl Game {
         let tags = self.kind_tags(kind);
         let weight = |rules: &[(TagId, u32)], default: u32| rules.iter().find(|(t, _)| tags.contains(t)).map_or(default, |r| r.1);
         let mut mods = Vec::new();
-        let mut tiers: HashMap<String, Vec<ModId>> = HashMap::new();
+        let mut tiers: HashMap<String, Vec<(ModId, f64)>> = HashMap::new();
         for (i, m) in self.mods.iter().enumerate() {
             if !matches!(m.source, Source::Natural | Source::Influence | Source::Fossil | Source::Veiled) {
                 continue;
@@ -283,16 +292,60 @@ impl Game {
             if w > 0.0 {
                 mods.push((ModId(i as u32), w));
                 if matches!(m.source, Source::Natural | Source::Influence) {
-                    tiers.entry(m.template.clone()).or_default().push(ModId(i as u32));
+                    tiers.entry(m.template.clone()).or_default().push((ModId(i as u32), w));
                 }
             }
         }
         for list in tiers.values_mut() {
-            list.sort_by_key(|id| std::cmp::Reverse(self.def(*id).level));
+            list.sort_by_key(|(id, _)| std::cmp::Reverse(self.def(*id).level));
         }
         let pool = Arc::new(Pool { mods, tiers });
         self.pools.lock().unwrap().insert(kind, pool.clone());
         pool
+    }
+
+    /// What `strands` memory strands multiply a mod's weight by in `pool` at item level `ilvl`:
+    /// only the top tiers of its family roll, taking the weight of the tiers that cannot (SPEC §10).
+    pub fn strand_factor(&self, pool: &Pool, ilvl: u8, strands: u8, m: ModId) -> f64 {
+        if strands == 0 {
+            return 1.0;
+        }
+        let def = self.def(m);
+        let Some(list) = pool.tiers.get(&def.template) else { return 1.0 };
+        let family: Vec<(u32, f64)> = list
+            .iter()
+            .map(|&(id, w)| (self.def(id), w))
+            .filter(|(other, _)| other.level <= ilvl as u32 && other.influence == def.influence && other.groups == def.groups)
+            .map(|(other, w)| (other.level, w))
+            .collect();
+        let levels: std::collections::BTreeSet<u32> = family.iter().map(|t| t.0).collect();
+        let rollable = (100.0 / (2.5 * strands as f64 + 147.5) * levels.len().saturating_sub(1) as f64) as usize + 1;
+        let Some(&lowest) = levels.iter().rev().nth(rollable - 1).filter(|_| rollable < levels.len()) else { return 1.0 };
+        if def.level < lowest {
+            return 0.0;
+        }
+        let all: f64 = family.iter().map(|t| t.1).sum();
+        let kept: f64 = family.iter().filter(|t| t.0 >= lowest).map(|t| t.1).sum();
+        all / kept
+    }
+
+    /// What an Orb of Dominance makes of an influenced mod on this kind: the next tier up of its
+    /// family, an elevated mod from the best tier, the same mod from an elevated one.
+    pub fn upgrade(&self, kind: Kind, m: ModId) -> ModId {
+        let def = self.def(m);
+        let same = |other: &ModDef| other.influence == def.influence && other.groups == def.groups && other.side == def.side;
+        let pool = self.pool(kind);
+        let higher = pool.tiers.get(&def.template).into_iter().flatten().map(|&(id, _)| id).filter(|&id| {
+            let other = self.def(id);
+            other.source == Source::Influence && other.level > def.level && same(other)
+        });
+        // An elevated mod may read differently ("Enemy" to "Enemies") or grant more.
+        let elevated =
+            || self.elevated.iter().copied().find(|&id| same(self.def(id)) && def.stats.iter().all(|s| self.def(id).stats.contains(s)));
+        match def.source {
+            Source::Influence => higher.min_by_key(|&id| self.def(id).level).or_else(elevated).unwrap_or(m),
+            _ => m,
+        }
     }
 
     /// Tier of a mod on this kind: 1 for the highest required level of its template.
@@ -316,7 +369,7 @@ impl Game {
             return None;
         }
         let levels: std::collections::BTreeSet<u32> = if let Some(list) = pool.tiers.get(&def.template) {
-            list.iter().map(|id| self.def(*id).level).collect()
+            list.iter().map(|(id, _)| self.def(*id).level).collect()
         } else if def.source == Source::Essence {
             let class = &self.bases[kind.base.0 as usize].class;
             let mods: Vec<_> = self
@@ -378,6 +431,21 @@ fn source_of(key: &str, m: &data::Mod) -> Option<Source> {
         item_domains!() => Source::Natural,
         _ => return None,
     })
+}
+
+/// An elevated mod's influence, by its name ("of the Elevated Hunt", "Elevated Warlord's"): it
+/// has no spawn weights to tell.
+fn elevated_influence(name: &str) -> Option<Influence> {
+    const NAMES: [(&str, Influence); 6] = [
+        ("Shap", Influence::Shaper),
+        ("Elder", Influence::Elder),
+        ("Crusade", Influence::Crusader),
+        ("Rede", Influence::Redeemer),
+        ("Hunt", Influence::Hunter),
+        ("Conquest", Influence::Warlord),
+    ];
+    let name = name.replace("Warlord", "Conquest");
+    NAMES.into_iter().find(|(part, _)| name.contains(part)).map(|(_, i)| i)
 }
 
 fn influenced(weights: &[data::Weight]) -> bool {

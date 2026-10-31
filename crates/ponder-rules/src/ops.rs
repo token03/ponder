@@ -6,6 +6,8 @@
 //! its logic. All randomness is in `Draw`, `Fill`, `Remove`, `Swap`, `RollCount`, `Fracture`,
 //! `Veil` and `Unveil` (SPEC §4.3–4.4).
 
+pub mod awakener;
+pub mod beast;
 pub mod bench;
 pub mod currency;
 pub mod eldritch;
@@ -13,6 +15,7 @@ pub mod essence;
 pub mod fossil;
 pub mod harvest;
 pub mod influence;
+pub mod memory;
 pub mod misc;
 pub mod recombinator;
 pub mod veiled;
@@ -21,9 +24,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::assumptions::Assumptions;
-use crate::game::{Game, ModDef, ModId, Side, TagId};
+use crate::game::{Game, MAX_STRANDS, ModDef, ModId, Side, TagId};
 use crate::goal::{Influence, Rarity, Source};
-use crate::item::{Affix, Item};
+use crate::item::{self, Affix, Item};
 use crate::rng::Rng;
 
 pub struct Ctx<'a> {
@@ -50,6 +53,8 @@ pub enum Pool {
     Natural(Option<Arc<Bias>>),
     /// Only the mods of one influence.
     Influence(Influence),
+    /// Only the mods of the item's influences.
+    Influenced,
 }
 
 /// What one random addition may pick.
@@ -118,6 +123,8 @@ pub enum Step {
     Force(ModId),
     /// Add the first of these crafted mods that fits (the bench).
     Craft(Arc<Vec<ModId>>),
+    /// Add one of these crafted mods that fit, each as likely.
+    CraftAny(Arc<Vec<ModId>>),
     /// Add one weighted mod.
     Draw(Pick),
     /// Draw until the item has the rolled count, or nothing fits.
@@ -150,6 +157,46 @@ pub enum Step {
     /// from either, and each side keeps some of both items' affixes there.
     Recombine(SupplyRef),
     RecombineBonus,
+    /// Destroy a second item (the donor), keeping one random influenced mod of each item and the
+    /// donor's influence; a group conflict between the two drops one at random. Everything else
+    /// goes, metamods and locks included; the caller rerolls the rest.
+    Awaken(SupplyRef),
+    /// Use up some of the item's memory strands (SPEC §10: uniformly 0 to the most). Last in
+    /// an operation, since its rolls see the strands it started with.
+    Forget(Spend),
+    /// Randomise the memory strands (SPEC §10: uniformly 1 to [`MAX_STRANDS`]).
+    Remember,
+    /// Remove a random influenced mod a lock does not protect, then upgrade another random
+    /// influenced mod ([`Game::upgrade`]), locked or not (SPEC §10: the order and the lock's
+    /// reach are inferred from guides). Fractured mods take no part.
+    Dominate,
+    /// Save the item as it is in an imprint, replacing any unused one.
+    Imprint,
+    /// Turn the item back into its imprint, using the imprint up.
+    Restore,
+    /// Show what the next currency will do; any currency uses this up.
+    Foresee,
+}
+
+/// The most memory strands one use of a currency consumes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spend {
+    Upto(u8),
+    /// An exalt's: by the mods the item holds after it.
+    Exalt,
+}
+
+/// An exalt's most consumed strands by the mods it leaves; one mod's is unknown, and the poewiki
+/// guesses ten.
+const EXALT_SPEND: [u8; 7] = [0, 10, 16, 22, 26, 32, 34];
+
+impl Spend {
+    pub fn most(self, mods: usize) -> u8 {
+        match self {
+            Spend::Upto(n) => n,
+            Spend::Exalt => EXALT_SPEND[mods.min(EXALT_SPEND.len() - 1)],
+        }
+    }
 }
 
 pub trait Supply: Send + Sync {
@@ -184,7 +231,7 @@ pub trait View {
     fn item_class(&self) -> &str;
     fn rarity(&self) -> Rarity;
     fn count(&self, side: Side) -> usize;
-    fn limit(&self) -> usize;
+    fn limit(&self, side: Side) -> usize;
     fn crafted(&self) -> usize;
     fn fractured(&self) -> usize;
     fn has(&self, m: ModId) -> bool;
@@ -192,18 +239,29 @@ pub trait View {
     fn removable(&self, respect_lock: bool, respect_bans: bool) -> usize;
     /// Could `m` be added now: its side has room and no mod shares its group?
     fn fits(&self, m: ModId) -> bool;
-    /// Does a mod no reset removes (fractured) share a group with `m`?
+    /// Do mods no reset removes (fractured) keep `m` off a rerolled rare: one sharing its group,
+    /// or enough to fill its side?
     fn fixed_blocks(&self, m: ModId) -> bool;
     /// The sides "Cannot Be Changed" metamods protect.
     fn locked(&self) -> [bool; 2];
     /// Any bench metamod on the item.
     fn has_metamod(&self) -> bool;
-    fn influenced(&self) -> bool;
+    /// Bit per influence on the item.
+    fn influences(&self) -> u8;
+    /// Does an unused imprint of the item exist?
+    fn imprinted(&self) -> bool;
+    /// Does a lock show what the next currency will do?
+    fn foreseen(&self) -> bool;
+    /// Mods an Awakener's Orb or an Orb of Dominance counts as influenced.
+    fn influenced_mods(&self) -> usize;
     fn eldritch(&self) -> Option<Side>;
     fn veiled(&self) -> bool;
 
+    fn influenced(&self) -> bool {
+        self.influences() != 0
+    }
     fn open(&self, side: Side) -> usize {
-        self.limit().saturating_sub(self.count(side))
+        self.limit(side).saturating_sub(self.count(side))
     }
     fn mods(&self) -> usize {
         self.count(Side::Prefix) + self.count(Side::Suffix)
@@ -242,6 +300,13 @@ pub fn pool_weight(def: &ModDef, m: ModId, w: f64, pool: &Pool) -> f64 {
                 return 0.0;
             }
             bias.as_ref().map_or(w, |b| w * b.factor(def))
+        }
+        Pool::Influenced => {
+            if def.source == Source::Influence {
+                w
+            } else {
+                0.0
+            }
         }
         Pool::Influence(i) => {
             if def.source == Source::Influence && def.influence == Some(*i) {
@@ -282,6 +347,7 @@ pub trait Operation: Send + Sync {
 pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
     let game = ctx.game;
     let mut total = 0;
+    item.foreseen = false;
     for step in steps {
         match step {
             Step::Clear { sides, respect_lock } => {
@@ -293,19 +359,18 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
                 });
             }
             Step::Rarity(r) => item.rarity = *r,
-            Step::Settle => {
-                let most = Side::BOTH.iter().map(|s| item.count(game, *s)).max().unwrap_or(0);
-                item.rarity = match most {
-                    0 => Rarity::Normal,
-                    1 => Rarity::Magic,
-                    _ => Rarity::Rare,
-                };
-            }
+            Step::Settle => item.rarity = item::settled(game, item.kind.base, Side::BOTH.map(|s| item.count(game, s))),
             Step::RollCount => total = roll_count(ctx, item, rng),
             Step::Force(m) => item.affixes.push(Affix { id: *m, crafted: game.def(*m).source == Source::Crafted, fractured: false }),
             Step::Craft(mods) => {
                 if let Some(&m) = mods.iter().find(|m| (game, &*item).fits(**m)) {
                     item.affixes.push(Affix { id: m, crafted: true, fractured: false });
+                }
+            }
+            Step::CraftAny(mods) => {
+                let fit: Vec<ModId> = mods.iter().copied().filter(|&m| (game, &*item).fits(m)).collect();
+                if !fit.is_empty() {
+                    item.affixes.push(Affix { id: fit[rng.below(fit.len())], crafted: true, fractured: false });
                 }
             }
             Step::Draw(pick) => {
@@ -355,10 +420,22 @@ pub fn run(ctx: &Ctx, steps: &[Step], item: &mut Item, rng: &mut Rng) {
             }
             Step::Unveil(prefs) => unveil(ctx, item, rng, prefs),
             Step::Recombine(partner) => recombine(ctx, item, partner.0.item(rng), rng),
+            Step::Awaken(donor) => awaken(ctx, item, donor.0.item(rng), rng),
+            Step::Forget(_) if item.strands == 0 => {}
+            Step::Forget(spend) => {
+                let spent = rng.below(spend.most(item.affixes.len()) as usize + 1) as u8;
+                item.strands = item.strands.saturating_sub(spent);
+            }
+            Step::Remember => item.strands = rng.below(MAX_STRANDS as usize) as u8 + 1,
+            Step::Dominate => dominate(game, item, rng),
+            Step::Imprint => item.imprint = Some(Box::new(Item { imprint: None, ..item.clone() })),
+            Step::Restore => *item = *item.imprint.take().expect("an imprint to restore"),
+            Step::Foresee => item.foreseen = true,
             Step::RecombineBonus => {
-                let limit = Item { rarity: Rarity::Rare, ..item.clone() }.limit(game);
-                if item.affixes.len() < 2 * limit && rng.unit() < ctx.assumptions.recombine_bonus {
-                    let sides = bonus_sides(item.rarity, item.count(game, Side::Prefix), item.count(game, Side::Suffix), limit);
+                let rare = Item { rarity: Rarity::Rare, ..item.clone() };
+                let limits = Side::BOTH.map(|side| rare.limit(game, side));
+                if item.affixes.len() < limits.iter().sum() && rng.unit() < ctx.assumptions.recombine_bonus {
+                    let sides = bonus_sides(item.rarity, item.count(game, Side::Prefix), item.count(game, Side::Suffix), limits);
                     item.rarity = Rarity::Rare;
                     draw(ctx, item, rng, &Pick { sides, ..Pick::ANY });
                     run(ctx, &[Step::Settle], item, rng);
@@ -440,7 +517,6 @@ fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
     item.kind.ilvl = ilvl;
     let native = game.pool(item.kind);
     item.rarity = Rarity::Rare;
-    let limit = item.limit(game);
     let order = if rng.below(2) == 0 { Side::BOTH } else { [Side::Suffix, Side::Prefix] };
     let mut exclusive_kept = false;
     for side in order {
@@ -451,7 +527,7 @@ fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
             here.push(exclusive[rng.below(exclusive.len())]);
         }
         let table = recombine_kept(ctx, here.len());
-        let keep = rng.pick(table.iter().map(|e| e.1)).map_or(0, |i| table[i].0 as usize).min(limit);
+        let keep = rng.pick(table.iter().map(|e| e.1)).map_or(0, |i| table[i].0 as usize).min(item.limit(game, side));
         let mut kept = 0;
         while kept < keep && !here.is_empty() {
             // A mod sharing a group with one already kept is discarded.
@@ -469,6 +545,46 @@ fn recombine(ctx: &Ctx, item: &mut Item, other: Item, rng: &mut Rng) {
     run(ctx, &[Step::Settle], item, rng);
 }
 
+/// Does an Awakener's Orb carry this mod over: an influence mod, elevated or not?
+pub fn influenced_mod(def: &ModDef) -> bool {
+    def.influence.is_some() && matches!(def.source, Source::Influence | Source::Elevated)
+}
+
+fn awaken(ctx: &Ctx, item: &mut Item, donor: Item, rng: &mut Rng) {
+    let game = ctx.game;
+    let mut pick = |from: &Item| {
+        let options: Vec<ModId> = from.affixes.iter().map(|a| a.id).filter(|&m| influenced_mod(game.def(m))).collect();
+        (!options.is_empty()).then(|| options[rng.below(options.len())])
+    };
+    let kept = pick(item);
+    let given = pick(&donor);
+    item.affixes.clear();
+    item.kind.influences.0 |= donor.kind.influences.0;
+    item.rarity = Rarity::Rare;
+    let add = |item: &mut Item, m: ModId| item.affixes.push(Affix { id: m, crafted: false, fractured: false });
+    match (kept, given) {
+        (Some(a), Some(b)) if game.def(a).groups.iter().any(|g| game.def(b).groups.contains(g)) => {
+            add(item, if rng.below(2) == 0 { a } else { b })
+        }
+        _ => kept.into_iter().chain(given).for_each(|m| add(item, m)),
+    }
+}
+
+fn dominate(game: &Game, item: &mut Item, rng: &mut Rng) {
+    let locked = item.locked(game);
+    let influenced = |a: &Affix| !a.fractured && influenced_mod(game.def(a.id));
+    let removable: Vec<usize> =
+        (0..item.affixes.len()).filter(|&i| influenced(&item.affixes[i]) && !locked[game.def(item.affixes[i].id).side as usize]).collect();
+    if !removable.is_empty() {
+        item.affixes.remove(removable[rng.below(removable.len())]);
+    }
+    let upgradable: Vec<usize> = (0..item.affixes.len()).filter(|&i| influenced(&item.affixes[i])).collect();
+    if !upgradable.is_empty() {
+        let a = &mut item.affixes[upgradable[rng.below(upgradable.len())]];
+        a.id = game.upgrade(item.kind, a.id);
+    }
+}
+
 /// The kept-count table for a pool of `n` affixes on one side.
 pub fn recombine_kept<'a>(ctx: &'a Ctx, n: usize) -> &'a [(u8, f64)] {
     let rows = &ctx.assumptions.recombine_kept;
@@ -477,12 +593,12 @@ pub fn recombine_kept<'a>(ctx: &'a Ctx, n: usize) -> &'a [(u8, f64)] {
 
 /// Where a recombination's bonus mod may go: a magic result fills an empty side, a rare one
 /// the side that has room.
-pub fn bonus_sides(rarity: Rarity, prefixes: usize, suffixes: usize, limit: usize) -> Sides {
+pub fn bonus_sides(rarity: Rarity, prefixes: usize, suffixes: usize, limits: [usize; 2]) -> Sides {
     match rarity {
         Rarity::Magic if prefixes == 0 => Sides::Only(Side::Prefix),
         Rarity::Magic if suffixes == 0 => Sides::Only(Side::Suffix),
-        _ if prefixes >= limit => Sides::Only(Side::Suffix),
-        _ if suffixes >= limit => Sides::Only(Side::Prefix),
+        _ if prefixes >= limits[0] => Sides::Only(Side::Suffix),
+        _ if suffixes >= limits[1] => Sides::Only(Side::Prefix),
         _ => Sides::Both,
     }
 }
@@ -503,7 +619,8 @@ pub fn eligible(ctx: &Ctx, item: &Item, pick: &Pick) -> Vec<(ModId, f64)> {
     let allowed = resolve(pick.sides, item.eldritch);
     let open = Side::BOTH.map(|s| allowed[s as usize] && item.open(game, s) > 0);
     let banned = banned_tags(game, |m| item.affixes.iter().any(|a| a.id == m));
-    game.pool(item.kind)
+    let pool = game.pool(item.kind);
+    let rolls: Vec<(ModId, f64)> = pool
         .mods
         .iter()
         .filter_map(|&(m, w)| {
@@ -516,7 +633,11 @@ pub fn eligible(ctx: &Ctx, item: &Item, pick: &Pick) -> Vec<(ModId, f64)> {
             let w = if ok { pool_weight(def, m, w, &pick.pool) } else { 0.0 };
             (w > 0.0).then_some((m, w))
         })
-        .collect()
+        .collect();
+    if item.strands == 0 {
+        return rolls;
+    }
+    rolls.into_iter().map(|(m, w)| (m, w * game.strand_factor(&pool, item.kind.ilvl, item.strands, m))).filter(|&(_, w)| w > 0.0).collect()
 }
 
 /// Tags the "Cannot roll Attack/Caster Modifiers" metamods present (per `has`) rule out.
@@ -565,8 +686,8 @@ impl View for (&Game, &Item) {
     fn count(&self, side: Side) -> usize {
         self.1.count(self.0, side)
     }
-    fn limit(&self) -> usize {
-        self.1.limit(self.0)
+    fn limit(&self, side: Side) -> usize {
+        self.1.limit(self.0, side)
     }
     fn crafted(&self) -> usize {
         self.1.crafted()
@@ -584,8 +705,10 @@ impl View for (&Game, &Item) {
         self.1.open(self.0, self.0.def(m).side) > 0 && !self.1.blocks(self.0, m)
     }
     fn fixed_blocks(&self, m: ModId) -> bool {
-        let groups = &self.0.def(m).groups;
-        self.1.affixes.iter().any(|a| a.fractured && self.0.def(a.id).groups.iter().any(|g| groups.contains(g)))
+        let def = self.0.def(m);
+        let fractured: Vec<&ModDef> = self.1.affixes.iter().filter(|a| a.fractured).map(|a| self.0.def(a.id)).collect();
+        fractured.iter().filter(|f| f.side == def.side).count() >= item::limit(self.0, self.1.kind.base, Rarity::Rare, def.side)
+            || fractured.iter().any(|f| f.groups.iter().any(|g| def.groups.contains(g)))
     }
     fn locked(&self) -> [bool; 2] {
         self.1.locked(self.0)
@@ -593,8 +716,17 @@ impl View for (&Game, &Item) {
     fn has_metamod(&self) -> bool {
         self.1.affixes.iter().any(|a| self.0.metamods.contains(&a.id))
     }
-    fn influenced(&self) -> bool {
-        self.1.kind.influences.0 != 0
+    fn influences(&self) -> u8 {
+        self.1.kind.influences.0
+    }
+    fn imprinted(&self) -> bool {
+        self.1.imprint.is_some()
+    }
+    fn foreseen(&self) -> bool {
+        self.1.foreseen
+    }
+    fn influenced_mods(&self) -> usize {
+        self.1.affixes.iter().filter(|a| influenced_mod(self.0.def(a.id))).count()
     }
     fn eldritch(&self) -> Option<Side> {
         self.1.eldritch
@@ -627,6 +759,15 @@ pub fn parse(game: &Game, class: &str, op: &str, avoid: &[crate::game::GroupId])
     }
     if let Some(o) = misc::parse(op) {
         return Some(o);
+    }
+    if op == "remembrance" {
+        return Some(Box::new(memory::Remembrance));
+    }
+    if let Some(o) = beast::parse(game, op) {
+        return Some(o);
+    }
+    if op == "dominance" {
+        return Some(Box::new(influence::Dominance));
     }
     let (mechanic, arg) = op.split_once(':')?;
     match mechanic {

@@ -191,6 +191,24 @@ impl App {
             s.run_ladder();
         }
     }
+
+    fn draw(&mut self, ui: &mut Ui) {
+        egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
+        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        if self.show_panel {
+            egui::Panel::left("side").resizable(true).default_size(250.0).show(ui, |ui| self.side_panel(ui));
+        }
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(2)).show(ui, |ui| {
+            self.tree.ui(&mut Behavior { state: &mut self.state }, ui);
+        });
+        if self.about {
+            egui::Window::new("About ponder").open(&mut self.about).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
+                ui.label("ponder finds Path of Exile 3.30 market holes: what ladder characters wear, the cheapest way to craft it, and what trade has.");
+                ui.label("Costs are expected chaos per finished item from the solver (currency, bench crafts and clicking time).");
+                ui.label("Click a column header to sort; ⬆/⬇ and PgUp/PgDn move through the table; drag tabs to rearrange the panes.");
+            });
+        }
+    }
 }
 
 fn filters(ui: &mut Ui, s: &mut State) {
@@ -251,25 +269,38 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        if self.show_panel {
-            egui::Panel::left("side").resizable(true).default_size(250.0).show(ui, |ui| self.side_panel(ui));
-        }
-        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(2)).show(ui, |ui| {
-            self.tree.ui(&mut Behavior { state: &mut self.state }, ui);
-        });
-        if self.about {
-            egui::Window::new("About ponder").open(&mut self.about).collapsible(false).resizable(false).show(ui.ctx(), |ui| {
-                ui.label("ponder finds Path of Exile 3.30 market holes: what ladder characters wear, the cheapest way to craft it, and what trade has.");
-                ui.label("Costs are expected chaos per finished item from the solver (currency, bench crafts and clicking time).");
-                ui.label("Click a column header to sort; ⬆/⬇ and PgUp/PgDn move through the table; drag tabs to rearrange the panes.");
-            });
-        }
+        self.draw(ui);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, SAVED, &self.state.saved);
         eframe::set_value(storage, TILES, &self.tree);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_ui_renders_headlessly() {
+        let ctx = egui::Context::default();
+        style(&ctx);
+        let mut app = App {
+            state: State::new(&ctx, Saved::default()),
+            tree: panes::default_tree(),
+            show_panel: true,
+            about: false,
+        };
+        for size in [[1500.0, 900.0], [900.0, 500.0]] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+            let primitives = ctx.tessellate(std::mem::take(&mut output.shapes), output.pixels_per_point);
+            output.drop_without_applying_deltas();
+            assert!(!primitives.is_empty());
+        }
     }
 }

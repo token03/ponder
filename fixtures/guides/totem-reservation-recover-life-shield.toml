@@ -1,6 +1,6 @@
 sheet = ".+1 TotemReserRecover Life Str "
 scope = "The foulborn prefix and crafted block are not modelled."
-base = "Ezomyte Tower Shield"
+base = "Heat-attuned Tower Shield"
 influences = ["shaper", "hunter"]
 
 [goal]

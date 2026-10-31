@@ -35,6 +35,14 @@ pub struct Mod {
     pub text: Option<String>,
     #[serde(rename = "type", default)]
     pub family: String,
+    #[serde(default)]
+    pub stats: Vec<Stat>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Stat {
+    pub id: String,
+    pub min: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

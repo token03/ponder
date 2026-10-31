@@ -6,7 +6,7 @@ use ponder_plan::{
     supply::Stock,
 };
 use ponder_rules::{
-    game::{Game, Influences, Kind, Side},
+    game::{Game, GroupId, Influences, Kind, ModId, Side, TagId},
     goal::{Influence, Rarity, Source},
     item::{Affix, Item},
     ops::{self, Operation},
@@ -26,6 +26,27 @@ pub struct Summary {
     pub outcomes: usize,
     pub usage: Vec<(String, f64)>,
     pub unpriced: Vec<String>,
+}
+
+/// The share of a side's junk roll weight a tag needs before banning it is worth offering.
+const BAN_JUNK_SHARE: f64 = 0.5;
+
+/// A tag ban pays on a side whose wanted mods all carry the tag, since annuls then skip them, or
+/// whose junk mostly carries it while some wanted mod there doesn't, since exalts then skip the junk.
+fn ban_pays(game: &Game, target: &Target, rolls: &[(ModId, f64)], avoid: &[GroupId], tag: TagId) -> bool {
+    Side::BOTH.into_iter().any(|side| {
+        let needs: Vec<_> = target.needs.iter().filter(|need| need.ok.iter().any(|&id| game.def(id).side == side)).collect();
+        let tagged = needs.iter().filter(|need| need.ok.iter().any(|&id| game.def(id).tags.contains(&tag))).count();
+        let (banned, junk) = rolls
+            .iter()
+            .filter(|&&(id, _)| game.def(id).side == side && !game.def(id).groups.iter().any(|group| avoid.contains(group)))
+            .fold((0.0, 0.0), |(banned, junk), &(id, weight)| {
+                (banned + if game.def(id).tags.contains(&tag) { weight } else { 0.0 }, junk + weight)
+            });
+        let protects = !needs.is_empty() && tagged == needs.len();
+        let blocks = tagged < needs.len() && junk > 0.0 && banned >= BAN_JUNK_SHARE * junk;
+        protects || blocks
+    })
 }
 
 fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Method> {
@@ -106,6 +127,10 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Met
             .map(String::from),
         );
     }
+    names.extend(["remembrance", "imprint", "restore", "beast:wild-bristle-matron"].map(String::from));
+    if target.influences.0 != 0 {
+        names.extend(["harvest:reforge-influence", "dominance"].map(String::from));
+    }
     for name in ["bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"] {
         if ops::parse(game, class, name, &avoid).is_some() {
             names.push(name.into());
@@ -113,9 +138,8 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Met
     }
     for tag in ["attack", "caster"] {
         let name = format!("bench:cannot-roll-{tag}");
-        if game.tag_id(tag).is_some_and(|tag| {
-            rolls.iter().any(|&(id, _)| game.def(id).tags.contains(&tag)) || wanted.iter().any(|&id| game.def(id).tags.contains(&tag))
-        }) && ops::parse(game, class, &name, &avoid).is_some()
+        if game.tag_id(tag).is_some_and(|tag| ban_pays(game, target, &rolls, &avoid, tag))
+            && ops::parse(game, class, &name, &avoid).is_some()
         {
             names.push(name);
         }

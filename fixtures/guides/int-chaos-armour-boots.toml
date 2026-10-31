@@ -1,5 +1,5 @@
 sheet = "IntChaos Armour Boots"
-base = "Titan Greaves"
+base = "Martyr Boots"
 ilvl = 86
 quality = 28
 
@@ -10,6 +10,7 @@ mods = [
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
   { text = "#% increased Movement Speed", tier = 2 },
+  { text = "#% chance to Avoid being Frozen", source = "crafted" },
 ]
 
 [stages.fractured_life]
@@ -34,6 +35,15 @@ mods = [
   { text = "+# to Intelligence", tier = 2 },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
+]
+
+[stages.rolled]
+mods = [
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "+# to Intelligence", tier = 2 },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+  { text = "#% increased Movement Speed", tier = 2 },
 ]
 
 [[steps]]
@@ -62,4 +72,9 @@ else = 4
 
 [[steps]]
 do = ["eldritch-implicit:lesser-ember", "bench:armour", "exalted", "eldritch-annulment"]
+until = "rolled"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:JunMaster2AvoidFreeze3"]
 until = "goal"
+note = "Craft Avoid being Frozen."

@@ -39,15 +39,12 @@ assume PoE 1.
 | **Cold run** | Game data, prices and candidate items are on disk; the plan cache is empty. Network time is excluded. |
 | **Warm run** | Same as cold, but the plan cache was filled by a previous run with identical data, prices, assumptions and code version. |
 
-Goals describe finished quality rather than prescribing ingredients. A modifier requirement
-defaults to T2-or-better; `tier = 1` or another positive integer changes that floor and
-`tier = "any"` explicitly removes it. Tier floors apply to natural, influenced and essence
-modifiers; special sources such as crafted, unveiled and fossil-only modifiers retain their
-source-specific requirements. Comparable natural and
-essence rolls can satisfy the same tier-bounded requirement. Bench modifiers satisfy only
-requirements explicitly marked crafted; an unveiled requirement cannot be met by its bench
-counterpart. The current tier comparison uses modifier levels as a quality approximation;
-essence-only families without natural tiers rank within the essences available on that base.
+Goals describe finished quality, not ingredients. A requirement defaults to T2-or-better;
+`tier = N` sets the floor and `tier = "any"` removes it. Floors apply to natural, influenced and
+essence mods, which can satisfy each other; tiers compare by mod level, and essence-only
+families rank among that base's essences. Crafted, unveiled and fossil-only mods keep their
+source: bench mods satisfy only requirements marked crafted, and an unveiled requirement is not
+met by its bench counterpart.
 
 ## 3. Project immutables
 
@@ -100,7 +97,7 @@ every operation.
    eligible pool, re-evaluated after each draw.
 5. **Fractured mods** survive rerolls and removals. Recombination only pools the fractured
    affixes belonging to the selected input base. Fracturing needs a rare with at least four
-   mods, on a base that isn't influenced or synthesised. Fracturing ignores "Prefixes Cannot
+   mods and none fractured, on a base that isn't influenced or synthesised. Fracturing ignores "Prefixes Cannot
    Be Changed" and "Suffixes Cannot Be Changed"; neither lock protects an affix from its pick.
 6. **Crafted mods** obey the bench limit (one, or three with the multimod metamod). They are
    removed by "remove crafted mods" or a full reset unless fractured. A fractured bench
@@ -164,68 +161,53 @@ trait Operation {
     fn steps(&self) -> &[Step];                             // what it does, as data
     fn cost(&self) -> Cost;                                 // price ids + seconds
 }
-enum Step { Clear, Rarity, Settle, RollCount, Force, Craft, Draw, Fill, Remove, Swap,
-            RemoveCrafted, Influence, Eldritch, Fracture, Veil, Unveil }
 ```
 
-A mechanic is a composition of primitive steps. `ops::run` samples them on real items (the
-simulator); `Lens::run` computes their exact distribution on solver states. A mechanic is
-therefore written once, and a new mechanic needs no solver change. Only a new primitive does,
-and it gets both interpretations plus the agreement test. The **lens** derives the state from
-the goals and operations (SPEC §5.3).
+A mechanic is a composition of primitive `Step`s. `ops::run` samples them on real items (the
+simulator); `Lens::run` computes their exact distribution on solver states. Only a new
+primitive touches the solver side, and it gets both interpretations plus the agreement test.
 
-Lens classes split mods only where it changes an outcome: by goal need, tracked group, a tag
-that a draw, removal or ban filters on, influence and unveil preference. Fossil and veiled mods
-join the natural mods they share these with, since they differ only in their weights. Tracked
-mods key on all their tracked groups (a hybrid's conflicts are not its parts'); untracked mods
-also split by the draw pools that can roll them, so a mod a pool cannot roll (a fracture, an
-earlier fossil's) never counts as one of that pool's draws.
+The **lens** derives the state (§5.3). Classes split mods only where it changes an outcome: goal
+need, tracked group, a tag a draw, removal or ban filters on, influence and unveil preference.
+Fossil and veiled mods join the natural mods they share these with. Tracked mods key on all
+their tracked groups (a hybrid's conflicts are not its parts'); untracked mods also split by the
+draw pools that can roll them.
 
-Still to come in the same shape: observation steps (Awakener preview: draw offers, then choose), operations on two items (recombinator, Awakener), and **subgoal generators**:
-the intermediates a mechanic makes useful (a recombinator suggests "only these mods on this
-side"; fracturing suggests "4-mod item with X").
+Still to come in the same shape: observation steps (Awakener), two-item operations, and
+**subgoal generators** (a recombinator suggests "only these mods on this side"; fracturing
+suggests "4-mod item with X").
 
-**Planner.** An AND/OR graph over subgoals. OR: alternative methods for one subgoal (buy, craft,
-join). AND: a join needs both inputs. Subgoals are shared across every goal in a run, so a
-thousand goals on the same base reuse the same intermediate solves. This is where donor bases,
-starting points and recombinators live.
+**Planner.** An AND/OR graph over subgoals: OR over methods (buy, craft, join), AND over a
+join's inputs. Subgoals are shared across every goal in a run. Donor bases, starting points and
+recombinators live here.
 
-**Solver** (`ponder-solve`, no PoE types). For one method ("from states in S, reach subgoal P
-by repeating operations"), it finds the cheapest policy over the derived states: a stochastic
-shortest-path problem. It enumerates reachable states, drops actions that risk an unreachable
-goal, and solves strongly connected components from the goal backwards with exact policy
-evaluation inside each; evaluation splits again by the components of the chosen policy's graph,
-so each linear solve is only as large as one loop: dense elimination for small components,
-preconditioned BiCGSTAB and Gauss-Seidel with self-loops eliminated for larger ones. A fixed policy (a guide recipe) may give up:
-states it can never finish restart instead, as a crafter abandons a bricked item. Starting over is a restart state worth the start's own value, found by
-Newton steps on the start's affine value, so buying fresh does not merge every state into one
-component. Rerolls (chaos, fossils, reforges, essences on rares) pass through a hub state, the
-item after its reset, so their thousands of outcomes are stored once per hub rather than once
-per item. Recombining an item that holds junk can be deferred. With free restart and nonnegative
-costs, the solver obtains a feasible restricted policy, extends its finite values by zero on
-unknown states, and checks every omitted action at every known state, including states outside
-the policy. Violated Bellman inequalities cause admission and another solve. Passing every
-inequality certifies the realized start value. The rules layer batches recombination expectations
-using conditional prefix/suffix operators, preserving donor correlation, fractured inheritance
-and global exclusivity without adding solver states. Boolean support over actual input pairs
-discovers missing successors before parent actions are admitted; their ordinary continuations
-are priced first. Each round admits the best violated action per state and checks all remaining
-actions again. Already-interned successors are linked directly during parallel materialization.
-Recombination probabilities are aggregated by compact side selections and inherited attributes
-before constructing full item states; their joint distribution is preserved.
-Other models use optimistic terminal
-placeholders costing only the immediate action price, expanding their real outcomes when selected;
-their returned policy uses no unexpanded action. Both admission schemes require nonnegative
-continuation costs. Any wider focused search (iLAO\* and friends) is a later swap behind the same `Model` trait,
-adopted only if it wins on the full workload.
+**Solver** (`ponder-solve`, no PoE types). For one method it finds the cheapest policy over the
+derived states, a stochastic shortest-path problem:
+
+- Enumerate reachable states, drop actions that risk an unreachable goal, and solve strongly
+  connected components from the goal backwards with exact policy evaluation (dense elimination
+  for small components, preconditioned BiCGSTAB / Gauss-Seidel for large ones).
+- Starting over is a restart state worth the start's value, found by Newton steps on the start's
+  affine value, so restarts do not merge every state into one component. A fixed policy (a guide
+  recipe) restarts from states it can never finish.
+- Rerolls pass through a hub state (the item after its reset), so their outcomes are stored once.
+- Admission: with free restart and nonnegative costs, solve a restricted policy, then check every
+  omitted action's Bellman inequality at every known state; admit the best violated action per
+  state and resolve. Passing every check certifies the start value. Unexpanded actions are
+  optimistic placeholders priced at their immediate cost; the returned policy uses none.
+- Recombination expectations are batched in the rules layer with conditional prefix/suffix
+  operators, preserving donor correlation, fractured inheritance and global exclusivity. Recombining
+  an item that holds junk can be deferred.
+
+Wider focused search (iLAO\* and friends) is a later swap behind the same `Model` trait, adopted
+only if it wins on the full workload.
 
 **Simulator.** Runs a plan (ponder's policy or a guide recipe) on real items for validation and
 recipe rendering.
 
-Crates: `ponder-rules` (items, goals, operations, lens, simulator), `ponder-solve`,
-`ponder-plan` (market, craft models, recipes; grows into the planner), plus `ponder-net`,
-`ponder-cli` and `ponder-app`. `ponder-core`, `ponder-game` and `ponder` are the previous
-implementation, deleted as their responsibilities move.
+Crates: `ponder-rules`, `ponder-solve`, `ponder-plan` (market, craft models, recipes; grows into
+the planner), `ponder-net`, `ponder-cli`, `ponder-app`. `ponder-game` and `ponder` are the
+previous implementation, deleted as their responsibilities move.
 
 ## 7. Performance targets
 
@@ -281,31 +263,37 @@ caches.
 | Rare mod count (chaos, alchemy, essence, fossil, Harvest) | 4 / 5 / 6 mods = 9 / 3 / 1 | 1,000-chaos sample (674 / 239 / 87), [Reddit 2020](https://lr.us.psf.lt/r/pathofexile/comments/ex2c5o/comment/fg8je7u). Medium. |
 | Rare jewel mod count | 3 / 4 = 3 / 1 | Current code; unverified. Low. |
 | Magic mod count (transmute, alteration) | 1 / 2 = 1 / 1 | Current code; unverified. Low. |
-| Recombinator mods kept per side | by pool size; table in assumptions file | [poewiki](https://www.poewiki.net/wiki/Recombinator) / Butsicles. Medium; unmeasured above 6. |
 | Recombinator dust cost | priced, not zero | Guide note: "dust for recombs still has price". To source. |
 | Time per operation | 1–5 s by type; recombine 15 s | Current code; rough. |
 | Chaos per hour | 1,500 | User preference. |
 | Plain base price | 5c at any item level | Bases are not in the price file. Low. |
 | Bought stage prices | `price` on the guide stage | Rough market estimates, marked in each guide. Low. |
 | Recombinator price | 10 chaos each kind, when the price file has none | Guess. Low. |
-| Recombinator kept affixes | Per side, by pooled count n: n=1 keeps 0/1 at 41:59; 2 keeps 1/2 at 2:1; 3 keeps 1/2/3 at 4:5:1; 4 keeps 1/2/3 at 1:6:3; 5 keeps 2/3 at 43:57; 6+ keeps 2/3 at 3:7 | User-supplied current wiki's empirical estimates. Medium; these are estimated distributions, not verified exact game constants. |
+| Recombinator kept affixes | Per side, by pooled count n: n=1 keeps 0/1 at 41:59; 2 keeps 1/2 at 2:1; 3 keeps 1/2/3 at 4:5:1; 4 keeps 1/2/3 at 1:6:3; 5 keeps 2/3 at 43:57; 6+ keeps 2/3 at 3:7 | [poewiki](https://www.poewiki.net/wiki/Recombinator) empirical estimates. Medium; unmeasured above 6. |
 | Recombinator selection | Uniform selection within eligible ordinary candidates, skipping conflicting groups. Non-native ordinary modifiers count before selection but cannot survive on an ineligible heir. | Community model; modifier weighting in the current game is not fully known. Medium/low. |
 | Recombinator exclusives | At most one globally. Each side's exclusive candidates form one count slot, with one candidate selected uniformly among those pooled; either side is processed first at 50/50. | Global cap: user-supplied wiki and original empirical research, high. Count collapse: [post-3.26 experiments](https://www.reddit.com/r/pathofexile/comments/1ldc3lz/326_recomb_psas_a_few_useful_tipsconfirmations/), medium. Side-order and candidate weighting remain modelling assumptions after 3.26. |
 | Recombinator crafted classification | A crafted modifier with an ordinary natural/influenced counterpart in the same data family is non-exclusive; other crafted families are exclusive. Essence-only, veiled, fossil/drop-only and elevated modifiers are exclusive. | Data-derived classification; the full crafted exception list remains incompletely verified. Medium/low. |
-| Recombinator bonus mod | Disabled by default | Current Unpredictable Recombination does not use the old Sentinel bonus roll. The numerical hook remains available to existing assumption-based tests. |
+| Recombinator bonus mod | Disabled | Unpredictable Recombination has no Sentinel bonus roll. |
 | Recombinator heir | Base, influences, quality and Eldritch implicits from either item at even odds; item level two above the floor of the mean, at most the higher input's; influenced mods need the heir's influence | Craft of Exile's simulator; item level from [poewiki](https://www.poewiki.net/wiki/Recombinator). Medium. |
 | Fracturing | One uniform pick among all affixes but veiled ones, crafted included; a fractured craft is permanent and still consumes the crafted-mod slot | User (3.29). High. |
 | "Cannot Be Changed" refill | New mods may land on either side when it has room | Game behaviour as commonly reported. Medium. |
 | Veiled side | Prefix or suffix, even odds | Unverified. Low. |
+| Remove-and-veil planning phase | Offered with at most one unmet requirement that cannot be bench-finished; all item requirements remain hard goals. | Search restriction, not a game rule. Preserve Oracle prices when changing it. |
 | Unveil | 3 offers drawn by weight without repeats (mods of one class share its mean weight); the wanted offer is kept, else the first | Approximation. Medium. |
 | Harvest add/remove cost | 10 × the matching reforge's lifeforce | Unverified (`ADD_REMOVE_FACTOR`). Low. |
 | Influence orb price | Priced as the matching conqueror exalted orb | Proxy; not in the price file. Low. |
 | Eldritch implicits | Only which side is dominant (Exarch prefixes, Eater suffixes); implicit tiers are not modelled | Game rule, simplified. Medium. |
-| Fracturing | Rare, at least 4 mods, not influenced, none fractured; fractures one random mod | Game rule. High. |
 | Starting over | Any item can be abandoned for nothing and a new start bought | Modelling choice. |
 | Guide recipe at the goal | A recipe stops the moment the item meets the goal, even partway through an attempt (no annul after the exalt that finished it) | How crafters play. High. |
 | Essence tiers | An essence mod's tier is where its level falls among the base's natural tiers of the same template | Matches how guides name essence tiers. Medium. |
 | Guide recipe without a lock | When a step's "Cannot Be Changed" craft cannot be made, the attempt goes to the step's `else` (step 1 if none) | Reading of how guides are followed. Medium. |
+| Memory strands | A family rolls its top `floor(100/(2.5s+147.5)·(T−1))+1` tiers (all at 0 strands) and keeps its weight; a currency uses 0 to its most strands evenly (exalt by mods held 0–5: 10/16/22/26/32/34); Remembrance sets 1–100 evenly | [poewiki](https://www.poewiki.net/wiki/Memory_Strand); the even spreads and the exalt onto a bare item are assumed. Medium/low. |
+| Strands in solver states | Rounded down to the fewest strands with the same class weights | Abstraction; overstates cost slightly, never understates it. |
+| Orb of Dominance | Remove a random influenced mod no lock protects, then upgrade a random influenced mod, locked or not: a tier up, the best tier to its elevated mod | Order and lock reach inferred from guides. Low. |
+| Wild Bristle Matron | Adds a "Cannot Be Changed" lock that fits, either as likely | Guess. Low. |
+| Imprints in plans | An imprint serves the one operation after it; then the plan restores it or lets it go | Search restriction, not a game rule. |
+| Hinekora's Lock | A Craicic Croaker and a Black Mórrígan lock a magic item: the next currency's result shows before it is used, and any currency uses the lock up (a chromatic, to decline) | [poewiki](https://www.poewiki.net/wiki/Hinekora%27s_Lock). Medium. |
+| Affix limits from implicits | Cogwork, Simplex and Focused limits change every rarity's, never below none | Unverified. Low. |
 
 ## 11. Scope
 
@@ -325,5 +313,4 @@ and the planner must support them from day one, even before the mechanic lands.
 **Inputs:** ladder demand mining stays as the candidate-item source. Sale prices come from the
 trade API, good enough for now and not a focus.
 
-**Later:** unveiling, Awakener, beastcrafting, imprints, elevation, influence application,
-catalysts, synthesis implicits, Eldritch implicits.
+**Later:** synthesis implicits, corruption.

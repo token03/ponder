@@ -49,7 +49,7 @@ const CASES: &[Case] = &[
     ),
     (
         "dex-armour-chaos-gloves",
-        "Titan Gauntlets",
+        "Ancient Gauntlets",
         "Gloves",
         &[
             "essence:deafening-envy",
@@ -70,7 +70,7 @@ const CASES: &[Case] = &[
     ),
     (
         "dex-armour-chaos-gloves",
-        "Titan Gauntlets",
+        "Ancient Gauntlets",
         "Gloves",
         &["essence:deafening-sorrow", "eldritch-implicit:lesser-ember", "bench:armour", "eldritch-annulment"],
         Some("resist"),

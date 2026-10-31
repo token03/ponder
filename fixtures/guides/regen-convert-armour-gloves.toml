@@ -1,5 +1,5 @@
 sheet = " RegenConvert Armour Gloves"
-base = "Titan Gauntlets"
+base = "Leviathan Gauntlets"
 ilvl = 85
 quality = 27
 
@@ -10,6 +10,7 @@ mods = [
   { text = "#% increased Life Regeneration rate", tier = 1 },
   { text = "+#% to Fire Resistance", tier = 2 },
   { text = "#% of Physical Damage Converted to Fire Damage", source = "veiled" },
+  { text = "#% increased Area Damage / #% increased Area of Effect", source = "crafted" },
 ]
 
 [stages.life_four_mods]
@@ -32,6 +33,15 @@ mods = [
   { text = "+# to maximum Life", tier = 1, fractured = true },
   { text = "#% increased Life Regeneration rate", tier = 1 },
   { text = "+#% to Fire Resistance", tier = 2 },
+]
+
+[stages.rolled]
+mods = [
+  { text = "+#% to Chaos Resistance", tier = 2 },
+  { text = "+# to maximum Life", tier = 1, fractured = true },
+  { text = "#% increased Life Regeneration rate", tier = 1 },
+  { text = "+#% to Fire Resistance", tier = 2 },
+  { text = "#% of Physical Damage Converted to Fire Damage", source = "veiled" },
 ]
 
 [[steps]]
@@ -60,4 +70,9 @@ else = 4
 
 [[steps]]
 do = ["bench:remove-crafted", "bench:suffixes-cannot-be-changed", "veiled-chaos", "bench:convert-cold", "unveil:convert-fire"]
+until = "rolled"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:area-of-effect"]
 until = "goal"
+note = "Craft the last prefix."

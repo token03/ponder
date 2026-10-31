@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use ponder_plan::{
@@ -26,6 +26,9 @@ pub(super) fn in_pool<T: Send>(workers: Option<usize>, work: impl FnOnce() -> T 
         work()
     }
 }
+
+/// Chaos for a base with no trade quote: a fresh base is never free.
+const UNQUOTED_BASE_PRICE: f64 = 1.0;
 
 fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64) -> Result<Summary> {
     let (game, _) = cx.rules()?;
@@ -78,7 +81,7 @@ pub fn solve_one(cx: &Context, estimate: &mut Estimate, prices: &Prices) {
     let result = (|| -> Result<Arc<Summary>> {
         let (_, data_key) = cx.rules()?;
         let sorted: BTreeMap<_, _> = prices.iter().collect();
-        let base_price = estimate.base_price.map_or(0.0, |price| price.0);
+        let base_price = estimate.base_price.map_or(UNQUOTED_BASE_PRICE, |price| price.0);
         let key = blake3::hash(&serde_json::to_vec(&(
             PLAN_VERSION,
             problem.fingerprint().to_string(),
@@ -109,13 +112,28 @@ pub fn solve_one(cx: &Context, estimate: &mut Estimate, prices: &Prices) {
 pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>, progress: Option<Progress>) {
     let done = AtomicUsize::new(0);
     let total = estimates.len();
+    let price = |estimate: &mut Estimate| {
+        solve_one(cx, estimate, prices);
+        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(say) = progress {
+            say(&format!("processed {n}/{total}: {}", estimate.title));
+        }
+    };
     in_pool(workers, || {
-        estimates.par_iter_mut().for_each(|estimate| {
-            solve_one(cx, estimate, prices);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if let Some(say) = progress {
-                say(&format!("processed {n}/{total}: {}", estimate.title));
-            }
+        if total <= 1 || rayon::current_num_threads() == 1 {
+            estimates.iter_mut().for_each(price);
+            return;
+        }
+        let pending = Mutex::new(estimates.iter_mut());
+        (0..rayon::current_num_threads().min(total)).into_par_iter().for_each(|_| {
+            let solver = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("solver pool");
+            solver.install(|| {
+                loop {
+                    let next = pending.lock().expect("pending estimates").next();
+                    let Some(estimate) = next else { break };
+                    price(estimate);
+                }
+            });
         })
     });
 }

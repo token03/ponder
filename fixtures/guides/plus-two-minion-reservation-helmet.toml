@@ -10,6 +10,7 @@ mods = [
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
   { text = "+# to maximum Life", tier = 1 },
+  { text = "#% increased Area of Effect / +# to Level of Socketed AoE Gems", source = "crafted" },
 ]
 
 [stages.minion_four_mods]
@@ -32,6 +33,15 @@ mods = [
   { text = "+# to Level of all Minion Skill Gems", tier = 1, fractured = true },
   { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
   { text = "+#% to Chaos Resistance", tier = 2 },
+]
+
+[stages.rolled]
+mods = [
+  { text = "#% increased Mana Reservation Efficiency of Skills", tier = 2 },
+  { text = "+# to Level of all Minion Skill Gems", tier = 1, fractured = true },
+  { text = ["+#% to Fire Resistance", "+#% to Cold Resistance", "+#% to Lightning Resistance"], tier = 1 },
+  { text = "+#% to Chaos Resistance", tier = 2 },
+  { text = "+# to maximum Life", tier = 1 },
 ]
 
 [[steps]]
@@ -61,4 +71,9 @@ else = 4
 
 [[steps]]
 do = ["eldritch-implicit:lesser-ember", "bench:armour", "exalted", "eldritch-annulment"]
+until = "rolled"
+
+[[steps]]
+do = ["bench:remove-crafted", "bench:area-of-effect-and-socketed-aoe"]
 until = "goal"
+note = "Craft the last prefix: +1 socketed AoE gems."

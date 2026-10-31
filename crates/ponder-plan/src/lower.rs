@@ -50,7 +50,15 @@ pub(crate) struct SideBound {
 
 impl SideBound {
     pub(crate) fn new(craft: &Craft<'_>, limit: usize) -> Option<Self> {
-        if !craft.ops.iter().any(|(op, _)| op.steps().iter().any(|s| matches!(s, Step::Recombine(_)))) {
+        let has = |f: fn(&Step) -> bool| craft.ops.iter().any(|(op, _)| op.steps().iter().any(f));
+        if !has(|s| matches!(s, Step::Recombine(_)))
+            || has(|s| {
+                matches!(
+                    s,
+                    Step::Awaken(_) | Step::Remember | Step::Imprint | Step::Restore | Step::Foresee | Step::CraftAny(_) | Step::Dominate
+                )
+            })
+        {
             return None;
         }
         let relaxation = SideRelaxation::new(craft.lens, craft.goal)?;
@@ -114,6 +122,7 @@ impl SideBound {
                 Frame::Run(*op, *step, self.relaxation.project(s))
             }
             Node::Goal => return 0.0,
+            Node::Foreseen(..) => unreachable!("side bounds decline locks"),
         };
         self.values.get(&frame).copied().unwrap_or(0.0)
     }
@@ -294,6 +303,15 @@ impl Model for Relaxed<'_, '_> {
                         }
                         return out.into_iter().map(|(s, p)| (p, s)).collect();
                     }
+                    Step::Awaken(_)
+                    | Step::Remember
+                    | Step::Imprint
+                    | Step::Restore
+                    | Step::Foresee
+                    | Step::CraftAny(_)
+                    | Step::Dominate => {
+                        unreachable!("side bounds decline Awakener, memory, imprint and beast crafts")
+                    }
                     Step::RecombineBonus if ctx.assumptions.recombine_bonus > 0.0 => {
                         s.state.rarity = Rarity::Rare;
                         return self
@@ -303,7 +321,7 @@ impl Model for Relaxed<'_, '_> {
                             .map(|(p, s)| (p, self.settle(i, k + 1, s)))
                             .collect();
                     }
-                    Step::RollCount | Step::Remove { .. } | Step::RemoveCrafted | Step::RecombineBonus => {}
+                    Step::RollCount | Step::Remove { .. } | Step::RemoveCrafted | Step::RecombineBonus | Step::Forget(_) => {}
                     Step::Swap { add, .. } => {
                         return self
                             .relaxation

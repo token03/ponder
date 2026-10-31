@@ -59,16 +59,21 @@ impl Solution<'_> {
         let mut indices = std::collections::HashMap::from([(Node::Market, 0)]);
         let given_up: HashSet<_> = solution.given_up.iter().collect();
         let mut rows = Vec::new();
+        let mut finishes = Vec::new();
         while rows.len() < retained.len() {
             let (state, action) = retained[rows.len()];
             let mut row = Vec::new();
             let mut missing = false;
+            let mut finished = 0.0;
             craft.for_each_outcome(&solution.states[state], action, &mut |probability, next| {
-                if probability <= 0.0 || craft.is_goal(&next) {
+                if probability <= 0.0 {
+                    return;
+                }
+                if craft.is_goal(&next) {
+                    finished += probability;
                     return;
                 }
                 if craft.is_restart(&next) || given_up.contains(&next) {
-                    row.push((probability, 0));
                     return;
                 }
                 let Some((&next_state, action)) = solution.index.get(&next).map(|state| (state, solution.policy[*state])) else {
@@ -89,18 +94,48 @@ impl Solution<'_> {
                 return Err("selected policy has an unexpanded continuation".into());
             }
             rows.push(row);
+            finishes.push(finished);
         }
         let system = PolicySystem::new(rows).ok_or_else(|| "invalid policy transitions".to_string())?;
+        let mut labels = std::collections::HashMap::new();
+        let labels: Vec<_> = retained
+            .iter()
+            .zip(&finishes)
+            .map(|(&(state, action), &finish)| {
+                let label = match &solution.states[state] {
+                    Node::Market => craft.ops.len() + 1,
+                    node if craft.applies_operation(node, action) => action + 1,
+                    _ => 0,
+                };
+                let next = labels.len();
+                *labels.entry((label, finish.to_bits())).or_insert(next)
+            })
+            .collect();
+        let (system, retained, finishes, origin) = match system.quotient(&labels) {
+            Some(quotient) => {
+                let retained = quotient.representatives.iter().map(|&s| retained[s]).collect::<Vec<_>>();
+                let finishes = quotient.representatives.iter().map(|&s| finishes[s]).collect::<Vec<_>>();
+                (quotient.system, retained, finishes, quotient.classes[0])
+            }
+            None => (system, retained, finishes, 0),
+        };
         let mut start = vec![0.0; retained.len()];
-        start[0] = 1.0;
-        let visits = system.visits(&start).ok_or_else(|| "policy usage could not be evaluated".to_string())?;
+        start[origin] = 1.0;
+        let mut visits = system.visits(&start).ok_or_else(|| "policy usage could not be evaluated".to_string())?;
+        let chance: f64 = visits.iter().zip(finishes).map(|(visits, probability)| visits * probability).sum();
+        if !chance.is_finite() || chance <= 0.0 {
+            return Err("policy has no finite finishing probability".into());
+        }
+        for visits in &mut visits {
+            *visits /= chance;
+        }
         let mut actions = BTreeMap::<String, f64>::new();
         let mut seconds = 0.0;
         let mut bases = 0.0;
         for ((state, action), visits) in retained.iter().copied().zip(visits) {
             match &solution.states[state] {
                 Node::Market => bases += visits,
-                Node::Item(_) if action < craft.ops.len() => {
+                node if craft.applies_operation(node, action) => {
                     let operation = craft.ops[action].0;
                     *actions.entry(operation.name()).or_default() += visits;
                     seconds += visits * operation.cost().seconds;
@@ -215,9 +250,6 @@ impl<'a> Session<'a> {
     /// session's retained plans for diagnostic callers.
     pub fn solve(&mut self, request: Request, limit: impl Into<Option<usize>>) -> Result<Arc<Solution<'a>>, Error> {
         let limit = limit.into();
-        if let Some(why) = &self.ctx.game.bases[request.kind.base.0 as usize].unsupported_crafting {
-            return Err(Error::Unsupported(why.clone()));
-        }
         if request.goal.base.is_some_and(|base| base != request.kind.base) || request.goal.ilvl > request.kind.ilvl {
             return Err(Error::Unsupported("goal base or item level differs from the fixed crafting context".into()));
         }
@@ -296,16 +328,19 @@ impl<'a> Session<'a> {
 
 fn producible(game: &Game, goal: &Target, ops: &[&dyn Operation], starts: &[Arc<dyn Supply>]) -> bool {
     let mut available: HashSet<_> = starts.iter().flat_map(|s| s.items()).flat_map(|item| item.affixes.iter().map(|a| a.id)).collect();
-    let (mut rolls, mut unveils) = (false, false);
+    let (mut rolls, mut unveils, mut elevates) = (false, false, false);
     for step in ops.iter().flat_map(|op| op.steps()) {
         match step {
             Step::Force(m) => {
                 available.insert(*m);
             }
-            Step::Craft(mods) => available.extend(mods.iter().copied()),
-            Step::Recombine(supply) => available.extend(supply.0.items().iter().flat_map(|item| item.affixes.iter().map(|a| a.id))),
+            Step::Craft(mods) | Step::CraftAny(mods) => available.extend(mods.iter().copied()),
+            Step::Recombine(supply) | Step::Awaken(supply) => {
+                available.extend(supply.0.items().iter().flat_map(|item| item.affixes.iter().map(|a| a.id)))
+            }
             Step::Veil(_) => available.extend(game.veils),
             Step::Unveil(_) => unveils = true,
+            Step::Dominate => elevates = true,
             Step::Draw(_) | Step::Fill(_) | Step::Swap { .. } | Step::RecombineBonus => rolls = true,
             Step::Clear { .. }
             | Step::Rarity(_)
@@ -315,7 +350,12 @@ fn producible(game: &Game, goal: &Target, ops: &[&dyn Operation], starts: &[Arc<
             | Step::RemoveCrafted
             | Step::Influence(_)
             | Step::Eldritch(_)
-            | Step::Fracture => {}
+            | Step::Fracture
+            | Step::Forget(_)
+            | Step::Remember
+            | Step::Imprint
+            | Step::Restore
+            | Step::Foresee => {}
         }
     }
     goal.needs.iter().all(|need| {
@@ -325,6 +365,7 @@ fn producible(game: &Game, goal: &Target, ops: &[&dyn Operation], starts: &[Arc<
                 available.contains(&m)
                     || rolls && matches!(game.def(m).source, Source::Natural | Source::Influence | Source::Fossil)
                     || unveils && game.def(m).source == Source::Veiled
+                    || elevates && game.def(m).source == Source::Elevated
             })
             .count()
             >= need.count as usize
