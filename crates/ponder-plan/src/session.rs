@@ -300,11 +300,37 @@ impl<'a> Session<'a> {
         if !producible(game, &request.goal, &refs, &request.starts) {
             return Err(Error::Solve(ponder_solve::Error::Unreachable));
         }
+        // Mechanics that make items remember more (strands, imprints, locks, elevation) are
+        // solved after the plain craft, capped by its cost and falling back on it.
+        let plain = match limit {
+            None if ops.iter().any(|op| remembers(op.as_ref())) => {
+                let methods = request
+                    .methods
+                    .iter()
+                    .filter(
+                        |m| !matches!(m, Method::Named(name) if parse(game, class, name, &avoid).is_some_and(|op| remembers(op.as_ref()))),
+                    )
+                    .cloned()
+                    .collect();
+                self.solve(Request { methods, ..request.clone() }, None).ok()
+            }
+            _ => None,
+        };
         let inputs: Vec<_> = request.starts.iter().flat_map(|s| s.items()).collect();
         let mut lens = Lens::try_new(game, request.kind, vec![request.goal], &refs, &inputs).map_err(Error::Unsupported)?;
-        let craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
-        let solution =
-            ponder_solve::solve_with(&craft, &[(1.0, Node::Market)], limit, ponder_solve::Numerics::Hybrid).map_err(Error::Solve)?;
+        let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
+        if let Some(plain) = &plain {
+            craft.cap(plain.policy.cost);
+        }
+        let solution = match ponder_solve::solve_with(
+            &craft,
+            &[(1.0, Node::Market)],
+            limit.or(plain.as_ref().map(|_| EXTENDED_LIMIT)),
+            ponder_solve::Numerics::Hybrid,
+        ) {
+            Err(ponder_solve::Error::TooManyStates(_)) if let Some(plain) = plain => return Ok(plain),
+            solved => solved.map_err(Error::Solve)?,
+        };
         lens.clear_cache();
         let plan = Arc::new(Solution {
             policy: solution,
@@ -324,6 +350,15 @@ impl<'a> Session<'a> {
         }
         Ok(plan)
     }
+}
+
+/// States a capped craft with remembering mechanics may explore before its plain plan stands.
+const EXTENDED_LIMIT: usize = 2_000_000;
+
+/// Does the operation make items carry more than their mods (strands, an imprint, a lock) or
+/// elevate them?
+fn remembers(op: &dyn Operation) -> bool {
+    op.steps().iter().any(|s| matches!(s, Step::Remember | Step::Imprint | Step::Restore | Step::Foresee | Step::Dominate))
 }
 
 fn producible(game: &Game, goal: &Target, ops: &[&dyn Operation], starts: &[Arc<dyn Supply>]) -> bool {

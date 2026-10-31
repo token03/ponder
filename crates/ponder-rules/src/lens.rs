@@ -33,6 +33,8 @@ pub use side::{SideRelaxation, SideState};
 
 /// Most classes a lens has: states hold their counts inline, so making one allocates nothing.
 pub const CLASSES: usize = 40;
+/// Strand levels states tell apart (SPEC §10).
+const STRAND_LEVELS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct State {
@@ -510,6 +512,13 @@ impl<'g> Lens<'g> {
                 memories.len() - 1
             }));
         }
+        // A few strand levels, each the last change at or below a quarter of the range; any
+        // count rolls as the level below it.
+        let changes: Vec<usize> = (0..memory.len()).filter(|&s| s == 0 || memory[s] != memory[s - 1]).collect();
+        let levels: Vec<usize> = (0..STRAND_LEVELS)
+            .filter_map(|k| changes.iter().copied().filter(|&c| c <= k * memory.len() / STRAND_LEVELS).last())
+            .collect();
+        let memory: Vec<usize> = (0..memory.len()).map(|s| memory[*levels.iter().filter(|&&l| l <= s).last().unwrap()]).collect();
         let pools: Vec<_> =
             pools.iter().enumerate().map(|(i, p)| (p.clone(), memories.iter().map(|classes| classes[i].clone()).collect())).collect();
         let unveil = class_weights(&weight_of, &|m, w| unveil_weight(game, game.def(m), m, w));

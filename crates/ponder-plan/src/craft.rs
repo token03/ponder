@@ -134,6 +134,15 @@ impl<'a> Craft<'a> {
         craft
     }
 
+    /// The craft is known to cost at most `bound` (another plan reaches the goal for that):
+    /// with starting over free, no single action more expensive than that is ever best.
+    pub fn cap(&mut self, bound: f64) {
+        self.upper_bound = self.upper_bound.min(bound);
+        for (i, dominated) in self.dominated.iter_mut().enumerate() {
+            *dominated |= self.ops[i].1 > self.upper_bound;
+        }
+    }
+
     /// The cheapest way from the market to the goal. A craft too big to explore whole within
     /// `limit` states is solved again expanding only the items the best policy reaches, each
     /// bounded by the same craft through the relaxed lens (see [`Lens::relaxed`]).

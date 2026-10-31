@@ -288,7 +288,7 @@ caches.
 | Essence tiers | An essence mod's tier is where its level falls among the base's natural tiers of the same template | Matches how guides name essence tiers. Medium. |
 | Guide recipe without a lock | When a step's "Cannot Be Changed" craft cannot be made, the attempt goes to the step's `else` (step 1 if none) | Reading of how guides are followed. Medium. |
 | Memory strands | A family rolls its top `floor(100/(2.5s+147.5)·(T−1))+1` tiers (all at 0 strands) and keeps its weight; a currency uses 0 to its most strands evenly (exalt by mods held 0–5: 10/16/22/26/32/34); Remembrance sets 1–100 evenly | [poewiki](https://www.poewiki.net/wiki/Memory_Strand); the even spreads and the exalt onto a bare item are assumed. Medium/low. |
-| Strands in solver states | Rounded down to the fewest strands with the same class weights | Abstraction; overstates cost slightly, never understates it. |
+| Strands in solver states | Rounded down to one of four levels: the last change in class weights at or below 0, 25, 50 and 75 strands | Abstraction; overstates cost slightly, never understates it. |
 | Orb of Dominance | Remove a random influenced mod no lock protects, then upgrade a random influenced mod, locked or not: a tier up, the best tier to its elevated mod | Order and lock reach inferred from guides. Low. |
 | Wild Bristle Matron | Adds a "Cannot Be Changed" lock that fits, either as likely | Guess. Low. |
 | Imprints in plans | An imprint serves the one operation after it; then the plan restores it or lets it go | Search restriction, not a game rule. |
