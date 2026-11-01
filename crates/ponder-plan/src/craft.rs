@@ -458,7 +458,9 @@ impl Model for Craft<'_> {
         };
         match (n, self.start_of(i)) {
             (_, Some(_)) => self.nodes(self.start_states(i - self.ops.len()).iter().cloned()),
-            (Node::Item(s), None) if s.foreseen => self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Foreseen(Box::new((i, *s, t))))).collect(),
+            (Node::Item(s), None) if s.foreseen => {
+                self.outcomes_of(s, i).into_iter().map(|(p, t)| (p, Node::Foreseen(Box::new((i, *s, t))))).collect()
+            }
             (Node::Foreseen(shown), None) if i == shown.0 => self.nodes([(1.0, shown.2)].into_iter()),
             (Node::Foreseen(shown), None) => self.nodes(self.outcomes_of(&shown.1, i).into_iter()),
             (Node::Item(s), None) => match self.start_operation(s, i) {

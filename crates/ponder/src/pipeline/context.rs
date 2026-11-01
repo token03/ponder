@@ -1,4 +1,5 @@
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Result, anyhow};
 use ponder_net::{
@@ -11,15 +12,20 @@ use ponder_rules::{assumptions::Assumptions, data::Repoe, game::Game};
 use serde_json::Number;
 
 use super::cache::Cache;
+use super::solving::Made;
+use super::types::Estimate;
 use crate::gear::Settings;
 
 pub type Progress<'a> = &'a (dyn Fn(&str) + Sync);
+/// Called with each estimate as it is solved: its quick plan first, then its full plan (`true`).
+pub type Stream = Arc<dyn Fn(&Estimate, bool) + Send + Sync>;
 
 pub fn settings_from_env() -> Settings {
     let rate = ponder_net::env::env("PONDER_CHAOS_PER_HOUR")
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0);
-    rate.map_or_else(Settings::default, |chaos_per_hour| Settings { chaos_per_hour })
+    let recombine = ponder_net::env::env("PONDER_RECOMBINE").is_some_and(|value| value == "1");
+    Settings { chaos_per_hour: rate.unwrap_or(Settings::default().chaos_per_hour), recombine }
 }
 
 pub struct Context {
@@ -30,12 +36,26 @@ pub struct Context {
     pub http: Arc<dyn Transport>,
     pub plans: Cache,
     pub assumptions: Assumptions,
+    /// Parts of staged crafts made so far, shared by the candidates that use them.
+    pub parts: Mutex<HashMap<u64, Result<Arc<Made>, String>>>,
+    pub on_solved: Option<Stream>,
     rules: OnceLock<Result<(Game, blake3::Hash), String>>,
 }
 
 impl Context {
     pub fn new(settings: Settings, prices: Prices, trade: Trade, ladder: Ladder, http: Arc<dyn Transport>) -> Self {
-        Self { settings, prices, trade, ladder, http, plans: Cache::default(), assumptions: Assumptions::default(), rules: OnceLock::new() }
+        Self {
+            settings,
+            prices,
+            trade,
+            ladder,
+            http,
+            plans: Cache::default(),
+            assumptions: Assumptions::default(),
+            parts: Mutex::default(),
+            on_solved: None,
+            rules: OnceLock::new(),
+        }
     }
 
     pub fn real() -> Self {

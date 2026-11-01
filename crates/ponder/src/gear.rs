@@ -25,11 +25,14 @@ pub type Prices = HashMap<String, f64>;
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
     pub chaos_per_hour: f64,
+    /// Also try recombining an item with the prefixes and one with the suffixes. It never won on
+    /// the ladder sample and triples solving time, so it is off unless asked for.
+    pub recombine: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { chaos_per_hour: 1500.0 }
+        Self { chaos_per_hour: 1500.0, recombine: false }
     }
 }
 

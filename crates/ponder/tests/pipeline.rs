@@ -42,7 +42,7 @@ fn context_with(chaos_per_hour: f64, trade_http: Arc<dyn Transport>, trade_cache
     let prices = PriceClient::with(offline(), temp_dir("prices"), fixed_clock());
     let trade = Trade::with(trade_http, trade_cache, fixed_clock());
     let ladder = Ladder::with(offline(), temp_dir("ladder"), fixed_clock());
-    Context::new(Settings { chaos_per_hour }, prices, trade, ladder, share_http).with_plans(shared_plans())
+    Context::new(Settings { chaos_per_hour, ..Settings::default() }, prices, trade, ladder, share_http).with_plans(shared_plans())
 }
 
 fn offline_context(chaos_per_hour: f64) -> Context {

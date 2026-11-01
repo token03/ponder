@@ -314,6 +314,7 @@ fn run(cli: &Cli) -> Result<Value> {
                 trade_lookup: a.trade,
                 trade_budget: a.trade_budget,
                 workers: a.workers,
+                solve: true,
             };
             let r = pipeline::ladder(&cx, &db, None, &opts, Some(progress))?;
             if r.characters == 0 {

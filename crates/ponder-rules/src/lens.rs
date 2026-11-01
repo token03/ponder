@@ -515,9 +515,8 @@ impl<'g> Lens<'g> {
         // A few strand levels, each the last change at or below a quarter of the range; any
         // count rolls as the level below it.
         let changes: Vec<usize> = (0..memory.len()).filter(|&s| s == 0 || memory[s] != memory[s - 1]).collect();
-        let levels: Vec<usize> = (0..STRAND_LEVELS)
-            .filter_map(|k| changes.iter().copied().rfind(|&c| c <= k * memory.len() / STRAND_LEVELS))
-            .collect();
+        let levels: Vec<usize> =
+            (0..STRAND_LEVELS).filter_map(|k| changes.iter().copied().rfind(|&c| c <= k * memory.len() / STRAND_LEVELS)).collect();
         let memory: Vec<usize> = (0..memory.len()).map(|s| memory[*levels.iter().rfind(|&&l| l <= s).unwrap()]).collect();
         let pools: Vec<_> =
             pools.iter().enumerate().map(|(i, p)| (p.clone(), memories.iter().map(|classes| classes[i].clone()).collect())).collect();

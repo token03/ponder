@@ -6,6 +6,7 @@ use ponder_rules::game::Kind;
 use ponder_rules::goal::Source;
 use ponder_rules::item::Item;
 use ponder_rules::lens::Lens;
+use ponder_rules::ops::awakener::Awakener;
 use ponder_rules::ops::recombinator::Recombinator;
 use ponder_rules::ops::{Ctx, Operation, Step, Supply, parse};
 use ponder_rules::target::Target;
@@ -18,6 +19,16 @@ use crate::market::Market;
 pub enum Method {
     Named(String),
     Recombine(String, Arc<dyn Supply>),
+    Awaken(String, Arc<dyn Supply>),
+}
+
+impl Method {
+    fn partner(&self) -> Option<&dyn Supply> {
+        match self {
+            Method::Named(_) => None,
+            Method::Recombine(_, supply) | Method::Awaken(_, supply) => Some(supply.as_ref()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -47,6 +58,8 @@ pub struct Usage {
     pub actions: Vec<(String, f64)>,
     pub seconds: f64,
     pub bases: f64,
+    /// Expected purchases per supply.
+    pub buys: Vec<(String, f64)>,
 }
 
 impl Solution<'_> {
@@ -132,9 +145,14 @@ impl Solution<'_> {
         let mut actions = BTreeMap::<String, f64>::new();
         let mut seconds = 0.0;
         let mut bases = 0.0;
+        let mut buys = BTreeMap::<String, f64>::new();
         for ((state, action), visits) in retained.iter().copied().zip(visits) {
             match &solution.states[state] {
-                Node::Market => bases += visits,
+                Node::Market => {
+                    bases += visits;
+                    let supply = craft.start_of(action).ok_or_else(|| "policy buys from no supply".to_string())?;
+                    *buys.entry(supply.name()).or_default() += visits;
+                }
                 node if craft.applies_operation(node, action) => {
                     let operation = craft.ops[action].0;
                     *actions.entry(operation.name()).or_default() += visits;
@@ -146,7 +164,7 @@ impl Solution<'_> {
         let mut actions: Vec<_> = actions.into_iter().collect();
         actions.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 
-        Ok(Usage { actions, seconds, bases })
+        Ok(Usage { actions, seconds, bases, buys: buys.into_iter().collect() })
     }
 
     pub fn craft(&self) -> Craft<'_> {
@@ -186,6 +204,7 @@ impl SupplyKey {
 enum MethodKey {
     Named(String),
     Recombine(String, SupplyKey),
+    Awaken(String, SupplyKey),
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -194,16 +213,18 @@ struct Key {
     goal: Target,
     methods: Vec<MethodKey>,
     starts: Vec<SupplyKey>,
+    cap: Option<u64>,
 }
 
 impl Key {
-    fn new(request: &Request) -> Self {
+    fn new(request: &Request, cap: Option<f64>) -> Self {
         let methods = request
             .methods
             .iter()
             .map(|m| match m {
                 Method::Named(name) => MethodKey::Named(name.clone()),
                 Method::Recombine(name, supply) => MethodKey::Recombine(name.clone(), SupplyKey::new(supply.as_ref())),
+                Method::Awaken(name, supply) => MethodKey::Awaken(name.clone(), SupplyKey::new(supply.as_ref())),
             })
             .collect();
         Self {
@@ -211,6 +232,7 @@ impl Key {
             goal: request.goal.clone(),
             methods,
             starts: request.starts.iter().map(|s| SupplyKey::new(s.as_ref())).collect(),
+            cap: cap.map(f64::to_bits),
         }
     }
 
@@ -221,7 +243,7 @@ impl Key {
                 .iter()
                 .map(|m| match m {
                     MethodKey::Named(_) => 0,
-                    MethodKey::Recombine(_, s) => s.items.len(),
+                    MethodKey::Recombine(_, s) | MethodKey::Awaken(_, s) => s.items.len(),
                 })
                 .sum::<usize>()
     }
@@ -249,14 +271,20 @@ impl<'a> Session<'a> {
     /// Solve the request. `None` permits any graph size; an explicit limit also bounds this
     /// session's retained plans for diagnostic callers.
     pub fn solve(&mut self, request: Request, limit: impl Into<Option<usize>>) -> Result<Arc<Solution<'a>>, Error> {
-        let limit = limit.into();
+        self.solve_capped(request, limit.into(), None)
+    }
+
+    /// Solve the request only for plans cheaper than `cap`, within the extended state limit: the
+    /// plan returned may cost more when none is cheaper, and the search may give up.
+    pub fn solve_under(&mut self, request: Request, cap: f64) -> Result<Arc<Solution<'a>>, Error> {
+        self.solve_capped(request, Some(EXTENDED_LIMIT), Some(cap))
+    }
+
+    fn solve_capped(&mut self, request: Request, limit: Option<usize>, cap: Option<f64>) -> Result<Arc<Solution<'a>>, Error> {
         if request.goal.base.is_some_and(|base| base != request.kind.base) || request.goal.ilvl > request.kind.ilvl {
             return Err(Error::Unsupported("goal base or item level differs from the fixed crafting context".into()));
         }
-        let supplies = request.starts.iter().map(|s| s.as_ref()).chain(request.methods.iter().filter_map(|method| match method {
-            Method::Recombine(_, supply) => Some(supply.as_ref()),
-            _ => None,
-        }));
+        let supplies = request.starts.iter().map(|s| s.as_ref()).chain(request.methods.iter().filter_map(Method::partner));
         for item in supplies.flat_map(|s| s.items()) {
             if item.kind.base != request.kind.base || item.kind.ilvl != request.kind.ilvl || item.quality < request.goal.quality {
                 return Err(Error::Unsupported(
@@ -270,7 +298,7 @@ impl<'a> Session<'a> {
         if let Some(limit) = limit {
             self.trim(limit);
         }
-        let key = Key::new(&request);
+        let key = Key::new(&request, cap);
         self.accesses += 1;
         if let Some(cached) = self.plans.get_mut(&key) {
             if let Some(limit) = limit
@@ -291,6 +319,7 @@ impl<'a> Session<'a> {
             .map(|m| match m {
                 Method::Named(name) => parse(game, class, name, &avoid).ok_or_else(|| Error::Unsupported(name.clone())),
                 Method::Recombine(name, supply) => Ok(Box::new(Recombinator::new(class, name, supply.clone())) as Box<dyn Operation>),
+                Method::Awaken(name, supply) => Ok(Box::new(Awakener::new(name, supply.clone())) as Box<dyn Operation>),
             })
             .collect::<Result<_, _>>()?;
         // Unpriced operations cannot be used, and must not split the lens's classes or
@@ -302,25 +331,23 @@ impl<'a> Session<'a> {
         }
         // Mechanics that make items remember more (strands, imprints, locks, elevation) are
         // solved after the plain craft, capped by its cost and falling back on it.
-        let plain = match limit {
-            None if ops.iter().any(|op| remembers(op.as_ref())) => {
-                let methods = request
-                    .methods
-                    .iter()
-                    .filter(
-                        |m| !matches!(m, Method::Named(name) if parse(game, class, name, &avoid).is_some_and(|op| remembers(op.as_ref()))),
-                    )
-                    .cloned()
-                    .collect();
-                self.solve(Request { methods, ..request.clone() }, None).ok()
-            }
-            _ => None,
+        let tiered = (limit.is_none() || cap.is_some()) && ops.iter().any(|op| remembers(op.as_ref()));
+        let plain = if tiered {
+            let methods = request
+                .methods
+                .iter()
+                .filter(|m| !matches!(m, Method::Named(name) if parse(game, class, name, &avoid).is_some_and(|op| remembers(op.as_ref()))))
+                .cloned()
+                .collect();
+            self.solve_capped(Request { methods, ..request.clone() }, limit, cap).ok()
+        } else {
+            None
         };
         let inputs: Vec<_> = request.starts.iter().flat_map(|s| s.items()).collect();
         let mut lens = Lens::try_new(game, request.kind, vec![request.goal], &refs, &inputs).map_err(Error::Unsupported)?;
         let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
-        if let Some(plain) = &plain {
-            craft.cap(plain.policy.cost);
+        if let Some(bound) = plain.as_ref().map(|plain| plain.policy.cost).into_iter().chain(cap).reduce(f64::min) {
+            craft.cap(bound);
         }
         let solution = match ponder_solve::solve_with(
             &craft,
@@ -357,7 +384,7 @@ const EXTENDED_LIMIT: usize = 2_000_000;
 
 /// Does the operation make items carry more than their mods (strands, an imprint, a lock) or
 /// elevate them?
-fn remembers(op: &dyn Operation) -> bool {
+pub fn remembers(op: &dyn Operation) -> bool {
     op.steps().iter().any(|s| matches!(s, Step::Remember | Step::Imprint | Step::Restore | Step::Foresee | Step::Dominate))
 }
 

@@ -24,6 +24,12 @@ pub enum Msg {
         characters: usize,
         note: String,
     },
+    /// an estimate of run `run` was solved: quickly, or `refined`
+    Solved {
+        run: u64,
+        estimate: Box<Estimate>,
+        refined: bool,
+    },
     /// a job updated one estimate of run `run`
     Estimate {
         run: u64,
@@ -61,6 +67,10 @@ impl Jobs {
     pub fn new(ctx: egui::Context) -> Jobs {
         let (tx, rx) = channel();
         Jobs { reply: Reply { tx, ctx }, rx, names: Arc::default() }
+    }
+
+    pub fn reply(&self) -> Reply {
+        self.reply.clone()
     }
 
     /// Run `work` on a new thread; whatever it returns is sent to the UI.

@@ -51,6 +51,8 @@ pub struct LadderOpts {
     pub trade_lookup: bool,
     pub trade_budget: usize,
     pub workers: Option<usize>,
+    /// Solve the estimates before returning; otherwise they come back unsolved.
+    pub solve: bool,
 }
 
 impl Default for LadderOpts {
@@ -65,6 +67,7 @@ impl Default for LadderOpts {
             trade_lookup: false,
             trade_budget: 40,
             workers: None,
+            solve: true,
         }
     }
 }
@@ -256,11 +259,12 @@ pub fn ladder(
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
-    solve_estimates(cx, &mut out, &table, opts.workers, progress);
     if opts.trade_lookup {
         let mut order: Vec<usize> = (0..out.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(out[i].demand));
         price_on_trade(cx, &mut out, &order, &table, &league, opts.trade_budget, progress);
+    }
+    if opts.solve {
         solve_estimates(cx, &mut out, &table, opts.workers, progress);
     }
     Ok(LadderReport {

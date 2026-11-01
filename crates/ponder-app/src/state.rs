@@ -52,6 +52,7 @@ impl RunSettings {
             trade_lookup: self.trade,
             trade_budget: self.trade_budget,
             workers: None,
+            solve: false,
         }
     }
 }
@@ -171,6 +172,7 @@ impl State {
                 self.data = Some(*loaded);
                 self.refilter();
                 self.note(message);
+                self.solve_all();
             }
             Msg::Ladder(Err(error)) => self.note(format!("ladder run failed: {error}")),
             Msg::LadderFetched { characters, note } => {
@@ -178,6 +180,20 @@ impl State {
                 self.note(note);
                 if self.saved.auto_run && self.has_ladder && self.data.is_none() {
                     self.run_ladder();
+                }
+            }
+            Msg::Solved { run, estimate, refined } => {
+                if run != self.run {
+                    return;
+                }
+                if let Some(data) = self.data.as_mut()
+                    && let Some(slot) = data.report.estimates.iter_mut().find(|e| e.key == estimate.key)
+                {
+                    let title = estimate.title.clone();
+                    *slot = *estimate;
+                    self.ranks = view::ranks(&data.report.estimates);
+                    self.refilter();
+                    self.status = format!("{} {title}", if refined { "solved" } else { "quick plan for" });
                 }
             }
             Msg::Estimate { run, index, estimate, note } => {
@@ -201,8 +217,13 @@ impl State {
         if self.jobs.is_running("ladder") {
             return;
         }
-        self.cx = Arc::new(context(&self.saved.run));
         self.run += 1;
+        let mut cx = context(&self.saved.run);
+        let (reply, run) = (self.jobs.reply(), self.run);
+        cx.on_solved = Some(Arc::new(move |estimate: &Estimate, refined| {
+            reply.send(Msg::Solved { run, estimate: Box::new(estimate.clone()), refined })
+        }));
+        self.cx = Arc::new(cx);
         let cx = self.cx.clone();
         let opts = self.saved.run.opts();
         self.note("running the ladder pipeline");
@@ -218,6 +239,18 @@ impl State {
                     .map(|report| Box::new(Loaded { report, table, took: clock.elapsed() }))
                     .map_err(|error| error.to_string()),
             )
+        });
+    }
+
+    /// Solve the loaded estimates, each shown as its plans arrive.
+    fn solve_all(&mut self) {
+        let Some(data) = &self.data else { return };
+        let mut estimates = data.report.estimates.clone();
+        let (cx, table) = (self.cx.clone(), data.table.clone());
+        self.jobs.spawn("solve", move |reply| {
+            let clock = Instant::now();
+            pipeline::solve_estimates(&cx, &mut estimates, &table, None, Some(&|message: &str| reply.status(message)));
+            Msg::Status(format!("solved {} estimates in {:.1}s", estimates.len(), clock.elapsed().as_secs_f64()))
         });
     }
 

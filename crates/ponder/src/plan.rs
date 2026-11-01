@@ -5,10 +5,11 @@ use ponder_plan::{
     session::{Method, Request},
     supply::Stock,
 };
+use ponder_rules::ops::Supply;
 use ponder_rules::{
     game::{Game, GroupId, Influences, Kind, ModId, Side, TagId},
     goal::{Influence, Rarity, Source},
-    item::{Affix, Item},
+    item::{self, Affix, Item},
     ops::{self, Operation},
     target::{Need, Target},
 };
@@ -26,6 +27,56 @@ pub struct Summary {
     pub outcomes: usize,
     pub usage: Vec<(String, f64)>,
     pub unpriced: Vec<String>,
+    /// How the item is made, part by part, the goal last.
+    pub stages: Vec<Stage>,
+}
+
+/// One item of a recipe and how it is made.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Stage {
+    pub item: String,
+    pub influences: Vec<String>,
+    pub rarity: Option<String>,
+    pub needs: Vec<String>,
+    /// Operations in the order a run first uses them, purchases included.
+    pub ops: Vec<String>,
+    /// Expected uses per item made.
+    pub uses: Vec<(String, f64)>,
+    /// Chaos per item made, everything included.
+    pub cost: f64,
+}
+
+impl Summary {
+    /// The recipe in the format of `fixtures/guides`: stages, then steps working each item
+    /// until it holds its stage.
+    pub fn recipe(&self, base: &str) -> String {
+        let quote = |list: &[String]| list.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", ");
+        let mut out = format!("base = {base:?}\n");
+        let (goal, parts) = self.stages.split_last().expect("a summary has its goal's stage");
+        if !goal.influences.is_empty() {
+            out += &format!("influences = [{}]\n", quote(&goal.influences));
+        }
+        let mods = |stage: &Stage| stage.needs.iter().map(|need| format!("{{ text = {need:?} }}")).collect::<Vec<_>>().join(", ");
+        out += &format!("\n[goal]\nmods = [{}]\n", mods(goal));
+        for stage in parts {
+            out += &format!("\n[stages.{}]\ninfluences = [{}]\n", stage.item, quote(&stage.influences));
+            if let Some(rarity) = &stage.rarity {
+                out += &format!("rarity = {rarity:?}\n");
+            }
+            out += &format!("mods = [{}]\n", mods(stage));
+        }
+        for stage in &self.stages {
+            let until = if std::ptr::eq(stage, goal) { "goal" } else { &stage.item };
+            let uses = stage.uses.iter().map(|(op, n)| format!("{op} {n:.1}")).collect::<Vec<_>>().join(", ");
+            out += &format!(
+                "\n[[steps]]\nitem = {:?}\ndo = [{}]\nuntil = {until:?}\nnote = \"{:.1}c each; expected uses: {uses}\"\n",
+                stage.item,
+                quote(&stage.ops),
+                stage.cost
+            );
+        }
+        out
+    }
 }
 
 /// The share of a side's junk roll weight a tag needs before banning it is worth offering.
@@ -215,3 +266,89 @@ pub fn prepare(game: &Game, candidate: &Candidate, market: &Market) -> Result<Re
 
     Ok(Request { kind, goal: target, methods, starts: vec![Arc::new(Stock::new("base", market.base, item))] })
 }
+
+/// An item made on its own for a later stage to consume.
+pub struct Part {
+    pub name: String,
+    /// The goal's needs it carries, by index.
+    pub needs: Vec<usize>,
+    pub request: Request,
+}
+
+/// A craft in stages: parts made separately, then the finish worked from an heir's item with
+/// operations that consume a partner's.
+pub struct Chain {
+    pub mechanic: &'static str,
+    pub heirs: Vec<Part>,
+    pub partners: Vec<Part>,
+    finish: Request,
+}
+
+impl Chain {
+    /// The finishing request, given the products of the heirs and partners in order.
+    pub fn finish(&self, heirs: Vec<Arc<dyn Supply>>, partners: Vec<Arc<dyn Supply>>) -> Request {
+        let mut request = Request { starts: heirs, ..self.finish.clone() };
+        request.methods.extend(self.partners.iter().zip(partners).map(|(part, supply)| match self.mechanic {
+            "awakener" => Method::Awaken(part.name.clone(), supply),
+            _ => Method::Recombine(part.name.clone(), supply),
+        }));
+        request
+    }
+}
+
+/// The staged ways to make the request's item. A two-influence item can only be made by
+/// awakening: an item of each influence carrying one of its needs, magic where the base allows. A request with rolled
+/// needs on both sides can also be recombined from an item with the prefixes and one with the
+/// suffixes.
+pub fn chains(game: &Game, request: &Request, market: &Market) -> Vec<Chain> {
+    if request.starts.iter().flat_map(|s| s.items()).any(|item| !item.affixes.is_empty()) {
+        return Vec::new();
+    }
+    let needs = &request.goal.needs;
+    let part = |name: String, influences: Influences, rarity: Option<Rarity>, carried: Vec<usize>| {
+        let kind = Kind { influences, ..request.kind };
+        let wanted =
+            carried.iter().map(|&i| Need { count: if rarity == Some(Rarity::Magic) { 1 } else { needs[i].count }, ..needs[i].clone() });
+        let goal = Target { influences, rarity, needs: wanted.collect(), min_mods: 0, ..request.goal.clone() };
+        let methods = methods(game, kind, &goal, market);
+        let starts: Vec<Arc<dyn Supply>> = vec![Arc::new(Stock::new("base", market.base, Item::new(kind)))];
+        Part { name, needs: carried, request: Request { kind, goal, methods, starts } }
+    };
+    let carrying =
+        |keep: &dyn Fn(ModId) -> bool| -> Vec<usize> { (0..needs.len()).filter(|&i| needs[i].ok.iter().all(|&id| keep(id))).collect() };
+    let mut chains = Vec::new();
+    let influences: Vec<Influence> = request.kind.influences.iter().collect();
+    if let [receiver, donor] = influences[..] {
+        let parts = |influence: Influence| -> Vec<Part> {
+            let one = Influences::of(&[influence]);
+            let name = format!("{influence:?}").to_lowercase();
+            let carried = carrying(&|id| game.def(id).influence == Some(influence));
+            if carried.is_empty() {
+                return vec![part(name, one, None, Vec::new())];
+            }
+            let magic = |i: usize| {
+                let holds = needs[i].ok.iter().all(|&id| item::limit(game, request.kind.base, Rarity::Magic, game.def(id).side) > 0);
+                holds.then_some(Rarity::Magic)
+            };
+            carried.into_iter().map(|i| part(format!("{name}-{i}"), one, magic(i), vec![i])).collect()
+        };
+        chains.push(Chain { mechanic: "awakener", heirs: parts(receiver), partners: parts(donor), finish: request.clone() });
+    }
+    let rolled =
+        |side: Side| carrying(&|id| game.def(id).side == side && matches!(game.def(id).source, Source::Natural | Source::Influence));
+    let (prefixes, suffixes) = (rolled(Side::Prefix), rolled(Side::Suffix));
+    let count = |carried: &[usize]| carried.iter().map(|&i| needs[i].count as usize).sum::<usize>();
+    if influences.len() < 2 && count(&prefixes) >= RECOMBINED_SIDE && count(&suffixes) >= RECOMBINED_SIDE {
+        let influences = request.kind.influences;
+        chains.push(Chain {
+            mechanic: "recombinator",
+            heirs: vec![part("prefixes".into(), influences, None, prefixes)],
+            partners: vec![part("suffixes".into(), influences, None, suffixes)],
+            finish: request.clone(),
+        });
+    }
+    chains
+}
+
+/// Rolled needs each side must hold before recombining the sides pays.
+const RECOMBINED_SIDE: usize = 2;

@@ -631,8 +631,7 @@ fn solve_within<M: Model>(
                     dropped.extend(
                         edges[s]
                             .extract_if(.., |e| {
-                                !e.to.pending()
-                                    && (!e.outcomes().all(|(_, t)| alive[t]) || !e.outcomes().any(|(_, t)| t != s))
+                                !e.to.pending() && (!e.outcomes().all(|(_, t)| alive[t]) || !e.outcomes().any(|(_, t)| t != s))
                             })
                             .map(|e| (s, e)),
                     );
@@ -924,12 +923,18 @@ fn solve_within<M: Model>(
                         rooms.push((s, room));
                         if let Some((action, cost, _)) = selected {
                             if let Some(to) = transitions.as_ref().and_then(|link| link(&states[s], action)) {
-                                updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to.iter().copied().map(Outcome::new).collect()) }]));
+                                updates.push(Update::Linked(
+                                    s,
+                                    vec![Edge { action, cost, to: Transitions::known(to.iter().copied().map(Outcome::new).collect()) }],
+                                ));
                                 return (updates, checks, rooms);
                             }
                             let out = model.outcomes(&states[s], action);
-                            let linked: Option<Vec<_>> =
-                                out.iter().filter(|o| o.0 > 0.0).map(|(p, t)| index.get(states, t).map(|&t| Outcome::new((*p, t)))).collect();
+                            let linked: Option<Vec<_>> = out
+                                .iter()
+                                .filter(|o| o.0 > 0.0)
+                                .map(|(p, t)| index.get(states, t).map(|&t| Outcome::new((*p, t))))
+                                .collect();
                             if let Some(to) = linked {
                                 updates.push(Update::Linked(s, vec![Edge { action, cost, to: Transitions::known(to) }]));
                             } else {
@@ -1015,9 +1020,7 @@ fn all_reach_terminal(edges: &[Vec<Edge>], end: &[bool]) -> bool {
         .map(|(s, out)| end[s] || out.iter().rev().any(|e| e.to.optimistic() || e.single().is_some_and(|(_, t)| end[t])))
         .collect();
     for s in (0..edges.len()).rev() {
-        if !reached[s]
-            && edges[s].iter().any(|e| e.to.optimistic() || e.outcomes().len() > 0 && e.outcomes().all(|(_, t)| reached[t]))
-        {
+        if !reached[s] && edges[s].iter().any(|e| e.to.optimistic() || e.outcomes().len() > 0 && e.outcomes().all(|(_, t)| reached[t])) {
             reached[s] = true;
         }
     }

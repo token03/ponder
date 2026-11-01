@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::plan::Summary;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 
-pub const PLAN_VERSION: u32 = 32;
+pub const PLAN_VERSION: u32 = 33;
 
 #[derive(Clone, Debug)]
 pub struct Cache {
