@@ -128,7 +128,7 @@ fn dominance_moves_lower_tiers_up_one() {
 }
 
 #[test]
-fn the_matron_adds_whichever_lock_fits() {
+fn the_matron_adds_an_eligible_meta_modifier() {
     let matron = op("beast:wild-bristle-matron");
     let suffixes = warlord(Side::Suffix);
     let [prefix_lock, suffix_lock] = [game().metamods[0], game().metamods[1]];
@@ -136,7 +136,7 @@ fn the_matron_adds_whichever_lock_fits() {
     assert!(chance(&[matron.as_ref()], matron.steps(), &full, target(&[suffix_lock])) > 0.999);
     let open = item(Rarity::Rare, &suffixes[..1]);
     let p = chance(&[matron.as_ref()], matron.steps(), &open, target(&[prefix_lock]));
-    assert!((p - 0.5).abs() < 1e-9, "{p}");
+    assert!((p - 0.2).abs() < 1e-9, "{p}");
 }
 
 #[test]

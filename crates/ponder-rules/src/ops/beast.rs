@@ -2,8 +2,7 @@
 //!
 //! - `imprint`: a Craicic Croaker saves a magic, unfractured item as an imprint.
 //! - `restore`: turn the item back into its imprint; the imprint is used up.
-//! - `beast:wild-bristle-matron`: add a Prefixes or Suffixes Cannot Be Changed lock, either one
-//!   that fits (SPEC §10: as likely as the other).
+//! - `beast:wild-bristle-matron`: add a random eligible crafted meta-modifier.
 //! - `beast:lock`: Hinekora's Lock on a magic item, from a Craicic Croaker and a Black Mórrígan:
 //!   the next currency's result shows before it is used, and any currency uses the lock up.
 
@@ -19,7 +18,7 @@ pub struct Beast {
     cost: Cost,
 }
 
-pub fn parse(game: &Game, op: &str) -> Option<Box<dyn Operation>> {
+pub fn parse(game: &Game, class: &str, op: &str) -> Option<Box<dyn Operation>> {
     let (name, steps, cost) = match op {
         "imprint" => ("imprint", vec![Step::Imprint], Cost::of("craicic-croaker", 1.0, 10.0)),
         "restore" => ("restore", vec![Step::Restore], Cost { items: Vec::new(), seconds: 2.0 }),
@@ -30,7 +29,18 @@ pub fn parse(game: &Game, op: &str) -> Option<Box<dyn Operation>> {
         ),
         "beast:wild-bristle-matron" => (
             "beast:wild-bristle-matron",
-            vec![Step::CraftAny(Arc::new(game.metamods.get(..2)?.to_vec()))],
+            vec![Step::CraftAny(Arc::new(
+                game.metamods
+                    .iter()
+                    .copied()
+                    .filter(|&m| {
+                        game.bench.iter().any(|option| {
+                            option.item_classes.iter().any(|c| c == class)
+                                && option.actions.add_explicit_mod.as_deref() == Some(game.def(m).key.as_str())
+                        })
+                    })
+                    .collect(),
+            ))],
             Cost::of("wild-bristle-matron", 1.0, 10.0),
         ),
         _ => return None,
@@ -43,13 +53,16 @@ impl Operation for Beast {
         self.name.into()
     }
 
-    fn applies(&self, _: &Ctx, item: &dyn View) -> bool {
+    fn applies(&self, ctx: &Ctx, item: &dyn View) -> bool {
         match &self.steps[0] {
             Step::Imprint => item.rarity() == Rarity::Magic && item.fractured() == 0,
             Step::Restore => item.imprinted(),
             Step::Foresee => item.rarity() == Rarity::Magic && !item.foreseen(),
-            Step::CraftAny(locks) => {
-                item.rarity() != Rarity::Normal && !item.item_class().contains("Jewel") && locks.iter().any(|&m| item.fits(m))
+            Step::CraftAny(mods) => {
+                let multimod = ctx.game.metamods.get(4).is_some_and(|&m| item.has(m));
+                item.rarity() != Rarity::Normal
+                    && (item.crafted() == 0 || (item.crafted() == 1 && multimod))
+                    && mods.iter().any(|&m| item.fits(m))
             }
             _ => unreachable!(),
         }

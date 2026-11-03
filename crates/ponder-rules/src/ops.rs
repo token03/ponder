@@ -763,7 +763,7 @@ pub fn parse(game: &Game, class: &str, op: &str, avoid: &[crate::game::GroupId])
     if op == "remembrance" {
         return Some(Box::new(memory::Remembrance));
     }
-    if let Some(o) = beast::parse(game, op) {
+    if let Some(o) = beast::parse(game, class, op) {
         return Some(o);
     }
     if op == "dominance" {

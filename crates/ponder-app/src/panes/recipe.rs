@@ -857,7 +857,7 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
             from.crafted.retain(|m| main.is_none_or(|line| !line.dropped.contains(m)));
             let matron = main.is_some_and(|line| line.op == "beast:wild-bristle-matron" && line.exits().count() > 1);
             let heading = match main.and_then(|line| line.op.strip_prefix("buy:")) {
-                _ if matron => vec![words("Lock a side")],
+                _ if matron => vec![words("Add a meta-modifier")],
                 Some(part) if part != "base" => vec![words(format!("Start with the {part} item"))],
                 _ => target.map_or_else(
                     || vec![words("Carry on")],
@@ -1126,10 +1126,7 @@ fn instruction(line: &Line, cx: &Context) -> Vec<Piece> {
             let text = (cx.bench)(rest).unwrap_or_else(|| rest.to_string());
             vec![words("Bench-craft "), Piece::Mod { short: text.clone(), full: text, role: "bench" }, words(" over the crafted mod")]
         }
-        ("beast", "wild-bristle-matron") if line.branches.len() == 1 => {
-            [op("Use a "), vec![words(": only one side has room for its lock, so it is sure to fit")]].concat()
-        }
-        ("beast", "wild-bristle-matron") => [op("Use a "), vec![words(", which locks its prefixes or its suffixes, either one")]].concat(),
+        ("beast", "wild-bristle-matron") => [op("Use a "), vec![words(", which adds a random eligible crafted meta-modifier")]].concat(),
         _ if line.augments > 0.0 && line.spam() => [
             op("Spam "),
             vec![words(format!(" (about {}), with an ", count(line.each)))],
