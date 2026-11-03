@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use ponder_rules::game::Game;
 use ponder_rules::game::{Kind, Side};
 use ponder_rules::goal::Source;
 use ponder_rules::item::Item;
-use ponder_rules::lens::Lens;
+use ponder_rules::lens::{Lens, State};
 use ponder_rules::ops::awakener::Awakener;
 use ponder_rules::ops::recombinator::Recombinator;
 use ponder_rules::ops::{Ctx, Operation, Step, Supply, parse};
@@ -439,7 +440,7 @@ impl Solution<'_> {
 
     pub fn craft(&self) -> Craft<'_> {
         let ops: Vec<_> = self.ops.iter().map(|o| o.as_ref()).collect();
-        Craft::new(&self.ctx, &self.lens, &ops, self.market, self.starts.clone(), 0)
+        Craft::replay(&self.ctx, &self.lens, &ops, self.market, self.starts.clone(), 0)
     }
 }
 
@@ -449,6 +450,93 @@ pub struct Session<'a> {
     plans: HashMap<Key, Cached<'a>>,
     retained: usize,
     accesses: u64,
+    policies: Option<&'a dyn Policies>,
+}
+
+/// Where solved policies are kept between sessions, by the bytes of what was solved. Keys hold
+/// the request but not the game data, prices or solver: a store serves one of each.
+pub trait Policies: Sync {
+    fn get(&self, key: &[u8]) -> Option<Saved>;
+    fn put(&self, key: &[u8], saved: &Saved);
+}
+
+/// What solving a request came to: its policy, the plain craft it fell back on, or a failure.
+#[derive(Serialize, Deserialize)]
+pub enum Saved {
+    Solved(SavedPolicy),
+    Plain,
+    Unreachable,
+    TooManyStates(usize),
+}
+
+/// A solved policy, with what the lens learnt solving it: everything a plan is summarized from.
+#[derive(Serialize, Deserialize)]
+pub struct SavedPolicy {
+    /// The lens's classes, to tell a lens built differently since.
+    classes: Vec<String>,
+    imprints: Vec<(u32, State)>,
+    cost: f64,
+    states: Vec<Node>,
+    values: Vec<f64>,
+    policy: Vec<Option<usize>>,
+    given_up: Vec<Node>,
+    outcomes: usize,
+    explored: usize,
+    actions: usize,
+}
+
+impl SavedPolicy {
+    fn new(lens: &Lens, policy: &Policy<Node>) -> Self {
+        Self {
+            classes: classes(lens),
+            imprints: lens.imprints(),
+            cost: policy.cost,
+            states: policy.states.clone(),
+            values: policy.values.clone(),
+            policy: policy.policy.clone(),
+            given_up: policy.given_up.clone(),
+            outcomes: policy.outcomes,
+            explored: policy.explored,
+            actions: policy.actions,
+        }
+    }
+
+    /// The policy, if `lens` is built as the one it was solved through.
+    fn restore(self, lens: &Lens) -> Option<Policy<Node>> {
+        if self.classes != classes(lens) {
+            return None;
+        }
+        lens.restore_imprints(&self.imprints);
+        Some(Policy {
+            cost: self.cost,
+            index: self.states.iter().enumerate().map(|(i, state)| (state.clone(), i)).collect(),
+            states: self.states,
+            values: self.values,
+            policy: self.policy,
+            given_up: self.given_up,
+            outcomes: self.outcomes,
+            explored: self.explored,
+            actions: self.actions,
+            stats: Default::default(),
+        })
+    }
+}
+
+fn classes(lens: &Lens) -> Vec<String> {
+    (0..lens.classes()).map(|c| lens.describe(c)).collect()
+}
+
+/// A hasher that keeps what it is fed: the bytes of a key.
+struct Bytes(Vec<u8>);
+
+impl Hasher for Bytes {
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        unreachable!("only the bytes are kept")
+    }
 }
 
 struct Cached<'a> {
@@ -521,7 +609,12 @@ impl Key {
 
 impl<'a> Session<'a> {
     pub fn new(ctx: Ctx<'a>, market: &'a Market) -> Self {
-        Self { ctx, market, plans: HashMap::new(), retained: 0, accesses: 0 }
+        Self { ctx, market, plans: HashMap::new(), retained: 0, accesses: 0, policies: None }
+    }
+
+    /// Recall policies from `policies` instead of solving them again, and save the new ones there.
+    pub fn with_policies(self, policies: &'a dyn Policies) -> Self {
+        Self { policies: Some(policies), ..self }
     }
 
     fn trim(&mut self, limit: usize) {
@@ -599,36 +692,69 @@ impl<'a> Session<'a> {
         if !producible(game, &request.goal, &refs, &request.starts) {
             return Err(Error::Solve(ponder_solve::Error::Unreachable));
         }
+        let stored = {
+            let mut bytes = Bytes(Vec::new());
+            (&key, limit).hash(&mut bytes);
+            bytes.0
+        };
+        let saved = self.policies.and_then(|policies| policies.get(&stored));
         // Mechanics that make items remember more (strands, imprints, locks, elevation) are
         // solved after the plain craft, capped by its cost and falling back on it.
         let tiered = (limit.is_none() || cap.is_some()) && ops.iter().any(|op| remembers(op.as_ref()));
-        let plain = if tiered {
+        let plain = |session: &mut Self| {
             let methods = request
                 .methods
                 .iter()
                 .filter(|m| !matches!(m, Method::Named(name) if parse(game, class, name, &avoid).is_some_and(|op| remembers(op.as_ref()))))
                 .cloned()
                 .collect();
-            self.solve_capped(Request { methods, ..request.clone() }, limit, cap).ok()
-        } else {
-            None
+            session.solve_capped(Request { methods, ..request.clone() }, limit, cap)
         };
         let inputs: Vec<_> = request.starts.iter().flat_map(|s| s.items()).collect();
-        let mut lens = Lens::try_new(game, request.kind, vec![request.goal], &refs, &inputs).map_err(Error::Unsupported)?;
-        let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
-        if let Some(bound) = plain.as_ref().map(|plain| plain.policy.cost).into_iter().chain(cap).reduce(f64::min) {
-            craft.cap(bound);
-        }
-        let solution = match ponder_solve::solve_with(
-            &craft,
-            &[(1.0, Node::Market)],
-            limit.or(plain.as_ref().map(|_| EXTENDED_LIMIT)),
-            ponder_solve::Numerics::Hybrid,
-        ) {
-            Err(ponder_solve::Error::TooManyStates(_)) if let Some(plain) = plain => return Ok(plain),
-            solved => solved.map_err(Error::Solve)?,
+        let lens =
+            |request: &Request| Lens::try_new(game, request.kind, vec![request.goal.clone()], &refs, &inputs).map_err(Error::Unsupported);
+        let recalled = match saved {
+            Some(Saved::Unreachable) => return Err(Error::Solve(ponder_solve::Error::Unreachable)),
+            Some(Saved::TooManyStates(states)) => return Err(Error::Solve(ponder_solve::Error::TooManyStates(states))),
+            Some(Saved::Plain) if tiered => return plain(self),
+            Some(Saved::Solved(saved)) => {
+                let lens = lens(&request)?;
+                saved.restore(&lens).map(|policy| (lens, policy))
+            }
+            _ => None,
         };
-        lens.clear_cache();
+        let (lens, solution) = match recalled {
+            Some(recalled) => recalled,
+            None => {
+                let plain = if tiered { plain(self).ok() } else { None };
+                let mut lens = lens(&request)?;
+                let mut craft = Craft::new(&self.ctx, &lens, &refs, self.market, request.starts.clone(), 0);
+                if let Some(bound) = plain.as_ref().map(|plain| plain.policy.cost).into_iter().chain(cap).reduce(f64::min) {
+                    craft.cap(bound);
+                }
+                let solved = ponder_solve::solve_with(
+                    &craft,
+                    &[(1.0, Node::Market)],
+                    limit.or(plain.as_ref().map(|_| EXTENDED_LIMIT)),
+                    ponder_solve::Numerics::Hybrid,
+                );
+                if let Some(policies) = self.policies {
+                    let saved = match &solved {
+                        Ok(policy) => Saved::Solved(SavedPolicy::new(&lens, policy)),
+                        Err(ponder_solve::Error::TooManyStates(_)) if plain.is_some() => Saved::Plain,
+                        Err(ponder_solve::Error::Unreachable) => Saved::Unreachable,
+                        Err(ponder_solve::Error::TooManyStates(states)) => Saved::TooManyStates(*states),
+                    };
+                    policies.put(&stored, &saved);
+                }
+                let solution = match solved {
+                    Err(ponder_solve::Error::TooManyStates(_)) if let Some(plain) = plain => return Ok(plain),
+                    solved => solved.map_err(Error::Solve)?,
+                };
+                lens.clear_cache();
+                (lens, solution)
+            }
+        };
         let plan = Arc::new(Solution {
             policy: solution,
             lens,

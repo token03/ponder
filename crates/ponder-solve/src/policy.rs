@@ -1,8 +1,7 @@
 use rustc_hash::FxHashMap;
-use std::cell::OnceCell;
 
 use crate::components;
-use crate::linear::{SparseMatrix, direct_solve, solve_dense};
+use crate::linear::{SparseMatrix, SparseSystem, solve_dense};
 
 pub struct PolicySystem {
     outcomes: Vec<Vec<(f64, usize)>>,
@@ -284,8 +283,8 @@ fn solve_components(outcomes: &[Vec<(f64, usize)>], rewards: &[Vec<f64>]) -> Opt
                 }
                 matrix.finish_row();
             }
-            let factor = OnceCell::new();
-            rhs.iter().map(|b| direct_solve(&matrix, &factor, b)).collect::<Option<Vec<_>>>()?
+            let mut system = SparseSystem::hybrid(&matrix);
+            rhs.iter().map(|b| system.solve(b, vec![0.0; size])).collect::<Option<Vec<_>>>()?
         };
         for (value, solved) in values.iter_mut().zip(solved) {
             for (&s, v) in part.iter().zip(solved) {

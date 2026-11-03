@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use anyhow::{Result, anyhow};
 use ponder_plan::{
     market::Market,
-    session::{Error as SessionError, Method, Request, Session, Solution},
+    session::{Error as SessionError, Method, Request, Session, Solution, Usage},
     supply::Product,
 };
 use ponder_rules::game::{Game, Side};
@@ -63,8 +63,7 @@ fn total(summary: &Summary, base_price: f64) -> f64 {
 }
 
 /// The summary of one solved item, followed `runs` times for its recipe's order and its items.
-fn summarize(plan: &Solution, stage: Stage, base_price: f64, runs: usize) -> Result<(Summary, Vec<Item>)> {
-    let usage = plan.usage().map_err(|error| anyhow!(error))?;
+fn summarize(plan: &Solution, usage: Usage, stage: Stage, base_price: f64, runs: usize) -> (Summary, Vec<Item>) {
     let followed = plan.craft().follow(&plan.policy, runs, 1);
     let mut ops: Vec<String> = Vec::new();
     for (action, _) in &followed.example {
@@ -86,7 +85,11 @@ fn summarize(plan: &Solution, stage: Stage, base_price: f64, runs: usize) -> Res
         stages: vec![stage],
         depth: Depth::default(),
     };
-    Ok((summary, followed.items))
+    (summary, followed.items)
+}
+
+fn usage(plan: &Solution) -> Result<Usage> {
+    plan.usage().map_err(|error| anyhow!(error))
 }
 
 struct Solver<'a, 's> {
@@ -138,7 +141,10 @@ impl Solver<'_, '_> {
             .session
             .solve(part.request.clone(), None)
             .map_err(|error| explain(error, &[]))
-            .and_then(|plan| summarize(&plan, self.stage(&part.name, &part.request, &part.needs), self.base_price, PART_RUNS))
+            .and_then(|plan| {
+                let usage = usage(&plan)?;
+                Ok(summarize(&plan, usage, self.stage(&part.name, &part.request, &part.needs), self.base_price, PART_RUNS))
+            })
             .map(|(summary, items)| {
                 let product = Arc::new(Product::new(&part.name));
                 product.fill(total(&summary, self.base_price), items);
@@ -151,7 +157,7 @@ impl Solver<'_, '_> {
     fn direct(&mut self, request: &Request) -> Result<Summary> {
         let plan = self.session.solve(request.clone(), None).map_err(|error| explain(error, &self.unpriced))?;
         let all: Vec<usize> = (0..request.goal.needs.len()).collect();
-        Ok(summarize(&plan, self.stage("main", request, &all), self.base_price, 1)?.0)
+        Ok(summarize(&plan, usage(&plan)?, self.stage("main", request, &all), self.base_price, 1).0)
     }
 
     /// The chain's craft, cheaper than `bound` if it can be.
@@ -163,20 +169,21 @@ impl Solver<'_, '_> {
         let plan = if bound.is_finite() { self.session.solve_under(finish, bound) } else { self.session.solve(finish, None) };
         let plan = plan.map_err(|error| explain(error, &self.unpriced))?;
         let all: Vec<usize> = (0..request.goal.needs.len()).collect();
-        let (mut summary, _) = summarize(&plan, self.stage("main", request, &all), self.base_price, 1)?;
-        let usage = plan.usage().map_err(|error| anyhow!(error))?;
+        let usage = usage(&plan)?;
+        let (buys, actions) = (usage.buys.clone(), usage.actions.clone());
+        let (mut summary, _) = summarize(&plan, usage, self.stage("main", request, &all), self.base_price, 1);
         let times = |name: &str, list: &[(String, f64)]| list.iter().find(|(n, _)| n == name).map_or(0.0, |(_, uses)| *uses);
         let used: Vec<(&Made, f64)> = chain
             .heirs
             .iter()
             .zip(&heirs)
-            .map(|(part, made)| (made.as_ref(), times(&part.name, &usage.buys)))
+            .map(|(part, made)| (made.as_ref(), times(&part.name, &buys)))
             .chain(
                 chain
                     .partners
                     .iter()
                     .zip(&partners)
-                    .map(|(part, made)| (made.as_ref(), times(&format!("{}:{}", chain.mechanic, part.name), &usage.actions))),
+                    .map(|(part, made)| (made.as_ref(), times(&format!("{}:{}", chain.mechanic, part.name), &actions))),
             )
             .filter(|(_, uses)| *uses > 0.0)
             .collect();
@@ -219,7 +226,7 @@ impl Solver<'_, '_> {
 /// The plan for the problem at `depth`. A deep solve passes the ladder plan to `quick` first
 /// and keeps it unless trying every mechanic beats it.
 fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64, depth: Depth, quick: &dyn Fn(&Summary)) -> Result<Summary> {
-    let (game, _) = cx.rules()?;
+    let (game, data_key) = cx.rules()?;
     let market = Market { prices: prices.clone(), chaos_per_hour: cx.settings.chaos_per_hour, base: base_price };
     let ladder = crate::plan::prepare(game, problem, &market, Depth::Ladder)?;
     let full = crate::plan::prepare(game, problem, &market, Depth::Deep)?;
@@ -235,9 +242,13 @@ fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64, de
             market.price(&ops::parse(game, class, name, &avoid)?.cost()).is_none().then(|| name.clone())
         })
         .collect();
+    let sorted = serde_json::to_string(&prices.iter().collect::<BTreeMap<_, _>>())?;
     let mut hasher = DefaultHasher::new();
-    serde_json::to_string(&prices.iter().collect::<BTreeMap<_, _>>())?.hash(&mut hasher);
-    let session = Session::new(Ctx { game, assumptions: &cx.assumptions }, &market);
+    sorted.hash(&mut hasher);
+    let context =
+        serde_json::to_vec(&(data_key.as_bytes(), format!("{:?}", cx.assumptions), &sorted, cx.settings.chaos_per_hour, base_price))?;
+    let policies = cx.plans.policies(&context);
+    let session = Session::new(Ctx { game, assumptions: &cx.assumptions }, &market).with_policies(&policies);
     let mut solver = Solver { cx, game, session, problem, base_price, unpriced, market_key: hasher.finish() };
     let awakened = ladder.kind.influences.iter().count() >= 2;
     let first = {
@@ -397,11 +408,15 @@ fn available_memory() -> Option<u64> {
     line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kib| kib * 1024)
 }
 
-/// Workers that fit in the memory available, leaving a core for everything else.
+/// Cores for solving, leaving one for everything else.
+fn solving_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).saturating_sub(1).max(1)
+}
+
+/// Crafts solved at once: as many as fit in the memory available.
 fn default_workers() -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let fit = available_memory().map_or(cores, |bytes| (bytes / WORKER_BYTES) as usize);
-    fit.min(cores.saturating_sub(1)).max(1)
+    let threads = solving_threads();
+    available_memory().map_or(threads, |bytes| (bytes / WORKER_BYTES) as usize).clamp(1, threads)
 }
 
 /// Heavy solves that fit in the memory available at once.
@@ -413,11 +428,12 @@ fn heavy(estimate: &Estimate) -> bool {
     estimate.candidate.as_ref().is_some_and(|problem| problem.influences.len() >= 2)
 }
 
-/// Solve the estimates on `workers` threads, by default as many as memory allows. Saved plans
-/// are taken first, so they all show at once; then the rest are solved, the missing before the
-/// stale and the simplest first.
+/// Solve `workers` estimates at once, by default as many as memory allows, each spreading
+/// over the cores the others leave idle. Saved plans are taken first, so they all show at once;
+/// then the rest are solved, the missing before the stale and the simplest first.
 pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    in_pool(Some(workers.unwrap_or_else(default_workers)), || {
+    let workers = workers.unwrap_or_else(default_workers);
+    in_pool(Some(solving_threads().max(workers)), || {
         let recalled: Vec<Recalled> = estimates.par_iter_mut().map(|estimate| recall(cx, estimate, prices)).collect();
         let mut pending: Vec<(Recalled, &mut Estimate)> =
             recalled.into_iter().zip(estimates.iter_mut()).filter(|(recalled, _)| *recalled != Recalled::Fresh).collect();
@@ -450,13 +466,10 @@ pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices
                 light.pop_front().or_else(|| heavy.pop_front())
             }
         };
-        (0..rayon::current_num_threads().min(total)).into_par_iter().for_each(|_| {
-            let solver = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("solver pool");
-            solver.install(|| {
-                while let Some(estimate) = next() {
-                    price(estimate);
-                }
-            });
+        (0..workers.min(total)).into_par_iter().for_each(|_| {
+            while let Some(estimate) = next() {
+                price(estimate);
+            }
         });
     });
 }

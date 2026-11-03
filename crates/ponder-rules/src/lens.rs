@@ -15,8 +15,9 @@
 
 use rayon::prelude::*;
 use rustc_hash::FxHashMap as HashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::game::{Game, GroupId, Influences, Kind, MAX_STRANDS, ModId, Side, TagId};
 use crate::goal::{Influence, Rarity, Source};
@@ -36,7 +37,7 @@ pub const CLASSES: usize = 40;
 /// Strand levels states tell apart (SPEC §10).
 const STRAND_LEVELS: usize = 4;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct State {
     pub rarity: Rarity,
     pub influences: u8,
@@ -47,7 +48,28 @@ pub struct State {
     /// Does a lock show what the next currency will do?
     pub foreseen: bool,
     /// Per class: normal affixes, then (after the lens's classes) fractured ones.
+    #[serde(with = "counts")]
     pub counts: [u8; 2 * CLASSES],
+}
+
+/// Counts as bytes, without the unused slots at the end: serde derives arrays only up to 32 long.
+mod counts {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(counts: &[u8; super::CLASSES * 2], serializer: S) -> Result<S::Ok, S::Error> {
+        let used = counts.iter().rposition(|&count| count > 0).map_or(0, |last| last + 1);
+        serializer.serialize_bytes(&counts[..used])
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; super::CLASSES * 2], D::Error> {
+        let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
+        let mut counts = [0; super::CLASSES * 2];
+        counts
+            .get_mut(..bytes.len())
+            .ok_or_else(|| D::Error::invalid_length(bytes.len(), &"at most a count per class slot"))?
+            .copy_from_slice(bytes);
+        Ok(counts)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -74,8 +96,8 @@ struct Class {
     serves: u128,
     /// Unveil preference: 1 is kept first, 0 is not preferred.
     rank: u8,
-    /// Classes that block this one when present (same group), itself included.
-    conflicts: Vec<usize>,
+    /// A bit per class that blocks this one when present (same group), itself included.
+    conflicts: u64,
 }
 
 struct TargetLens {
@@ -89,6 +111,8 @@ pub struct Lens<'g> {
     game: &'g Game,
     pub kind: Kind,
     class_name: String,
+    /// Most affixes per rarity and side on the lens's base.
+    limits: [[usize; 2]; 3],
     classes: Vec<Class>,
     class_of: HashMap<ModId, usize>,
     read_tags: Vec<TagId>,
@@ -110,7 +134,9 @@ pub struct Lens<'g> {
     bans: Vec<(usize, u32)>,
     partners: Vec<(SupplyRef, Vec<(f64, State)>)>,
     samples: Mutex<SampleCache>,
-    viable_fractures: Vec<OnceLock<Box<[bool; 256]>>>,
+    /// Per target and class, a bit per influence set: can the goal still be made with one
+    /// fractured mod of the class and nothing else fractured?
+    viable_fractures: Vec<[u64; 4]>,
     unveil_kernels: Mutex<HashMap<Vec<(usize, u64)>, Arc<[(usize, f64)]>>>,
     /// Imprinted states by key (a hash of the state, so keys do not depend on exploration order).
     imprints: Mutex<HashMap<u32, State>>,
@@ -447,7 +473,7 @@ impl<'g> Lens<'g> {
                 tags,
                 serves,
                 rank,
-                conflicts: Vec::new(),
+                conflicts: 0,
             });
         }
         // What Dominance makes of an untracked influenced mod is as untracked, in its class.
@@ -475,7 +501,7 @@ impl<'g> Lens<'g> {
                 if c.tracked {
                     conflicts.insert(i);
                 }
-                c.conflicts = conflicts.into_iter().collect();
+                c.conflicts = conflicts.into_iter().fold(0, |bits, c| bits | 1 << c);
             }
         }
         let weight_of: HashMap<ModId, f64> = rolls.iter().copied().collect();
@@ -563,12 +589,14 @@ impl<'g> Lens<'g> {
                 TargetLens { target, offset, classes: relevant, distinct }
             })
             .collect();
-        let viable_fractures = (0..targets.len() * classes.len()).map(|_| OnceLock::new()).collect();
         let class_name = game.bases[kind.base.0 as usize].class.clone();
+        let limits =
+            [Rarity::Normal, Rarity::Magic, Rarity::Rare].map(|r| Side::BOTH.map(|side| crate::item::limit(game, kind.base, r, side)));
         let mut lens = Lens {
             game,
             kind,
             class_name,
+            limits,
             classes,
             class_of,
             read_tags,
@@ -583,7 +611,7 @@ impl<'g> Lens<'g> {
             bans,
             partners: Vec::new(),
             samples: Mutex::default(),
-            viable_fractures,
+            viable_fractures: Vec::new(),
             unveil_kernels: Mutex::default(),
             imprints: Mutex::default(),
             source: (Vec::new(), Vec::new()),
@@ -598,7 +626,35 @@ impl<'g> Lens<'g> {
             })
             .collect();
         lens.source = source;
+        if lens.partners.is_empty() {
+            lens.viable_fractures = lens.viable_single_fractures();
+        }
         Ok(lens)
+    }
+
+    fn viable_single_fractures(&self) -> Vec<[u64; 4]> {
+        let n = self.classes.len();
+        let entry = |t: usize, c: usize| {
+            let mut state = State {
+                rarity: Rarity::Rare,
+                influences: 0,
+                eldritch: None,
+                strands: 0,
+                imprint: 0,
+                foreseen: false,
+                counts: [0; 2 * CLASSES],
+            };
+            state.counts[c + n] = 1;
+            let mut bits = [0u64; 4];
+            for influences in 0..=u8::MAX {
+                state.influences = influences;
+                if self.viable_fixed(t, &state, &[c]) {
+                    bits[influences as usize / 64] |= 1 << (influences % 64);
+                }
+            }
+            bits
+        };
+        (0..self.targets.len()).flat_map(|t| (0..n).map(move |c| (t, c))).map(|(t, c)| entry(t, c)).collect()
     }
 
     /// Strands as a state keeps them: the fewest that roll alike (SPEC §10: rounding down
@@ -623,9 +679,6 @@ impl<'g> Lens<'g> {
 
     pub fn clear_cache(&mut self) {
         *self.samples.get_mut().unwrap() = HashMap::default();
-        for cached in &mut self.viable_fractures {
-            *cached = OnceLock::new();
-        }
         *self.unveil_kernels.get_mut().unwrap() = HashMap::default();
     }
 
@@ -678,13 +731,18 @@ impl<'g> Lens<'g> {
 
     pub fn view<'a>(&'a self, state: &'a State) -> StateView<'a> {
         let n = self.classes.len();
-        let (mut counts, mut crafted, mut fractured) = ([0; 2], 0, 0);
-        for (c, class) in self.classes.iter().enumerate() {
-            counts[class.side as usize] += (state.counts[c] + state.counts[c + n]) as usize;
-            crafted += if class.crafted { (state.counts[c] + state.counts[c + n]) as usize } else { 0 };
-            fractured += state.counts[c + n] as usize;
+        let (normal, fractured) = state.counts.split_at(n);
+        let (mut counts, mut crafted, mut fractures) = ([0; 2], 0, 0);
+        let (mut present, mut fractured_present) = (0u64, 0u64);
+        for (c, ((&normal, &fractured), class)) in normal.iter().zip(fractured).zip(&self.classes).enumerate() {
+            let held = (normal + fractured) as usize;
+            counts[class.side as usize] += held;
+            crafted += held * class.crafted as usize;
+            fractures += fractured as usize;
+            present |= ((held > 0) as u64) << c;
+            fractured_present |= ((fractured > 0) as u64) << c;
         }
-        StateView { lens: self, state, counts, crafted, fractured }
+        StateView { lens: self, state, counts, crafted, fractured: fractures, present, fractured_present }
     }
 
     /// Does the item hold nothing but what some need asks for?
@@ -832,15 +890,8 @@ impl<'g> Lens<'g> {
         let mut fixed = (0..n).filter(|&c| state.counts[c + n] > 0);
         let Some(first) = fixed.next() else { return true };
         if state.counts[first + n] == 1 && fixed.next().is_none() {
-            let values = self.viable_fractures[t * n + first].get_or_init(|| {
-                let mut values = Box::new([false; 256]);
-                for (influences, value) in values.iter_mut().enumerate() {
-                    let projected = State { influences: influences as u8, ..*state };
-                    *value = self.viable_fixed(t, &projected, &[first]);
-                }
-                values
-            });
-            return values[state.influences as usize];
+            let bits = &self.viable_fractures[t * n + first];
+            return bits[state.influences as usize / 64] >> (state.influences % 64) & 1 == 1;
         }
         let fixed: Vec<_> = (0..n).filter(|&c| state.counts[c + n] > 0).collect();
         self.viable_fixed(t, state, &fixed)
@@ -862,7 +913,7 @@ impl<'g> Lens<'g> {
                             Origin::Natural(Some(influence)) => state.influences & (1 << influence as u8) != 0,
                             _ => true,
                         };
-                        serves(c) && available && !fixed.iter().any(|f| self.classes[c].conflicts.contains(f))
+                        serves(c) && available && !fixed.iter().any(|&f| self.classes[c].conflicts >> f & 1 == 1)
                     }))
         })
     }
@@ -885,13 +936,13 @@ impl<'g> Lens<'g> {
                     if dist.len() == 1 {
                         return dist;
                     }
-                    let mut next: HashMap<(State, u8), f64> = HashMap::default();
+                    let mut next: HashMap<(State, u8), f64> = HashMap::with_capacity_and_hasher(dist.len(), Default::default());
                     for (p, s, total) in dist {
                         *next.entry((s, total)).or_default() += p;
                     }
                     return next.into_iter().map(|((s, t), p)| (p, s, t)).collect();
                 }
-                let mut next: HashMap<(State, u8), f64> = HashMap::default();
+                let mut next: HashMap<(State, u8), f64> = HashMap::with_capacity_and_hasher(4 * dist.len(), Default::default());
                 for (p, s, total) in dist {
                     f(s, total, &mut |q, s2, t2| *next.entry((s2, t2)).or_default() += p * q);
                 }
@@ -917,7 +968,8 @@ impl<'g> Lens<'g> {
             }
             dist.into_iter().map(|(p, s, _)| (p, s)).collect()
         };
-        out.sort_by_key(|a| a.1);
+        #[expect(clippy::unnecessary_sort_by, reason = "a key would copy each state per comparison")]
+        out.sort_unstable_by(|a, b| a.1.cmp(&b.1));
         out.dedup_by(|a, b| {
             if a.1 != b.1 {
                 return false;
@@ -1471,6 +1523,17 @@ impl<'g> Lens<'g> {
         s.imprint != 0 && self.imprints.lock().unwrap()[&s.imprint] != State { imprint: 0, ..*s }
     }
 
+    /// The imprinted states by key, to give a lens built again for the same craft.
+    pub fn imprints(&self) -> Vec<(u32, State)> {
+        let mut imprints: Vec<_> = self.imprints.lock().unwrap().iter().map(|(&key, &state)| (key, state)).collect();
+        imprints.sort_unstable_by_key(|imprint| imprint.0);
+        imprints
+    }
+
+    pub fn restore_imprints(&self, imprints: &[(u32, State)]) {
+        self.imprints.lock().unwrap().extend(imprints.iter().copied());
+    }
+
     /// Save `s` as an imprint: its key.
     fn imprint(&self, s: State) -> u32 {
         use std::hash::{Hash, Hasher};
@@ -1522,7 +1585,7 @@ impl<'g> Lens<'g> {
                         t
                     };
                     match (a, b) {
-                        (Some(a), Some(b)) if self.classes[a].conflicts.contains(&b) => {
+                        (Some(a), Some(b)) if self.classes[a].conflicts >> b & 1 == 1 => {
                             emit(p / 2.0, with(&[a]), total);
                             emit(p / 2.0, with(&[b]), total);
                         }
@@ -1693,7 +1756,7 @@ impl<'g> Lens<'g> {
         let n = self.classes.len();
         let conflicts = |a: usize, b: usize| {
             let (a, b) = (a % n, b % n);
-            self.classes[a].conflicts.contains(&b) || (a == b && self.classes[a].origin == Origin::Fixed)
+            self.classes[a].conflicts >> b & 1 == 1 || (a == b && self.classes[a].origin == Origin::Fixed)
         };
         let mut open: Vec<(f64, Vec<u8>, Vec<u8>)> = vec![(1.0, pool.iter().map(|e| e.1).collect(), vec![0; pool.len()])];
         let mut done: HashMap<Vec<u8>, f64> = HashMap::default();
@@ -1749,16 +1812,14 @@ impl<'g> Lens<'g> {
 
     /// Weight a class still has in a pool given what the item holds: zero when its group is
     /// taken; for untracked classes, what is expected to remain after the mods it holds.
-    fn available(&self, s: &State, c: usize, w: &Weights) -> f64 {
+    fn available(&self, v: &StateView, c: usize, w: &Weights) -> f64 {
         let class = &self.classes[c];
-        let n = self.classes.len();
-        let present = |o: usize| s.counts[o] + s.counts[o + n];
-        if class.conflicts.iter().any(|&o| present(o) > 0) {
+        if class.conflicts & v.present != 0 {
             0.0
         } else if class.tracked {
             w[0]
         } else {
-            w[(present(c) as usize).min(w.len() - 1)]
+            w[(v.held(c) as usize).min(w.len() - 1)]
         }
     }
 
@@ -1781,7 +1842,7 @@ impl<'g> Lens<'g> {
                 {
                     return None;
                 }
-                let w = self.available(s, c, &weights[c]);
+                let w = self.available(&v, c, &weights[c]);
                 (w > 0.0).then_some((c, w))
             })
             .collect()
@@ -1793,9 +1854,10 @@ impl<'g> Lens<'g> {
         let Some(veil) = (0..n).find(|&c| self.classes[c].veil && s.counts[c] > 0) else { return emit(1.0, s, total) };
         let side = self.classes[veil].side;
         s.counts[veil] -= 1;
+        let v = self.view(&s);
         let offers: Vec<(usize, f64, f64)> = (0..n)
             .filter(|&c| self.classes[c].side == side && self.unveil[c][0] > 0.0)
-            .map(|c| (c, self.available(&s, c, &self.unveil[c]), self.unveil[c][0] / self.classes[c].veiled as f64))
+            .map(|c| (c, self.available(&v, c, &self.unveil[c]), self.unveil[c][0] / self.classes[c].veiled as f64))
             .filter(|o| o.1 > 0.0)
             .collect();
         if offers.is_empty() {
@@ -1855,6 +1917,9 @@ pub struct StateView<'a> {
     counts: [usize; 2],
     crafted: usize,
     fractured: usize,
+    /// A bit per class the item holds a mod of; of a fractured mod.
+    present: u64,
+    fractured_present: u64,
 }
 
 impl StateView<'_> {
@@ -1863,8 +1928,11 @@ impl StateView<'_> {
     }
 
     fn present(&self, c: usize) -> bool {
-        let n = self.lens.classes.len();
-        self.state.counts[c] + self.state.counts[c + n] > 0
+        self.present >> c & 1 == 1
+    }
+
+    fn held(&self, c: usize) -> u8 {
+        self.state.counts[c] + self.state.counts[c + self.lens.classes.len()]
     }
 }
 
@@ -1879,7 +1947,7 @@ impl View for StateView<'_> {
         self.counts[side as usize]
     }
     fn limit(&self, side: Side) -> usize {
-        crate::item::limit(self.lens.game, self.lens.kind.base, self.state.rarity, side)
+        self.lens.limits[self.state.rarity as usize][side as usize]
     }
     fn crafted(&self) -> usize {
         self.crafted
@@ -1896,14 +1964,14 @@ impl View for StateView<'_> {
     fn fits(&self, m: ModId) -> bool {
         let Some(&c) = self.lens.class_of.get(&m) else { return false };
         let class = &self.lens.classes[c];
-        self.open(class.side) > 0 && !class.conflicts.iter().any(|&o| self.present(o))
+        self.open(class.side) > 0 && class.conflicts & self.present == 0
     }
     fn fixed_blocks(&self, m: ModId) -> bool {
         let n = self.lens.classes.len();
         let side = self.lens.game.def(m).side;
         let fractured: usize = (0..n).filter(|&c| self.lens.classes[c].side == side).map(|c| self.state.counts[c + n] as usize).sum();
-        fractured >= crate::item::limit(self.lens.game, self.lens.kind.base, Rarity::Rare, side)
-            || self.lens.class_of.get(&m).is_some_and(|&c| self.lens.classes[c].conflicts.iter().any(|&o| self.state.counts[o + n] > 0))
+        fractured >= self.lens.limits[Rarity::Rare as usize][side as usize]
+            || self.lens.class_of.get(&m).is_some_and(|&c| self.lens.classes[c].conflicts & self.fractured_present != 0)
     }
     fn locked(&self) -> [bool; 2] {
         self.lens.lock.map(|c| c.is_some_and(|c| self.present(c)))

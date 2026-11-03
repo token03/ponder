@@ -32,12 +32,6 @@ const RARE_EXIT: f64 = 0.1;
 const SPAM: f64 = 1.5;
 /// The room a step's number takes before its text.
 const NUMBER_WIDTH: f32 = 26.0;
-/// The most steps off the route the method lists; the rest are found by the item in hand.
-const DETOURS: usize = 8;
-/// The most steps the finder follows an item through on its usual way.
-const WAY: usize = 6;
-/// The most steps the finder shows for one item.
-const FOUND: usize = 3;
 /// The width of a step's item card.
 const CARD_WIDTH: f32 = 210.0;
 /// The width of an outcome's share column.
@@ -178,14 +172,12 @@ struct Step {
     lines: Vec<Line>,
     /// expected uses per finished item of the currencies too rare to name
     others: f64,
-    /// the needs held, and whether fractured
-    needs: Vec<(usize, bool)>,
-    /// where the item most often goes from here
-    usual: Option<Next>,
 }
 
 struct Chapter {
     title: String,
+    /// the base as bought: "Hunter-influenced Lich's Circlet"
+    bought: String,
     goal: Vec<Piece>,
     cost: f64,
     /// (operation, expected uses, expected chaos) per item made
@@ -193,15 +185,12 @@ struct Chapter {
     steps: Vec<Step>,
     /// how many of the steps are the usual route; the rest put it back on track
     route: usize,
-    needs: Vec<Name>,
 }
 
 impl Chapter {
-    /// How many steps the method lists: the route, then the few others reached most, while they
-    /// are reached often enough.
-    pub fn listed(&self) -> usize {
-        let common = (self.route..self.steps.len()).find(|&s| self.steps[s].visits < RARE_STEP).unwrap_or(self.steps.len());
-        common.min(self.route + DETOURS)
+    /// How many steps are the route and those reached often enough; the rest are rarer situations.
+    fn common(&self) -> usize {
+        (self.route..self.steps.len()).find(|&s| self.steps[s].visits < RARE_STEP).unwrap_or(self.steps.len())
     }
 }
 
@@ -346,11 +335,6 @@ impl Change {
     fn named(&self, needs: &[Name]) -> (Vec<Piece>, Vec<Piece>, Vec<Piece>) {
         let name = |ids: &[usize], piece: fn(&Name) -> Piece| list(ids.iter().filter_map(|&i| needs.get(i)).map(piece).collect());
         (name(&self.got, wanted), name(&self.lost, wanted), name(&self.fractured, fractured))
-    }
-
-    fn agree(&self, other: &Change) -> Change {
-        let both = |a: &[usize], b: &[usize]| a.iter().copied().filter(|i| b.contains(i)).collect();
-        Change { got: both(&self.got, &other.got), lost: both(&self.lost, &other.lost), fractured: both(&self.fractured, &other.fractured) }
     }
 }
 
@@ -562,18 +546,22 @@ struct Steps {
     changes: Vec<Change>,
 }
 
-/// The flow as steps: items are one step while you do the same thing to them and its results
-/// lead to the same steps, whichever of your mods or other mods they hold. A step starts as the
-/// items given the same currency with the same fractured and crafted mods and dominant implicit
-/// (magic items: any currency, as alteration and augmentation are one loop; normal and rare
-/// items alike, as an essence makes both rare), and splits until that holds.
+/// The flow as steps: items are one step while they hold the same of your mods, you do the same
+/// thing to them and its results lead to the same steps, whichever other mods they hold. A step
+/// starts as the items given the same currency with the same needs, fractured and crafted mods and
+/// dominant implicit, and splits until that holds. Magic items take any currency and needs, as
+/// alteration and augmentation are one loop; a reroll with nothing crafted takes any needs, as it
+/// keeps none; normal and rare items are alike, as an essence makes both rare.
 /// `needs`: how many the goal has.
 fn steps(flow: &Flow, needs: usize) -> Steps {
     let first = |node: &FlowNode| node.actions.first().map(|(op, _)| op.clone());
     let start = |node: &FlowNode| {
         let magic = node.rarity.as_deref() == Some("magic");
-        let action = if magic { None } else { first(node) };
-        (node.kind, node.fractured.clone(), node.crafted.clone(), node.eldritch.clone(), node.veiled, magic, action)
+        let action = first(node);
+        let rerolls = node.crafted.is_empty() && action.as_deref().is_some_and(|op| REROLLS.iter().any(|kind| op.starts_with(kind)));
+        let held = if magic || rerolls { Vec::new() } else { node.held.clone() };
+        let action = if magic { None } else { action };
+        (node.kind, held, node.fractured.clone(), node.crafted.clone(), node.eldritch.clone(), node.veiled, magic, action)
     };
     let mut leaving: Vec<Vec<&FlowEdge>> = vec![Vec::new(); flow.nodes.len()];
     for edge in &flow.edges {
@@ -701,7 +689,7 @@ fn order(flow: &Flow) -> (Vec<usize>, usize) {
     (rows, on_route)
 }
 
-fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) -> Chapter {
+fn chapter(stage: &Stage, finish: bool, base: &str, bench: &dyn Fn(&str) -> Option<String>) -> Chapter {
     let Steps { flow, fills, when, reached, shifts, changes } = steps(&stage.flow, stage.needs.len());
     let reaches = |at: usize| {
         let to = &flow.nodes[flow.edges[at].to];
@@ -772,11 +760,11 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
                         .map(|&(at, _)| at)
                         .collect();
                     let several = landed.len() > 1;
-                    let always: Vec<usize> = match landed.split_first() {
-                        Some((&first, rest)) if several => {
-                            rest.iter().fold(changes[first].clone(), |change, &at| change.agree(&changes[at])).got
-                        }
-                        _ => Vec::new(),
+                    let always: Vec<usize> = match several {
+                        false => Vec::new(),
+                        true => (0..needs.len())
+                            .filter(|need| !node.held.contains(need) && landed.iter().all(|&at| reaches(at).held.contains(need)))
+                            .collect(),
                     };
                     let dropped: Vec<(String, String)> = match several {
                         false => Vec::new(),
@@ -911,16 +899,7 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
                 eldritch: node.eldritch.clone(),
                 veiled: node.veiled,
             };
-            let usual =
-                edges.iter().filter(|edge| edge.from == row && edge.to != row).max_by(|a, b| a.flow.total_cmp(&b.flow)).map(|edge| {
-                    match nodes[edge.to].kind {
-                        FlowKind::Finished => Next::Done,
-                        FlowKind::StartOver | FlowKind::Buy => Next::StartOver,
-                        FlowKind::Work => step_of(edge.to).map_or(Next::StartOver, Next::Step),
-                    }
-                });
-            let held = node.held.iter().map(|&need| (need, node.fractured.contains(&need))).collect();
-            Step { heading, have, visits: node.visits, lines, others, needs: held, usual }
+            Step { heading, have, visits: node.visits, lines, others }
         })
         .collect();
     let cost_of = |op: &str| stage.spend.iter().find(|(name, _)| name == op).map_or(0.0, |(_, chaos)| *chaos);
@@ -944,7 +923,49 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
     let ingredients = bought.chain(ingredients).collect();
     let title = if finish { "To finish".to_string() } else { format!("For the {} item", stage.item) };
     let goal = list(needs.iter().map(wanted).collect());
-    Chapter { title, goal, cost: stage.cost, ingredients, steps, route, needs }
+    let bought = match stage.influences.as_slice() {
+        [] => base.to_string(),
+        influences => format!("{}-influenced {base}", influences.iter().map(|i| title_case(i)).collect::<Vec<_>>().join("/")),
+    };
+    let (steps, route) = linked(steps, route);
+    Chapter { title, bought, goal, cost: stage.cost, ingredients, steps, route }
+}
+
+/// The steps some result sends the item to, from the first on, numbered again in their order;
+/// and how many of them are on the route.
+fn linked(steps: Vec<Step>, route: usize) -> (Vec<Step>, usize) {
+    let mut seen = vec![false; steps.len()];
+    let mut stack = vec![0];
+    while let Some(s) = stack.pop() {
+        if s >= steps.len() || std::mem::replace(&mut seen[s], true) {
+            continue;
+        }
+        let branches = steps[s].lines.iter().flat_map(|line| &line.branches);
+        stack.extend(branches.filter_map(|branch| if let Next::Step(to) = branch.next { Some(to) } else { None }));
+    }
+    let mut number = vec![usize::MAX; steps.len()];
+    let mut kept = 0;
+    for s in 0..steps.len() {
+        if seen[s] {
+            number[s] = kept;
+            kept += 1;
+        }
+    }
+    let route = (0..route).filter(|&s| seen[s]).count();
+    let steps = steps
+        .into_iter()
+        .zip(seen)
+        .filter(|(_, seen)| *seen)
+        .map(|(mut step, _)| {
+            for branch in step.lines.iter_mut().flat_map(|line| &mut line.branches) {
+                if let Next::Step(to) = &mut branch.next {
+                    *to = number[*to];
+                }
+            }
+            step
+        })
+        .collect();
+    (steps, route)
 }
 
 /// A step's lines with alterations and augmentations as one: alteration spam, augmenting when
@@ -1006,7 +1027,7 @@ fn book(ui: &Ui, summary: &Summary, cx: &Context) -> Arc<Vec<Chapter>> {
 
 fn chapters(summary: &Summary, cx: &Context) -> Vec<Chapter> {
     let last = summary.stages.len() - 1;
-    summary.stages.iter().enumerate().map(|(i, stage)| chapter(stage, i == last, cx.bench)).collect()
+    summary.stages.iter().enumerate().map(|(i, stage)| chapter(stage, i == last, cx.base, cx.bench)).collect()
 }
 
 fn title_case(words: &str) -> String {
@@ -1074,6 +1095,14 @@ pub fn noun(op: &str, cx: &Context) -> String {
     }
 }
 
+/// An ingredient's name, the base as the chapter buys it.
+fn ingredient(op: &str, chapter: &Chapter, cx: &Context) -> String {
+    match op {
+        "buy:base" => format!("{} (item level {}+)", chapter.bought, cx.item_level),
+        _ => noun(op, cx),
+    }
+}
+
 /// What an unveil keeps: the veiled mod's text, or the guide's name for its choice.
 fn unveiled(keep: &str, cx: &Context) -> Vec<Piece> {
     let text = (cx.bench)(keep).unwrap_or_else(|| keep.replace('-', " "));
@@ -1102,8 +1131,8 @@ fn amount(uses: f64) -> String {
 
 /// What a line does, as an instruction: "Spam Shrieking Essence of Contempt (about 9 tries)",
 /// "Remove the crafted mods at the bench".
-fn doing(line: &Line, cx: &Context) -> Vec<Piece> {
-    let what = instruction(line, cx);
+fn doing(line: &Line, chapter: &Chapter, cx: &Context) -> Vec<Piece> {
+    let what = instruction(line, chapter, cx);
     let gives = if line.always.is_empty() || line.op.starts_with("buy:") {
         Vec::new()
     } else {
@@ -1124,14 +1153,19 @@ fn matron_tries(op: &str) -> Option<usize> {
     op.strip_prefix("beast:wild-bristle-matron:")?.split_once(':')?.1.parse().ok()
 }
 
+/// Currencies rerolling every mod but fractured and locked ones.
+const REROLLS: [&str; 3] = ["essence:", "chaos", "harvest:reforge-"];
+
 /// Currencies that add or take a random mod once: you slam them.
 const SLAMS: [&str; 6] = ["exalted", "eldritch-exalted", "veiled-exalted", "regal", "annulment", "eldritch-annulment"];
 
-fn instruction(line: &Line, cx: &Context) -> Vec<Piece> {
+fn instruction(line: &Line, chapter: &Chapter, cx: &Context) -> Vec<Piece> {
     let (kind, rest) = line.op.split_once(':').unwrap_or((&line.op, ""));
     let op = |lead: &str| vec![words(lead), Piece::Op(line.op.clone())];
     match (kind, rest) {
-        ("buy", "base") => vec![words(format!("Buy {} {} of item level {} or higher", article(cx.base), cx.base, cx.item_level))],
+        ("buy", "base") => {
+            vec![words(format!("Buy {} {} of item level {} or higher", article(&chapter.bought), chapter.bought, cx.item_level))]
+        }
         ("buy", part) => vec![words(format!("Take one of the {part} items made above"))],
         ("unveil", _) => [vec![words("Unveil it at Jun and keep ")], unveiled(rest, cx)].concat(),
         ("bench", "remove-crafted") => vec![words("Remove the crafted mods at the bench")],
@@ -1290,7 +1324,7 @@ pub fn ui(ui: &mut Ui, summary: &Summary, cx: &Context, divine: f64) -> Option<S
     let jump = ui.data_mut(|d| d.remove_temp::<(usize, usize)>(id));
     let book = book(ui, summary, cx);
     if let Some(finish) = book.last() {
-        let makes = [vec![words(format!("Makes one {} with ", cx.base))], finish.goal.clone(), vec![words(".")]].concat();
+        let makes = [vec![words(format!("Makes one {} with ", finish.bought))], finish.goal.clone(), vec![words(".")]].concat();
         if let Some(op) = sentence(ui, &makes, cx, None, false) {
             clicked = Some(op);
         }
@@ -1476,7 +1510,7 @@ fn chapter_ui(ui: &mut Ui, page: &Page, cx: &Context, divine: f64) -> Option<Str
         for (op, uses, chaos) in &chapter.ingredients {
             ui.label(RichText::new(amount(*uses)).monospace());
             if ui
-                .add(egui::Label::new(noun(op, cx)).sense(egui::Sense::click()))
+                .add(egui::Label::new(ingredient(op, chapter, cx)).sense(egui::Sense::click()))
                 .on_hover_text("click: list every craft using it")
                 .clicked()
             {
@@ -1488,20 +1522,21 @@ fn chapter_ui(ui: &mut Ui, page: &Page, cx: &Context, divine: f64) -> Option<Str
     });
     ui.add_space(6.0);
     ui.label(RichText::new("Method").strong().color(theme::accent(dark)));
-    let rare = chapter.listed();
-    for s in 0..rare {
-        if s == chapter.route {
+    let rare = chapter.common();
+    for s in 0..chapter.steps.len() {
+        let (title, note) = match s {
+            _ if s == chapter.route && s < rare => {
+                ("If it goes another way", "The method's steps send you here when a result is off the usual route.")
+            }
+            _ if s == rare => ("Rarer situations", "Reached less than once in twenty items; the steps above link here."),
+            _ => ("", ""),
+        };
+        if !title.is_empty() {
             ui.add_space(6.0);
-            ui.label(RichText::new("If it goes another way").strong().color(theme::accent(dark)));
-            ui.label(RichText::new("The method's steps send you here when a result is off the usual route.").small().weak());
+            ui.label(RichText::new(title).strong().color(theme::accent(dark)));
+            ui.label(RichText::new(note).small().weak());
         }
         if let Some(op) = numbered(ui, s, page, cx) {
-            clicked = Some(op);
-        }
-    }
-    if rare < chapter.steps.len() {
-        ui.add_space(6.0);
-        if let Some(op) = finder(ui, page, rare, cx) {
             clicked = Some(op);
         }
     }
@@ -1527,108 +1562,6 @@ fn numbered(ui: &mut Ui, s: usize, page: &Page, cx: &Context) -> Option<String> 
     let clicked = step_shown(ui, s, page, cx);
     let height = ui.cursor().top() - top;
     ui.data_mut(|d| d.insert_temp(id, height));
-    clicked
-}
-
-/// The steps too rare to list, found by the item in hand: tick the needs it has (twice for
-/// fractured) to see its step and the likeliest way on from there. A link to a rare step picks
-/// its needs.
-fn finder(ui: &mut Ui, page: &Page, rare: usize, cx: &Context) -> Option<String> {
-    let dark = ui.visuals().dark_mode;
-    let chapter = page.chapter;
-    let id = page.id.with(("find", page.c));
-    let mut picked: Vec<u8> = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| vec![0; chapter.needs.len()]);
-    if let Some((c, s)) = page.jump
-        && c == page.c
-        && s >= rare
-    {
-        picked = vec![0; chapter.needs.len()];
-        for &(need, fractured) in &chapter.steps[s].needs {
-            picked[need] = if fractured { 2 } else { 1 };
-        }
-    }
-    ui.label(RichText::new("Find your item").strong().color(theme::accent(dark)));
-    ui.label(
-        RichText::new(format!(
-            "{} rarer situations are not listed. Tick what your item has (twice: fractured) to see its step.",
-            chapter.steps.len() - rare
-        ))
-        .small()
-        .weak(),
-    );
-    ui.horizontal_wrapped(|ui| {
-        for (need, name) in chapter.needs.iter().enumerate() {
-            let (mark, role) = match picked[need] {
-                1 => ("✔ ", "target"),
-                2 => ("✔ ", "fractured"),
-                _ => ("", ""),
-            };
-            let label = RichText::new(format!("{mark}{}", name.short));
-            let label = if role.is_empty() { label.weak() } else { label.color(theme::role(role, dark)) };
-            let hint = if picked[need] == 2 { format!("{} (fractured)", name.full) } else { name.full.clone() };
-            if ui.add(egui::Button::new(label).selected(picked[need] > 0)).on_hover_text(hint).clicked() {
-                picked[need] = (picked[need] + 1) % 3;
-            }
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(id, picked.clone()));
-    let holds = |step: &Step| {
-        let mut ticked: Vec<(usize, bool)> =
-            (0..picked.len()).filter(|&need| picked[need] > 0).map(|need| (need, picked[need] == 2)).collect();
-        let mut has = step.needs.clone();
-        ticked.sort();
-        has.sort();
-        ticked == has
-    };
-    let mut matches: Vec<usize> =
-        (0..chapter.steps.len()).filter(|&s| holds(&chapter.steps[s]) && chapter.steps[s].have.kind == FlowKind::Work).collect();
-    matches.sort_by(|a, b| chapter.steps[*b].visits.total_cmp(&chapter.steps[*a].visits));
-    let mut clicked = None;
-    if matches.is_empty() {
-        ui.label(RichText::new("No step has exactly these.").small().italics().weak());
-    }
-    for &s in matches.iter().take(FOUND) {
-        ui.add_space(4.0);
-        if s < rare {
-            let said = [vec![words("That is ")], vec![Piece::Step(s)], vec![words(", above.")]].concat();
-            if let Some(op) = sentence(ui, &said, cx, Some(page), false) {
-                clicked = Some(op);
-            }
-            continue;
-        }
-        if let Some(op) = numbered(ui, s, page, cx) {
-            clicked = Some(op);
-        }
-        let mut way = vec![words("Usually then:")];
-        let mut at = s;
-        for _ in 0..WAY {
-            match chapter.steps[at].usual {
-                Some(Next::Step(next)) if next != s && !way.contains(&Piece::Step(next)) => {
-                    way.extend([words(" ⏵ "), Piece::Step(next)]);
-                    if next < rare {
-                        way.push(words(", back in the method"));
-                        break;
-                    }
-                    at = next;
-                }
-                Some(Next::Done) => {
-                    way.push(words(" ⏵ done ✔"));
-                    break;
-                }
-                Some(Next::StartOver) => {
-                    way.push(words(" ⏵ start over"));
-                    break;
-                }
-                _ => break,
-            }
-        }
-        if let Some(op) = sentence(ui, &way, cx, Some(page), false) {
-            clicked = Some(op);
-        }
-    }
-    if matches.len() > FOUND {
-        ui.label(RichText::new(format!("and {} more with these, differing in other mods", matches.len() - FOUND)).small().weak());
-    }
     clicked
 }
 
@@ -1686,7 +1619,7 @@ fn step_ui(ui: &mut Ui, step: &Step, page: &Page, cx: &Context) -> Option<String
                 clicked = Some(op);
             }
         }
-        if let Some(op) = sentence(ui, &doing(line, cx), cx, Some(page), false) {
+        if let Some(op) = sentence(ui, &doing(line, page.chapter, cx), cx, Some(page), false) {
             clicked = Some(op);
         }
         for row in rows(line) {
@@ -1713,7 +1646,7 @@ pub fn text(summary: &Summary, cx: &Context) -> String {
     let book = chapters(summary, cx);
     let mut out = String::new();
     if let Some(finish) = book.last() {
-        out += &format!("Makes one {} with {}.\nCosts about {:.0}c.\n\n", cx.base, plain(&finish.goal, cx), summary.cost);
+        out += &format!("Makes one {} with {}.\nCosts about {:.0}c.\n\n", finish.bought, plain(&finish.goal, cx), summary.cost);
     }
     for chapter in &book {
         if book.len() > 1 {
@@ -1721,34 +1654,23 @@ pub fn text(summary: &Summary, cx: &Context) -> String {
         }
         out += "Ingredients\n";
         for (op, uses, _) in &chapter.ingredients {
-            out += &format!("  {} {}\n", amount(*uses), noun(op, cx));
+            out += &format!("  {} {}\n", amount(*uses), ingredient(op, chapter, cx));
         }
         out += "\nMethod\n";
-        let listed = chapter.listed();
+        let rare = chapter.common();
         for (s, step) in chapter.steps.iter().enumerate() {
-            if s == chapter.route && s < listed {
+            if s == chapter.route && s < rare {
                 out += "\nIf it goes another way\n";
             }
-            if s == listed {
-                out += "\nRarer situations (what the item has: what to do, and where it usually goes)\n";
-            }
-            if s >= listed {
-                let usual = step.usual.map_or(String::new(), |next| match next {
-                    Next::Step(to) => format!(" → step {}", to + 1),
-                    Next::Done => " → done".into(),
-                    Next::StartOver => " → start over".into(),
-                    Next::Same => String::new(),
-                });
-                let what = step.lines.first().map_or(String::new(), |line| plain(&doing(line, cx), cx));
-                out += &format!("{:>2}. [{}] {}: {what}{usual}\n", s + 1, has(&step.have), plain(&step.heading, cx));
-                continue;
+            if s == rare {
+                out += "\nRarer situations\n";
             }
             out += &format!("{:>2}. {}  [has: {}]\n", s + 1, plain(&step.heading, cx), has(&step.have));
             for (l, line) in step.lines.iter().enumerate() {
                 if let Some(lead) = lead(&step.lines, l) {
                     out += &format!("    {}\n", plain(&lead, cx));
                 }
-                out += &format!("    {}\n", plain(&doing(line, cx), cx));
+                out += &format!("    {}\n", plain(&doing(line, chapter, cx), cx));
                 for row in rows(line) {
                     let share = row.share.map_or(String::new(), percent);
                     out += &format!("      {share:>4}  {} → {}\n", plain(&row.what, cx), plain(&going(&row.next, line), cx));

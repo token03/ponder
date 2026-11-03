@@ -78,10 +78,8 @@ impl App {
             }
             let (done, total) = self.state.solved;
             if self.state.solving() {
-                let progress = egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                    .desired_width(160.0)
-                    .text(format!("solving {done}/{total}"))
-                    .animate(true);
+                let progress =
+                    egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(160.0).text(format!("solving {done}/{total}"));
                 ui.add(progress).on_hover_text("rows with a ring show a provisional plan until solved");
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

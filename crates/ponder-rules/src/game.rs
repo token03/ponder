@@ -37,6 +37,8 @@ pub struct ModDef {
     pub template: String,
     /// The stats it grants, by id.
     pub stats: Vec<String>,
+    /// The lowest roll of its first stat, to rank it among mods of its template.
+    pub low: i64,
     /// The influence an influenced mod needs on the item.
     pub influence: Option<Influence>,
     /// The first matching tag decides the weight; zero means it cannot roll there.
@@ -173,6 +175,7 @@ impl Game {
                 level: m.required_level,
                 template: data::template(&text),
                 stats: m.stats.iter().map(|s| s.id.clone()).collect(),
+                low: m.stats.first().map_or(0, |s| s.min),
                 influence: if source == Source::Elevated {
                     elevated_influence(&m.name)
                 } else {
@@ -367,6 +370,13 @@ impl Game {
             && (!pool.mods.iter().any(|&(id, _)| id == m) || def.level > kind.ilvl as u32)
         {
             return None;
+        }
+        if def.source == Source::Essence
+            && let Some(list) = pool.tiers.get(&def.template)
+        {
+            let better: std::collections::BTreeSet<i64> =
+                list.iter().map(|(id, _)| self.def(*id).low).filter(|&low| low > def.low).collect();
+            return Some(better.len() as u8 + 1);
         }
         let levels: std::collections::BTreeSet<u32> = if let Some(list) = pool.tiers.get(&def.template) {
             list.iter().map(|(id, _)| self.def(*id).level).collect()

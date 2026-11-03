@@ -9,12 +9,13 @@ use ponder_rules::lens::{Lens, Relaxation, State};
 use ponder_rules::ops::{Ctx, Operation, Sides, Step, Supply};
 use ponder_solve::{IndexedOutcomes, Model};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::lower::SideBound;
 use crate::market::Market;
 
 /// A solver state of a craft.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Node {
     /// Choosing what to buy.
     Market,
@@ -75,11 +76,34 @@ impl<'a> Craft<'a> {
         starts: Vec<Arc<dyn Supply>>,
         goal: usize,
     ) -> Craft<'a> {
-        let ops: Vec<(&dyn Operation, f64)> = ops.iter().filter_map(|op| market.price(&op.cost()).map(|c| (*op, c))).collect();
-        Craft::priced(ctx, lens, ops, starts, goal)
+        Craft::priced(ctx, lens, priced(ops, market), starts, goal)
+    }
+
+    /// [`Craft::new`] for following a solved policy: without the bound that only prunes solving.
+    pub(crate) fn replay(
+        ctx: &'a Ctx<'a>,
+        lens: &'a Lens<'a>,
+        ops: &[&'a dyn Operation],
+        market: &Market,
+        starts: Vec<Arc<dyn Supply>>,
+        goal: usize,
+    ) -> Craft<'a> {
+        Craft::assemble(ctx, lens, priced(ops, market), starts, goal)
     }
 
     fn priced(
+        ctx: &'a Ctx<'a>,
+        lens: &'a Lens<'a>,
+        ops: Vec<(&'a dyn Operation, f64)>,
+        starts: Vec<Arc<dyn Supply>>,
+        goal: usize,
+    ) -> Craft<'a> {
+        let mut craft = Craft::assemble(ctx, lens, ops, starts, goal);
+        craft.cap(craft.repeat_bound());
+        craft
+    }
+
+    fn assemble(
         ctx: &'a Ctx<'a>,
         lens: &'a Lens<'a>,
         ops: Vec<(&'a dyn Operation, f64)>,
@@ -119,7 +143,7 @@ impl<'a> Craft<'a> {
         let finishes = ops.iter().enumerate().filter(|(_, (op, _))| op.steps().iter().all(deterministic)).map(|(i, _)| i).collect();
         let nonnegative = ops.iter().all(|(_, price)| *price >= 0.0) && starts.iter().all(|s| s.price() >= 0.0);
         let burn = (0..ops.len()).filter(|&i| ops[i].0.steps().is_empty()).min_by(|&a, &b| ops[a].1.total_cmp(&ops[b].1));
-        let mut craft = Craft {
+        Craft {
             ctx,
             lens,
             ops,
@@ -136,12 +160,7 @@ impl<'a> Craft<'a> {
             burn,
             relaxed: None,
             side_bound: None,
-        };
-        craft.upper_bound = craft.repeat_bound();
-        for (i, dominated) in craft.dominated.iter_mut().enumerate() {
-            *dominated |= craft.ops[i].1 > craft.upper_bound;
         }
-        craft
     }
 
     /// The craft is known to cost at most `bound` (another plan reaches the goal for that):
@@ -638,6 +657,11 @@ impl Phase {
 }
 
 /// Where an operation's shared continuation begins.
+/// The operations the market prices, with their prices.
+fn priced<'a>(ops: &[&'a dyn Operation], market: &Market) -> Vec<(&'a dyn Operation, f64)> {
+    ops.iter().filter_map(|op| market.price(&op.cost()).map(|c| (*op, c))).collect()
+}
+
 fn hub(steps: &[Step]) -> Option<usize> {
     let steps = match steps {
         [random @ .., Step::Forget(_)] => random,

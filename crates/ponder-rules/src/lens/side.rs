@@ -39,7 +39,7 @@ impl SideRelaxation {
         let mut blockers = BTreeMap::<(Vec<usize>, u32), usize>::new();
         for (c, class) in lens.classes.iter().enumerate().filter(|(_, c)| c.side != side) {
             let conflicts: Vec<_> =
-                lens.classes.iter().enumerate().filter(|(_, d)| d.side == side && d.conflicts.contains(&c)).map(|(d, _)| d).collect();
+                lens.classes.iter().enumerate().filter(|(_, d)| d.side == side && d.conflicts >> c & 1 == 1).map(|(d, _)| d).collect();
             let banned = lens.bans.iter().filter(|(b, _)| *b == c).fold(0, |bits, (_, tags)| bits | tags);
             if !conflicts.is_empty() || banned != 0 {
                 if class.veil {

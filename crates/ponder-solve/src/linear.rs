@@ -326,7 +326,7 @@ pub(super) struct DirectSystem {
     factor: Lu<usize, f64>,
 }
 
-pub(super) fn direct_solve(matrix: &SparseMatrix, cached: &OnceCell<Option<DirectSystem>>, rhs: &[f64]) -> Option<Vec<f64>> {
+fn direct_solve(matrix: &SparseMatrix, cached: &OnceCell<Option<DirectSystem>>, rhs: &[f64]) -> Option<Vec<f64>> {
     let direct = cached
         .get_or_init(|| {
             let outcomes: Vec<_> = matrix.rows().map(|row| row.iter().map(|&(j, p)| (p, j)).collect()).collect();

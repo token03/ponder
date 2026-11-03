@@ -107,7 +107,7 @@ fn table(ui: &mut Ui, state: &State, reveal: bool) -> (Option<(usize, bool)>, Op
         .resizable(true)
         .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(18.0))
+        .column(Column::exact(18.0).clip(false))
         .columns(Column::auto().at_least(28.0), 1)
         .column(Column::auto().at_least(150.0).clip(true))
         .columns(Column::auto().at_least(54.0), Col::ALL.len() - 2);
@@ -142,7 +142,9 @@ fn table(ui: &mut Ui, state: &State, reveal: bool) -> (Option<(usize, bool)>, Op
                 row.set_selected(state.selected == Some(index));
                 row.col(|ui| {
                     let status = Status::of(state, estimate);
-                    status.paint(ui).on_hover_text(status.hint(estimate));
+                    status.paint(ui).on_hover_ui(|ui| {
+                        ui.label(status.hint(estimate));
+                    });
                 });
                 for col in Col::ALL {
                     row.col(|ui| match col {
@@ -154,7 +156,11 @@ fn table(ui: &mut Ui, state: &State, reveal: bool) -> (Option<(usize, bool)>, Op
                             ui.label(RichText::new(&estimate.base).small().weak());
                         }
                         Col::Mods => {
-                            ui.label(estimate.targets.len().to_string()).on_hover_text(estimate.targets.join("\n"));
+                            ui.label(estimate.targets.len().to_string()).on_hover_ui(|ui| {
+                                for target in &estimate.targets {
+                                    ui.label(target);
+                                }
+                            });
                         }
                         Col::Demand => {
                             ui.label(RichText::new(estimate.demand.to_string()).monospace());
