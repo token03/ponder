@@ -57,6 +57,23 @@ impl Search {
     }
 }
 
+/// A rare item a ladder character wears, as read: its base and mods.
+#[derive(Clone, Debug, Default)]
+pub struct Worn {
+    pub base: String,
+    pub mods: Vec<WornMod>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WornMod {
+    pub prefix: bool,
+    /// 1 is the best tier on the base
+    pub tier: Option<i64>,
+    /// natural | essence | veiled | delve | special | crafted
+    pub source: &'static str,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Estimate {
     pub kind: String,
@@ -86,7 +103,14 @@ pub struct Estimate {
     pub search: Search,
     pub error: Option<String>,
     pub demand: usize,
-    pub skills: Vec<String>,
+    /// Of the characters wearing it: their main skills, ascendancies and the bases they wear it
+    /// on, commonest first, with counts.
+    pub skills: Vec<(String, usize)>,
+    pub classes: Vec<(String, usize)>,
+    pub worn_bases: Vec<(String, usize)>,
+    /// Items read off the ladder that it was made from.
+    pub items: usize,
+    pub examples: Vec<Worn>,
     pub settings: Settings,
 }
 
@@ -130,7 +154,8 @@ impl Estimate {
         json!({
             "kind": self.kind, "title": self.title, "targets": self.targets, "base": self.base,
             "used_base": self.used_base, "bases": self.bases, "item_level": self.item_level,
-            "slot": self.slot, "builds": self.builds, "demand": self.demand, "skills": self.skills,
+            "slot": self.slot, "builds": self.builds, "demand": self.demand,
+            "skills": self.skills.iter().map(|(skill, _)| skill).collect::<Vec<_>>(),
             "craft_cost": self.craft_cost(), "total": self.total(), "cheapest": self.cheapest(),
             "currency_chaos": self.currency_cost(), "clicking_hours": self.clicking_hours(),
             "market": self.market.map(|x| x.0), "listed": self.market.map(|x| x.1), "margin": self.margin(), "hole": self.hole(),

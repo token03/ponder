@@ -56,3 +56,10 @@ opt-level = 0
 
 [profile.release]
 debug = "line-tables-only"
+
+[profile.dist]
+inherits = "release"
+debug = false
+strip = true
+lto = "thin"
+codegen-units = 1

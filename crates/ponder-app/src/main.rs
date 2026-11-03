@@ -1,5 +1,6 @@
 //! `ponder-app`: the desktop app. Runs the ladder pipeline in the background and lays its
-//! results out in tiles you can drag around: crafts, item goals and policy operations.
+//! results out in tiles you can drag around: the crafts, the selected item, its recipe and a
+//! market map.
 
 // No console window behind the app on Windows (release builds; debug keeps it for logs).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -9,10 +10,15 @@ mod filter;
 mod jobs;
 mod panes;
 mod state;
+mod tags;
+mod theme;
 mod view;
 mod widgets;
 
 use std::path::Path;
+
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Local data and caches are relative to the project directory:
 /// start there when launched from inside it.

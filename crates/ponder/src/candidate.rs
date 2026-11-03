@@ -157,6 +157,7 @@ pub struct Archetype {
     pub characters: usize,
     pub items: usize,
     pub skills: Counter<String>,
+    pub classes: Counter<String>,
     pub examples: Vec<Arc<ItemMatch>>,
     /// which bases characters wear it on
     pub bases: Counter<String>,
@@ -184,6 +185,7 @@ impl Archetype {
             characters,
             items,
             skills: Counter::new(),
+            classes: Counter::new(),
             examples: Vec::new(),
             bases: Counter::new(),
             tiers: IndexMap::new(),
@@ -483,6 +485,7 @@ pub fn merge(worn: &[Item], min_characters: usize, max_size: usize, min_size: us
             let (w, d) = (&worn[i as usize], details[i as usize].as_ref().unwrap());
             a.items += 1;
             add_str(&mut a.skills, &w.skill);
+            add_str(&mut a.classes, &w.class);
             add_str(&mut a.bases, &w.match_.item.base);
             for f in &a.families {
                 if let Some(&t) = d.best.get(f.as_str()) {
@@ -629,6 +632,7 @@ pub struct Cluster {
     pub characters: usize,
     pub items: usize,
     pub skills: Counter<String>,
+    pub classes: Counter<String>,
     /// passive counts worn
     pub passives: Counter<i64>,
     pub item_levels: Counter<i64>,
@@ -652,6 +656,7 @@ impl Cluster {
             characters: 0,
             items: 0,
             skills: Counter::new(),
+            classes: Counter::new(),
             passives: Counter::new(),
             item_levels: Counter::new(),
             full: 0,
@@ -777,6 +782,7 @@ fn cluster_sets(worn: &[Jewel], passive: bool) -> (IndexMap<ClusterKey<'_>, Hash
                 a.items += 1;
                 a.full += (size == names.len()) as usize;
                 a.skills.add(w.skill.clone());
+                a.classes.add(w.class.clone());
                 a.passives.add(w.passives);
                 a.item_levels.add(w.item_level);
                 if passive {

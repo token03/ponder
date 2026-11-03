@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use anyhow::{Result, anyhow};
 use ponder_net::{
@@ -24,8 +25,40 @@ pub fn settings_from_env() -> Settings {
     let rate = ponder_net::env::env("PONDER_CHAOS_PER_HOUR")
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0);
-    let recombine = ponder_net::env::env("PONDER_RECOMBINE").is_some_and(|value| value == "1");
-    Settings { chaos_per_hour: rate.unwrap_or(Settings::default().chaos_per_hour), recombine }
+    rate.map_or_else(Settings::default, |chaos_per_hour| Settings { chaos_per_hour })
+}
+
+/// A counting semaphore.
+pub struct Gate {
+    free: Mutex<usize>,
+    freed: Condvar,
+}
+
+pub struct Permit<'a>(&'a Gate);
+
+impl Gate {
+    pub fn new(slots: usize) -> Gate {
+        Gate { free: Mutex::new(slots), freed: Condvar::new() }
+    }
+
+    /// Waits for a free slot.
+    pub fn enter(&self) -> Permit<'_> {
+        let free = self.free.lock().expect("gate");
+        let mut free = self.freed.wait_while(free, |free| *free == 0).expect("gate");
+        *free -= 1;
+        Permit(self)
+    }
+
+    pub fn has_room(&self) -> bool {
+        *self.free.lock().expect("gate") > 0
+    }
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        *self.0.free.lock().expect("gate") += 1;
+        self.0.freed.notify_one();
+    }
 }
 
 pub struct Context {
@@ -38,6 +71,11 @@ pub struct Context {
     pub assumptions: Assumptions,
     /// Parts of staged crafts made so far, shared by the candidates that use them.
     pub parts: Mutex<HashMap<u64, Result<Arc<Made>, String>>>,
+    /// Held by the solves that take a few GB (awakened items, every mechanic), so only as many
+    /// run at once as memory allows while other workers solve plain crafts.
+    pub heavy: Gate,
+    /// Set to stop solving estimates not yet started.
+    pub cancelled: AtomicBool,
     pub on_solved: Option<Stream>,
     rules: OnceLock<Result<(Game, blake3::Hash), String>>,
 }
@@ -53,6 +91,8 @@ impl Context {
             plans: Cache::default(),
             assumptions: Assumptions::default(),
             parts: Mutex::default(),
+            heavy: Gate::new(super::solving::heavy_slots()),
+            cancelled: AtomicBool::new(false),
             on_solved: None,
             rules: OnceLock::new(),
         }

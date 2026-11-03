@@ -14,7 +14,7 @@ use super::build::{ClusterOpts, GearOpts, build_gear, estimate_cluster, estimate
 use super::context::{Context, Progress};
 use super::market::price_on_trade;
 use super::solving::{in_pool, solve_estimates};
-use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, cmp_priority};
+use super::types::{BuildInfo, Estimate, Key, LadderReport, Report, Shared, Slot, Worn, WornMod, cmp_priority};
 use crate::candidate::{self, Archetype};
 use crate::pattern::{self, Pattern};
 
@@ -239,7 +239,11 @@ pub fn ladder(
             continue;
         };
         est.demand = a.characters;
-        est.skills = a.skills.most_common().into_iter().take(3).map(|(s, _)| s.clone()).collect();
+        est.skills = top(&a.skills);
+        est.classes = top(&a.classes);
+        est.worn_bases = top(&a.bases);
+        est.items = a.items;
+        est.examples = a.examples.iter().take(EXAMPLES).map(|example| as_worn(example)).collect();
         est.used_base = String::new();
         estimates.insert(est.key.clone(), est);
     }
@@ -255,7 +259,9 @@ pub fn ladder(
             continue;
         }
         est.demand = a.characters;
-        est.skills = a.skills.most_common().into_iter().take(3).map(|(s, _)| s.clone()).collect();
+        est.skills = top(&a.skills);
+        est.classes = top(&a.classes);
+        est.items = a.items;
         estimates.insert(est.key.clone(), est);
     }
     let mut out: Vec<Estimate> = estimates.into_values().collect();
@@ -319,4 +325,26 @@ pub fn build_name(build: &pob::Build) -> String {
 /// The league of the saved prices, else "Standard" (offline).
 pub fn current_league(cx: &Context) -> String {
     cx.prices.cached_league().unwrap_or_else(|| "Standard".into())
+}
+
+/// Worn items kept per estimate, to show what it was made from.
+const EXAMPLES: usize = 3;
+
+/// The commonest few of a count, with their counts.
+fn top(counter: &candidate::Counter<String>) -> Vec<(String, usize)> {
+    counter.most_common().into_iter().take(12).map(|(key, n)| (key.clone(), n as usize)).collect()
+}
+
+fn as_worn(example: &ponder_game::mods::ItemMatch) -> Worn {
+    let mods = example
+        .mods
+        .iter()
+        .map(|found| WornMod {
+            prefix: found.kind == "prefix",
+            tier: found.tier,
+            source: found.source,
+            text: found.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join(" / "),
+        })
+        .collect();
+    Worn { base: example.item.base.clone(), mods }
 }

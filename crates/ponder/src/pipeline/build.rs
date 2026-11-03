@@ -12,6 +12,7 @@ use crate::{
     candidate, cluster,
     gear::{self, BuildOpts, Prices, Row, Side},
     pattern::target_key,
+    plan::Depth,
 };
 
 #[derive(Clone, Debug)]
@@ -142,7 +143,7 @@ pub fn estimate_cluster(
     }
     estimate.candidate = Some(problem);
     if opts.solve {
-        solve_one(cx, &mut estimate, table);
+        solve_one(cx, &mut estimate, table, Depth::Ladder);
     }
     estimate
 }
@@ -187,7 +188,7 @@ pub fn estimate_gear(cx: &Context, db: &ModDB, matched: &ItemMatch, table: &Pric
     }
     estimate.candidate = Some(built.candidate);
     if opts.solve {
-        solve_one(cx, &mut estimate, table);
+        solve_one(cx, &mut estimate, table, Depth::Ladder);
     }
     Ok(estimate)
 }

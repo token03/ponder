@@ -13,6 +13,7 @@ anyhow.workspace = true
 ponder-game.workspace = true
 ponder-net.workspace = true
 clap = { version = "4", features = ["derive"] }
+mimalloc = "0.1.52"
 
 [[bin]]
 name = "ponder"

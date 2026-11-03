@@ -38,6 +38,8 @@ pub struct Item {
     /// account/name
     pub character: String,
     pub skill: String,
+    /// the character's ascendancy, or class
+    pub class: String,
     pub match_: Arc<ItemMatch>,
     pub group: String,
 }
@@ -46,6 +48,7 @@ pub struct Item {
 pub struct Cluster {
     pub character: String,
     pub skill: String,
+    pub class: String,
     /// small / medium / large
     pub size: String,
     /// e.g. "12% increased Fire Damage"
@@ -75,10 +78,11 @@ pub fn normalize(db: &ModDB, characters: &[Lite]) -> Items {
         .map(|character| {
             let who = format!("{}/{}", character.account.as_deref().unwrap_or("None"), character.name.as_deref().unwrap_or("None"));
             let skill = if character.skill.is_empty() { "?" } else { &character.skill };
+            let class = character.class.as_deref().unwrap_or("?");
             let mut items = Items::default();
             for raw in &character.rares {
                 if raw.base_type().is_some_and(|base| base.ends_with("Cluster Jewel")) {
-                    if let Some(cluster) = context.worn(&who, skill, raw) {
+                    if let Some(cluster) = context.worn(&who, skill, class, raw) {
                         items.clusters.push(cluster);
                     }
                     continue;
@@ -88,6 +92,7 @@ pub fn normalize(db: &ModDB, characters: &[Lite]) -> Items {
                     items.gear.push(Item {
                         character: who.clone(),
                         skill: skill.to_owned(),
+                        class: class.to_owned(),
                         group: crate::gear::group(db, &matched).label.clone(),
                         match_: Arc::new(matched),
                     });
@@ -146,7 +151,7 @@ impl ClusterCtx {
         self.tiers.lock().unwrap().entry(key).or_insert(t).clone()
     }
 
-    fn worn(&self, who: &str, skill: &str, it: &Raw) -> Option<Cluster> {
+    fn worn(&self, who: &str, skill: &str, class: &str, it: &Raw) -> Option<Cluster> {
         let base = it.base_type().unwrap_or("");
         if !base.ends_with("Cluster Jewel") {
             return None;
@@ -200,6 +205,7 @@ impl ClusterCtx {
         Some(Cluster {
             character: who.to_string(),
             skill: skill.to_string(),
+            class: class.to_string(),
             size,
             enchant: short.clone(),
             tag: tag.clone(),

@@ -773,6 +773,7 @@ pub fn parse(game: &Game, class: &str, op: &str, avoid: &[crate::game::GroupId])
     match mechanic {
         "essence" => boxed(essence::Essence::new(game, arg, class)),
         "bench" => boxed(bench::Bench::new(game, arg, class, avoid)),
+        "bench-over" => boxed(bench::Bench::new(game, arg, class, avoid).and_then(bench::Bench::over)),
         "harvest" => harvest::parse(game, arg),
         "fossil" => boxed(fossil::Fossils::new(game, arg, class)),
         "influence-exalted" => boxed(influence::Exalt::new(arg, false)),

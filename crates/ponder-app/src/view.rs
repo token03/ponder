@@ -6,6 +6,7 @@ use ponder::pipeline::{Estimate, cmp_ladder};
 use serde::{Deserialize, Serialize};
 
 use crate::filter::ItemSelection;
+use crate::tags::{self, Tag};
 
 /// Chaos for display: divines above one divine, whole chaos above 10.
 pub fn money(x: Option<f64>, divine: f64) -> String {
@@ -29,6 +30,11 @@ fn thousands(x: f64) -> String {
     if x < 0.0 { format!("-{out}") } else { out }
 }
 
+/// An expected count: one decimal below 10, whole above.
+pub fn count(x: f64) -> String {
+    if x < 10.0 { format!("{x:.1}") } else { thousands(x.round()) }
+}
+
 pub fn hours(h: f64) -> String {
     if h < 1.0 { format!("{:.0} min", h * 60.0) } else { format!("{h:.1} h") }
 }
@@ -40,8 +46,8 @@ pub struct Filters {
     pub items: ItemSelection,
     /// words that must all appear in the title, base, mods or skills
     pub text: String,
-    /// one base group (an estimate's title for gear), or every group when empty
-    pub group: String,
+    /// skills, mods, currencies and so on the craft must have (see [`tags`])
+    pub tags: Vec<Tag>,
     pub min_demand: usize,
     /// cheapest way to make it, in chaos; 0 is no limit
     pub max_cost: f64,
@@ -54,7 +60,7 @@ impl Default for Filters {
         Filters {
             items: ItemSelection::default(),
             text: String::new(),
-            group: String::new(),
+            tags: Vec::new(),
             min_demand: 0,
             max_cost: 0.0,
             only_market: false,
@@ -68,6 +74,12 @@ impl Filters {
         *self == Filters::default()
     }
 
+    pub fn add(&mut self, tag: Tag) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
+        }
+    }
+
     pub fn admits(&self, e: &Estimate) -> bool {
         if e.demand < self.min_demand {
             return false;
@@ -75,13 +87,13 @@ impl Filters {
         if self.hide_errors && e.failure().is_some() {
             return false;
         }
-        if !self.group.is_empty() && e.title != self.group {
-            return false;
-        }
         if self.max_cost > 0.0 && e.cheapest().is_none_or(|c| c > self.max_cost) {
             return false;
         }
         if self.only_market && e.market.is_none() {
+            return false;
+        }
+        if !tags::admits(&self.tags, e) {
             return false;
         }
         let words: Vec<String> = self.text.split_whitespace().map(str::to_lowercase).collect();
@@ -99,9 +111,9 @@ fn haystack(e: &Estimate) -> String {
         s.push(' ');
         s.push_str(&r.text);
     }
-    for k in &e.skills {
+    for (skill, _) in e.skills.iter().chain(&e.classes) {
         s.push(' ');
-        s.push_str(k);
+        s.push_str(skill);
     }
     s.to_lowercase()
 }
@@ -122,19 +134,19 @@ pub enum Col {
 
 impl Col {
     pub const ALL: [Col; 9] =
-        [Col::Rank, Col::Item, Col::Demand, Col::Cheapest, Col::Market, Col::Margin, Col::Hole, Col::Craft, Col::Mods];
+        [Col::Rank, Col::Item, Col::Mods, Col::Demand, Col::Craft, Col::Cheapest, Col::Market, Col::Margin, Col::Hole];
 
     pub fn label(self) -> &'static str {
         match self {
             Col::Rank => "#",
             Col::Item => "Item",
             Col::Craft => "Craft",
-            Col::Cheapest => "Cheapest",
+            Col::Cheapest => "Total",
             Col::Market => "Market",
             Col::Margin => "Margin",
             Col::Hole => "Hole",
             Col::Demand => "Demand",
-            Col::Mods => "Targets",
+            Col::Mods => "Mods",
         }
     }
 

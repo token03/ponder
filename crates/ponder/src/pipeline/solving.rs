@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -8,11 +8,12 @@ use std::hash::{Hash, Hasher};
 use anyhow::{Result, anyhow};
 use ponder_plan::{
     market::Market,
-    session::{Error as SessionError, Method, Request, Session, Solution, remembers},
+    session::{Error as SessionError, Method, Request, Session, Solution},
     supply::Product,
 };
-use ponder_rules::game::Game;
-use ponder_rules::item::Item;
+use ponder_rules::game::{Game, Side};
+use ponder_rules::goal::Rarity;
+use ponder_rules::item::{Item, limit};
 use ponder_rules::ops::{self, Ctx, Supply};
 use rayon::prelude::*;
 
@@ -23,7 +24,7 @@ use super::{
 };
 use crate::candidate::Candidate;
 use crate::gear::Prices;
-use crate::plan::{Chain, Part, Stage, Summary};
+use crate::plan::{Chain, Depth, Part, Stage, Summary};
 
 pub(super) fn in_pool<T: Send>(workers: Option<usize>, work: impl FnOnce() -> T + Send) -> T {
     if let Some(workers) = workers {
@@ -72,7 +73,7 @@ fn summarize(plan: &Solution, stage: Stage, base_price: f64, runs: usize) -> Res
         }
     }
     let solution = &plan.policy;
-    let stage = Stage { ops, uses: usage.actions.clone(), cost: solution.cost, ..stage };
+    let stage = Stage { ops, uses: usage.actions.clone(), spend: usage.spend, flow: usage.flow, cost: solution.cost, ..stage };
     let summary = Summary {
         cost: solution.cost - usage.bases * base_price,
         hours: usage.seconds / 3600.0,
@@ -83,12 +84,14 @@ fn summarize(plan: &Solution, stage: Stage, base_price: f64, runs: usize) -> Res
         usage: usage.actions,
         unpriced: Vec::new(),
         stages: vec![stage],
+        depth: Depth::default(),
     };
     Ok((summary, followed.items))
 }
 
 struct Solver<'a, 's> {
     cx: &'a Context,
+    game: &'a Game,
     session: Session<'s>,
     problem: &'a Candidate,
     base_price: f64,
@@ -99,7 +102,21 @@ struct Solver<'a, 's> {
 
 impl Solver<'_, '_> {
     fn stage(&self, item: &str, request: &Request, needs: &[usize]) -> Stage {
+        let game = self.game;
+        let place = |need: &ponder_rules::target::Need| {
+            let sides: BTreeSet<Side> = need.ok.iter().map(|&m| game.def(m).side).collect();
+            let side = match sides.into_iter().collect::<Vec<_>>().as_slice() {
+                [Side::Prefix] => "prefix",
+                [Side::Suffix] => "suffix",
+                _ => "either",
+            };
+            (side.to_string(), need.count)
+        };
+        let base = request.kind.base;
+        let slots = |rarity| [limit(game, base, rarity, Side::Prefix), limit(game, base, rarity, Side::Suffix)];
         Stage {
+            places: request.goal.needs.iter().map(place).collect(),
+            slots: [slots(Rarity::Magic), slots(Rarity::Rare)],
             item: item.into(),
             influences: request.kind.influences.iter().map(|i| format!("{i:?}").to_lowercase()).collect(),
             rarity: request.goal.rarity.map(|r| format!("{r:?}").to_lowercase()),
@@ -177,14 +194,14 @@ impl Solver<'_, '_> {
 impl Solver<'_, '_> {
     /// The cheapest route: bought and worked directly, unless the item has two influences, or
     /// made in stages, each capped by the cheapest found before it.
-    fn best(&mut self, game: &Game, request: &Request, market: &Market, quick: bool, mut bound: f64) -> Result<Summary> {
+    fn best(&mut self, game: &Game, request: &Request, market: &Market, depth: Depth, mut bound: f64) -> Result<Summary> {
         let mut routes = Vec::new();
         // A base with two influences is not for sale: such items are awakened.
         if request.kind.influences.iter().count() < 2 {
             routes.push(self.direct(request));
         }
-        for chain in crate::plan::chains(game, request, market) {
-            if chain.mechanic == "recombinator" && (quick || !self.cx.settings.recombine) {
+        for chain in crate::plan::chains(game, request, market, depth) {
+            if chain.mechanic == "recombinator" && depth == Depth::Ladder {
                 continue;
             }
             bound = routes.iter().flatten().map(|s| total(s, self.base_price)).fold(bound, f64::min);
@@ -199,120 +216,247 @@ impl Solver<'_, '_> {
     }
 }
 
-/// The plan for the problem. The quick plan, without the mechanics that make items remember
-/// or recombining, is solved first and passed to `quick`; the full solve reuses its work.
-fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64, quick: &dyn Fn(&Summary)) -> Result<Summary> {
+/// The plan for the problem at `depth`. A deep solve passes the ladder plan to `quick` first
+/// and keeps it unless trying every mechanic beats it.
+fn solve(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64, depth: Depth, quick: &dyn Fn(&Summary)) -> Result<Summary> {
     let (game, _) = cx.rules()?;
     let market = Market { prices: prices.clone(), chaos_per_hour: cx.settings.chaos_per_hour, base: base_price };
-    let request = crate::plan::prepare(game, problem, &market)?;
-    let avoid: Vec<_> = request.goal.needs.iter().flat_map(|need| &need.ok).flat_map(|&id| game.def(id).groups.iter().copied()).collect();
-    let class = &game.bases[request.kind.base.0 as usize].class;
-    let parsed = |name: &str| ops::parse(game, class, name, &avoid);
-    let unpriced: Vec<String> = request
+    let ladder = crate::plan::prepare(game, problem, &market, Depth::Ladder)?;
+    let full = crate::plan::prepare(game, problem, &market, Depth::Deep)?;
+    let avoid: Vec<_> = full.goal.needs.iter().flat_map(|need| &need.ok).flat_map(|&id| game.def(id).groups.iter().copied()).collect();
+    let class = &game.bases[full.kind.base.0 as usize].class;
+    let unpriced: Vec<String> = full
         .methods
         .iter()
         .filter_map(|method| {
             let Method::Named(name) = method else {
                 return None;
             };
-            market.price(&parsed(name)?.cost()).is_none().then(|| name.clone())
+            market.price(&ops::parse(game, class, name, &avoid)?.cost()).is_none().then(|| name.clone())
         })
         .collect();
-    let mut plain = request.clone();
-    plain.methods.retain(|m| !matches!(m, Method::Named(name) if parsed(name).is_some_and(|op| remembers(op.as_ref()))));
     let mut hasher = DefaultHasher::new();
     serde_json::to_string(&prices.iter().collect::<BTreeMap<_, _>>())?.hash(&mut hasher);
     let session = Session::new(Ctx { game, assumptions: &cx.assumptions }, &market);
-    let mut solver = Solver { cx, session, problem, base_price, unpriced, market_key: hasher.finish() };
-    let first = solver.best(game, &plain, &market, true, f64::INFINITY);
-    let slow = plain.methods.len() < request.methods.len()
-        || cx.settings.recombine && crate::plan::chains(game, &request, &market).iter().any(|c| c.mechanic == "recombinator");
-    let mut summary = match (first, slow) {
-        (Ok(first), true) => {
+    let mut solver = Solver { cx, game, session, problem, base_price, unpriced, market_key: hasher.finish() };
+    let awakened = ladder.kind.influences.iter().count() >= 2;
+    let first = {
+        let _heavy = awakened.then(|| cx.heavy.enter());
+        solver.best(game, &ladder, &market, Depth::Ladder, f64::INFINITY)
+    };
+    let mut summary = match (first, depth) {
+        (first, Depth::Ladder) => first?,
+        (Ok(first), Depth::Deep) => {
             quick(&Summary { unpriced: solver.unpriced.clone(), ..first.clone() });
             let bound = total(&first, base_price);
-            match solver.best(game, &request, &market, false, bound) {
+            let _heavy = cx.heavy.enter();
+            match solver.best(game, &full, &market, Depth::Deep, bound) {
                 Ok(full) if total(&full, base_price) < bound => full,
                 _ => first,
             }
         }
-        (Ok(first), false) => first,
-        (Err(_), true) => solver.best(game, &request, &market, false, f64::INFINITY)?,
-        (Err(error), false) => return Err(error),
+        (Err(_), Depth::Deep) => {
+            let _heavy = cx.heavy.enter();
+            solver.best(game, &full, &market, Depth::Deep, f64::INFINITY)?
+        }
     };
     summary.unpriced = solver.unpriced;
+    summary.depth = depth;
     Ok(summary)
 }
 
-pub fn solve_one(cx: &Context, estimate: &mut Estimate, prices: &Prices) {
-    let Some(problem) = &estimate.candidate else {
-        return;
-    };
-    let quick = |summary: &Summary| {
-        if let Some(stream) = &cx.on_solved {
-            stream(&Estimate { summary: Some(Arc::new(summary.clone())), error: None, ..estimate.clone() }, false);
-        }
-    };
-    let result = (|| -> Result<Arc<Summary>> {
+/// The cache keys of an estimate's plans.
+struct Keys {
+    /// solved under these prices: (ladder, deep)
+    exact: [String; 2],
+    /// the latest plan, under any prices
+    latest: String,
+}
+
+impl Keys {
+    fn new(cx: &Context, problem: &Candidate, prices: &Prices, base_price: f64) -> Result<Keys> {
         let (_, data_key) = cx.rules()?;
         let sorted: BTreeMap<_, _> = prices.iter().collect();
-        let base_price = estimate.base_price.map_or(UNQUOTED_BASE_PRICE, |price| price.0);
-        let key = blake3::hash(&serde_json::to_vec(&(
-            PLAN_VERSION,
-            problem.fingerprint().to_string(),
-            sorted,
-            cx.settings.chaos_per_hour,
-            cx.settings.recombine,
-            base_price,
-            data_key.as_bytes(),
-            format!("{:?}", cx.assumptions),
-        ))?)
-        .to_hex()
-        .to_string();
-        cx.plans
-            .get_or_solve(&key, || solve(cx, problem, prices, base_price, &quick).map_err(|error| error.to_string()))
-            .map_err(|error| anyhow!(error))
-    })();
-    match result {
+        let key = |priced: bool, depth: Option<Depth>| -> Result<String> {
+            let bytes = serde_json::to_vec(&(
+                PLAN_VERSION,
+                problem.fingerprint().to_string(),
+                priced.then_some(&sorted),
+                priced.then_some(cx.settings.chaos_per_hour),
+                depth,
+                priced.then_some(base_price),
+                data_key.as_bytes(),
+                format!("{:?}", cx.assumptions),
+            ))?;
+            Ok(blake3::hash(&bytes).to_hex().to_string())
+        };
+        Ok(Keys { exact: [key(true, Some(Depth::Ladder))?, key(true, Some(Depth::Deep))?], latest: key(false, None)? })
+    }
+
+    fn exact(&self, depth: Depth) -> &str {
+        &self.exact[depth as usize]
+    }
+}
+
+/// How much of an estimate's plan the cache had.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Recalled {
+    Missing,
+    /// a plan solved under other prices: shown until it is solved again
+    Stale,
+    Fresh,
+}
+
+fn base_price(estimate: &Estimate) -> f64 {
+    estimate.base_price.map_or(UNQUOTED_BASE_PRICE, |price| price.0)
+}
+
+fn stream(cx: &Context, estimate: &Estimate, refined: bool) {
+    if let Some(stream) = &cx.on_solved {
+        stream(estimate, refined);
+    }
+}
+
+fn set(estimate: &mut Estimate, plan: Result<Arc<Summary>, String>) {
+    match plan {
         Ok(plan) => {
             estimate.summary = Some(plan);
             estimate.error = None;
         }
         Err(error) => {
             estimate.summary = None;
-            estimate.error = Some(error.to_string());
+            estimate.error = Some(error);
         }
-    }
-    if let Some(stream) = &cx.on_solved {
-        stream(estimate, true);
     }
 }
 
-pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>, progress: Option<Progress>) {
-    let done = AtomicUsize::new(0);
-    let total = estimates.len();
-    let price = |estimate: &mut Estimate| {
-        solve_one(cx, estimate, prices);
-        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-        if let Some(say) = progress {
-            say(&format!("processed {n}/{total}: {}", estimate.title));
+/// The estimate's plan from the cache, if it has one: a ladder solve takes a deep plan, and a
+/// plan under other prices stands in until it is solved again.
+fn recall(cx: &Context, estimate: &mut Estimate, prices: &Prices) -> Recalled {
+    let Some(problem) = &estimate.candidate else {
+        return Recalled::Fresh;
+    };
+    let keys = match Keys::new(cx, problem, prices, base_price(estimate)) {
+        Ok(keys) => keys,
+        Err(error) => {
+            set(estimate, Err(error.to_string()));
+            stream(cx, estimate, true);
+            return Recalled::Fresh;
         }
     };
-    in_pool(workers, || {
-        if total <= 1 || rayon::current_num_threads() == 1 {
-            estimates.iter_mut().for_each(price);
-            return;
+    let fresh = [Depth::Deep, Depth::Ladder].iter().find_map(|&depth| cx.plans.get(keys.exact(depth)));
+    if let Some(plan) = fresh {
+        set(estimate, plan);
+        stream(cx, estimate, true);
+        return Recalled::Fresh;
+    }
+    match cx.plans.get(&keys.latest) {
+        Some(Ok(plan)) => {
+            set(estimate, Ok(plan));
+            stream(cx, estimate, false);
+            Recalled::Stale
         }
-        let pending = Mutex::new(estimates.iter_mut());
+        _ => Recalled::Missing,
+    }
+}
+
+/// Solve the estimate to `depth`, unless the cache has it. A ladder solve takes a deep plan.
+pub fn solve_one(cx: &Context, estimate: &mut Estimate, prices: &Prices, depth: Depth) {
+    let Some(problem) = &estimate.candidate else {
+        return;
+    };
+    let quick =
+        |summary: &Summary| stream(cx, &Estimate { summary: Some(Arc::new(summary.clone())), error: None, ..estimate.clone() }, false);
+    let base_price = base_price(estimate);
+    let plan = Keys::new(cx, problem, prices, base_price).map_err(|error| error.to_string()).and_then(|keys| {
+        if depth == Depth::Ladder
+            && let Some(deep) = cx.plans.get(keys.exact(Depth::Deep))
+        {
+            return deep;
+        }
+        let plan = cx
+            .plans
+            .get_or_solve(keys.exact(depth), || solve(cx, problem, prices, base_price, depth, &quick).map_err(|error| error.to_string()));
+        if let Ok(plan) = &plan {
+            cx.plans.put(&keys.latest, Ok(plan));
+        }
+        plan
+    });
+    set(estimate, plan);
+    stream(cx, estimate, true);
+}
+
+/// Peak memory a worker may need for a plain craft.
+const WORKER_BYTES: u64 = 2_500_000_000;
+/// Peak memory a heavy solve may need, on top of a worker's.
+const HEAVY_BYTES: u64 = 3 * WORKER_BYTES;
+
+fn available_memory() -> Option<u64> {
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = info.lines().find(|line| line.starts_with("MemAvailable:"))?;
+    line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kib| kib * 1024)
+}
+
+/// Workers that fit in the memory available, leaving a core for everything else.
+fn default_workers() -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let fit = available_memory().map_or(cores, |bytes| (bytes / WORKER_BYTES) as usize);
+    fit.min(cores.saturating_sub(1)).max(1)
+}
+
+/// Heavy solves that fit in the memory available at once.
+pub(super) fn heavy_slots() -> usize {
+    available_memory().map_or(1, |bytes| (bytes / HEAVY_BYTES) as usize).max(1)
+}
+
+fn heavy(estimate: &Estimate) -> bool {
+    estimate.candidate.as_ref().is_some_and(|problem| problem.influences.len() >= 2)
+}
+
+/// Solve the estimates on `workers` threads, by default as many as memory allows. Saved plans
+/// are taken first, so they all show at once; then the rest are solved, the missing before the
+/// stale and the simplest first.
+pub fn solve_estimates(cx: &Context, estimates: &mut [Estimate], prices: &Prices, workers: Option<usize>, progress: Option<Progress>) {
+    in_pool(Some(workers.unwrap_or_else(default_workers)), || {
+        let recalled: Vec<Recalled> = estimates.par_iter_mut().map(|estimate| recall(cx, estimate, prices)).collect();
+        let mut pending: Vec<(Recalled, &mut Estimate)> =
+            recalled.into_iter().zip(estimates.iter_mut()).filter(|(recalled, _)| *recalled != Recalled::Fresh).collect();
+        pending.sort_by_key(|(recalled, estimate)| {
+            let problem = estimate.candidate.as_ref().expect("only candidates are solved");
+            (*recalled, problem.influences.len(), problem.needs.len())
+        });
+        let (done, total) = (AtomicUsize::new(0), pending.len());
+        let price = |estimate: &mut Estimate| {
+            let clock = std::time::Instant::now();
+            solve_one(cx, estimate, prices, Depth::Ladder);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(say) = progress {
+                say(&format!("solved {n}/{total} in {:.1}s: {}", clock.elapsed().as_secs_f64(), estimate.title));
+            }
+        };
+        let (heavy, light): (VecDeque<_>, VecDeque<_>) = pending.into_iter().map(|(_, estimate)| estimate).partition(|e| heavy(e));
+        let queues = Mutex::new((heavy, light));
+        // Heavy crafts start whenever there is room for one, so they overlap the light ones
+        // instead of queueing at the end.
+        let next = || {
+            if cx.cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            let mut queues = queues.lock().expect("pending estimates");
+            let (heavy, light) = &mut *queues;
+            if cx.heavy.has_room() {
+                heavy.pop_front().or_else(|| light.pop_front())
+            } else {
+                light.pop_front().or_else(|| heavy.pop_front())
+            }
+        };
         (0..rayon::current_num_threads().min(total)).into_par_iter().for_each(|_| {
             let solver = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("solver pool");
             solver.install(|| {
-                loop {
-                    let next = pending.lock().expect("pending estimates").next();
-                    let Some(estimate) = next else { break };
+                while let Some(estimate) = next() {
                     price(estimate);
                 }
             });
-        })
+        });
     });
 }

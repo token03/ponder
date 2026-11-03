@@ -1,4 +1,4 @@
-//! Crafting bench: one crafted mod, or removing them. Options, mods and costs come from the
+//! Crafting bench: one crafted mod, crafting over the one there, or removing them. Options, mods and costs come from the
 //! game's bench table; guides name an option by what it adds.
 
 use std::sync::Arc;
@@ -126,9 +126,22 @@ pub enum Bench {
         cost: Cost,
     },
     RemoveCrafted,
+    /// Craft over the item's one crafted mod: the bench replaces it for an Orb of Scouring more.
+    Over {
+        name: String,
+        steps: [Step; 2],
+        cost: Cost,
+    },
 }
 
 impl Bench {
+    /// This craft done over a crafted mod already there; `None` for removing crafted mods.
+    pub fn over(self) -> Option<Bench> {
+        let Bench::Craft { name, steps: [craft], mut cost } = self else { return None };
+        cost.items.push(("scour".into(), 1.0));
+        Some(Bench::Over { name, steps: [Step::RemoveCrafted, craft], cost })
+    }
+
     /// A bench option by guide name for an item class, e.g. `prefixes-cannot-be-changed`,
     /// `fire-and-chaos-resistance`, `any-suffix` or `remove-crafted`.
     pub fn new(game: &Game, name: &str, class: &str, avoid: &[GroupId]) -> Option<Bench> {
@@ -202,11 +215,16 @@ impl Operation for Bench {
         match self {
             Bench::Craft { name, .. } => format!("bench:{name}"),
             Bench::RemoveCrafted => "bench:remove-crafted".into(),
+            Bench::Over { name, .. } => format!("bench-over:{name}"),
         }
     }
 
-    /// One crafted mod at a time, three with the multimod craft (SPEC §4.6).
+    /// One crafted mod at a time, three with the multimod craft (SPEC §4.6); one crafted mod
+    /// can be crafted over.
     fn applies(&self, ctx: &Ctx, item: &dyn View) -> bool {
+        if item.item_class().contains("Jewel") {
+            return false;
+        }
         match self {
             Bench::Craft { steps: [Step::Craft(mods)], .. } => {
                 let limit = if ctx.game.metamods.get(4).is_some_and(|mm| item.has(*mm)) { 3 } else { 1 };
@@ -214,6 +232,10 @@ impl Operation for Bench {
             }
             Bench::Craft { .. } => unreachable!(),
             Bench::RemoveCrafted => item.crafted() > 0,
+            Bench::Over { .. } => {
+                let multimod = ctx.game.metamods.get(4).is_some_and(|mm| item.has(*mm));
+                item.rarity() != Rarity::Normal && item.crafted() == 1 && !multimod
+            }
         }
     }
 
@@ -221,12 +243,13 @@ impl Operation for Bench {
         match self {
             Bench::Craft { steps, .. } => steps,
             Bench::RemoveCrafted => &[Step::RemoveCrafted],
+            Bench::Over { steps, .. } => steps,
         }
     }
 
     fn cost(&self) -> Cost {
         match self {
-            Bench::Craft { cost, .. } => cost.clone(),
+            Bench::Craft { cost, .. } | Bench::Over { cost, .. } => cost.clone(),
             Bench::RemoveCrafted => Cost::of("scour", 1.0, 3.0),
         }
     }

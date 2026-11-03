@@ -14,6 +14,8 @@ use ponder_game::mods::ModDB;
 use ponder_net::ladder::Sample;
 use serde_json::{Value, json};
 
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Parser)]
 #[command(name = "ponder", version, about = "PoE crafting estimates and ladder market demand.")]
 struct Cli {

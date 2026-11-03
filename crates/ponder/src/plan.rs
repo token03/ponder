@@ -1,5 +1,6 @@
 use crate::candidate::Candidate;
 use anyhow::{Result, anyhow};
+pub use ponder_plan::session::{Flow, FlowEdge, FlowKind, FlowNode};
 use ponder_plan::{
     market::Market,
     session::{Method, Request},
@@ -29,6 +30,31 @@ pub struct Summary {
     pub unpriced: Vec<String>,
     /// How the item is made, part by part, the goal last.
     pub stages: Vec<Stage>,
+    pub depth: Depth,
+}
+
+/// Which mechanics a solve tries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Depth {
+    /// Plain crafting, with imprints and Dominance on the parts of items made with Awakener's
+    /// Orbs. Memory strands, Hinekora's Lock and these on whole items cost far more time and
+    /// memory than they save.
+    #[default]
+    Ladder,
+    /// Every mechanic on every item, recombining included.
+    Deep,
+}
+
+impl Depth {
+    /// The slow mechanics offered at this depth for an item of `kind`, or for a part of one.
+    fn mechanics(self, kind: Kind, part: bool) -> &'static [&'static str] {
+        match self {
+            Depth::Ladder if part && kind.influences.iter().count() >= 2 => &["imprint", "restore", "dominance"],
+            Depth::Ladder => &[],
+            Depth::Deep if kind.influences.0 != 0 => &["imprint", "restore", "beast:lock", "remembrance", "dominance"],
+            Depth::Deep => &["imprint", "restore", "beast:lock", "remembrance"],
+        }
+    }
 }
 
 /// One item of a recipe and how it is made.
@@ -38,12 +64,19 @@ pub struct Stage {
     pub influences: Vec<String>,
     pub rarity: Option<String>,
     pub needs: Vec<String>,
+    /// Per need: the side its mods roll on ("prefix", "suffix" or "either"), and how many it takes.
+    pub places: Vec<(String, u8)>,
+    /// Most (prefixes, suffixes) the base holds when magic, then when rare.
+    pub slots: [[usize; 2]; 2],
     /// Operations in the order a run first uses them, purchases included.
     pub ops: Vec<String>,
     /// Expected uses per item made.
     pub uses: Vec<(String, f64)>,
+    /// Expected chaos per item made, by operation.
+    pub spend: Vec<(String, f64)>,
     /// Chaos per item made, everything included.
     pub cost: f64,
+    pub flow: Flow,
 }
 
 impl Summary {
@@ -100,7 +133,7 @@ fn ban_pays(game: &Game, target: &Target, rolls: &[(ModId, f64)], avoid: &[Group
     })
 }
 
-fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Method> {
+fn methods(game: &Game, kind: Kind, target: &Target, market: &Market, mechanics: &[&str]) -> Vec<Method> {
     let class = &game.bases[kind.base.0 as usize].class;
     let wanted: HashSet<_> = target.needs.iter().flat_map(|need| need.ok.iter().copied()).collect();
     let avoid: Vec<_> = wanted.iter().flat_map(|&id| game.def(id).groups.iter().copied()).collect();
@@ -178,11 +211,15 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Met
             .map(String::from),
         );
     }
-    // Imprints never paid on the ladder sample and multiplied its states (SPEC §10).
-    names.extend(["remembrance", "beast:wild-bristle-matron"].map(String::from));
+    names.push("beast:wild-bristle-matron".into());
     if target.influences.0 != 0 {
-        names.extend(["harvest:reforge-influence", "dominance"].map(String::from));
+        names.push("harvest:reforge-influence".into());
     }
+    // Only an Orb of Dominance makes elevated mods.
+    if wanted.iter().any(|&id| game.def(id).source == Source::Elevated) && !mechanics.contains(&"dominance") {
+        names.push("dominance".into());
+    }
+    names.extend(mechanics.iter().map(|&name| name.to_string()));
     for name in ["bench:prefixes-cannot-be-changed", "bench:suffixes-cannot-be-changed"] {
         if ops::parse(game, class, name, &avoid).is_some() {
             names.push(name.into());
@@ -217,12 +254,19 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market) -> Vec<Met
         names.extend(["veiled-chaos".into(), "veiled-exalted".into()]);
         names.extend(unveiled.iter().map(|&id| format!("unveil:{}", game.def(id).key)));
     }
+    let over: Vec<String> = names
+        .iter()
+        .filter_map(|name| name.strip_prefix("bench:"))
+        .filter(|name| !matches!(*name, "remove-crafted" | "multimod"))
+        .map(|name| format!("bench-over:{name}"))
+        .collect();
+    names.extend(over);
     names.sort();
     names.dedup();
     names.into_iter().map(Method::Named).collect()
 }
 
-pub fn prepare(game: &Game, candidate: &Candidate, market: &Market) -> Result<Request> {
+pub fn prepare(game: &Game, candidate: &Candidate, market: &Market, depth: Depth) -> Result<Request> {
     let base = game.base(&candidate.base).ok_or_else(|| anyhow!("unknown crafting base {:?}", candidate.base))?;
     let influences =
         candidate.influences.iter().map(|name| serde_json::from_value::<Influence>(name.clone().into())).collect::<Result<Vec<_>, _>>()?;
@@ -262,7 +306,7 @@ pub fn prepare(game: &Game, candidate: &Candidate, market: &Market) -> Result<Re
     if !item.affixes.is_empty() {
         item.rarity = Rarity::Rare;
     }
-    let methods = methods(game, kind, &target, market);
+    let methods = methods(game, kind, &target, market, depth.mechanics(kind, false));
 
     Ok(Request { kind, goal: target, methods, starts: vec![Arc::new(Stock::new("base", market.base, item))] })
 }
@@ -300,7 +344,7 @@ impl Chain {
 /// awakening: an item of each influence carrying one of its needs, magic where the base allows. A request with rolled
 /// needs on both sides can also be recombined from an item with the prefixes and one with the
 /// suffixes.
-pub fn chains(game: &Game, request: &Request, market: &Market) -> Vec<Chain> {
+pub fn chains(game: &Game, request: &Request, market: &Market, depth: Depth) -> Vec<Chain> {
     if request.starts.iter().flat_map(|s| s.items()).any(|item| !item.affixes.is_empty()) {
         return Vec::new();
     }
@@ -310,7 +354,7 @@ pub fn chains(game: &Game, request: &Request, market: &Market) -> Vec<Chain> {
         let wanted =
             carried.iter().map(|&i| Need { count: if rarity == Some(Rarity::Magic) { 1 } else { needs[i].count }, ..needs[i].clone() });
         let goal = Target { influences, rarity, needs: wanted.collect(), min_mods: 0, ..request.goal.clone() };
-        let methods = methods(game, kind, &goal, market);
+        let methods = methods(game, kind, &goal, market, depth.mechanics(request.kind, true));
         let starts: Vec<Arc<dyn Supply>> = vec![Arc::new(Stock::new("base", market.base, Item::new(kind)))];
         Part { name, needs: carried, request: Request { kind, goal, methods, starts } }
     };

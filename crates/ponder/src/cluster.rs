@@ -226,9 +226,15 @@ pub fn problem(
         }
         Ok(matches)
     };
+    let label = |name: &str| -> String {
+        let parsed = if is_feature(name) { parse(name).ok() } else { None };
+        let Some((group, tier)) = parsed else { return name.to_string() };
+        let at_tier = mods.iter().find(|m| m.groups.contains(&group) && ranks.get(&m.id) == Some(&tier));
+        at_tier.map_or_else(|| name.to_string(), |m| m.label.clone())
+    };
     let mut needs = names
         .iter()
-        .map(|name| Ok(Need { name: name.clone(), mods: resolve(name)?, count: 1, fractured: false }))
+        .map(|name| Ok(Need { name: label(name), mods: resolve(name)?, count: 1, fractured: false }))
         .collect::<Result<Vec<_>>>()?;
     let fixed = fractured
         .iter()
@@ -245,7 +251,8 @@ pub fn problem(
         if let Some(need) = needs.iter_mut().find(|need| need.mods.contains(id)) {
             need.fractured = true;
         } else {
-            needs.push(Need { name: id.clone(), mods: BTreeSet::from([id.clone()]), count: 1, fractured: true });
+            let name = mods.iter().find(|m| &m.id == id).map_or_else(|| id.clone(), |m| m.label.clone());
+            needs.push(Need { name, mods: BTreeSet::from([id.clone()]), count: 1, fractured: true });
         }
     }
     if !filler.is_empty() {
@@ -253,7 +260,8 @@ pub fn problem(
         for name in filler {
             acceptable.extend(resolve(name)?);
         }
-        needs.push(Need { name: format!("any of: {}", filler.join(", ")), mods: acceptable, count: 1, fractured: false });
+        let named: Vec<String> = filler.iter().map(|name| label(name)).collect();
+        needs.push(Need { name: format!("any of: {}", named.join(", ")), mods: acceptable, count: 1, fractured: false });
     }
     Ok(crate::candidate::Candidate {
         base: format!("{} Cluster Jewel [{}]", size[..1].to_uppercase() + &size[1..], enchant.tag),

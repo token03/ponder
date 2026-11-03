@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use ponder::pipeline::{self, Context, Estimate, LadderOpts};
+use egui_notify::Toasts;
+use ponder::pipeline::{self, Context, Depth, Estimate, Key, LadderOpts};
 use ponder_game::mods::ModDB;
 use serde::{Deserialize, Serialize};
 
@@ -11,19 +13,18 @@ use crate::view::{self, Filters, Sort};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct RunSettings {
+pub struct ScanSettings {
     pub gear_top: usize,
     pub per_group: usize,
     pub niche: usize,
     pub cluster_top: usize,
     pub min_characters: usize,
-    pub group: String,
     pub trade: bool,
     pub trade_budget: usize,
     pub chaos_per_hour: f64,
 }
 
-impl Default for RunSettings {
+impl Default for ScanSettings {
     fn default() -> Self {
         let opts = LadderOpts::default();
         Self {
@@ -32,7 +33,6 @@ impl Default for RunSettings {
             niche: opts.niche,
             cluster_top: opts.cluster_top,
             min_characters: opts.min_characters,
-            group: String::new(),
             trade: false,
             trade_budget: opts.trade_budget,
             chaos_per_hour: pipeline::settings_from_env().chaos_per_hour,
@@ -40,7 +40,7 @@ impl Default for RunSettings {
     }
 }
 
-impl RunSettings {
+impl ScanSettings {
     fn opts(&self) -> LadderOpts {
         LadderOpts {
             gear_top: self.gear_top,
@@ -48,7 +48,7 @@ impl RunSettings {
             niche: self.niche,
             cluster_top: self.cluster_top,
             min_characters: self.min_characters,
-            group: Some(self.group.trim().into()).filter(|group: &String| !group.is_empty()),
+            group: None,
             trade_lookup: self.trade,
             trade_budget: self.trade_budget,
             workers: None,
@@ -62,8 +62,7 @@ impl RunSettings {
 pub struct Saved {
     pub filters: Filters,
     pub sort: Sort,
-    pub run: RunSettings,
-    pub auto_run: bool,
+    pub scan: ScanSettings,
 }
 
 pub struct State {
@@ -76,9 +75,17 @@ pub struct State {
     pub catalog: ItemCatalog,
     pub rows: Vec<usize>,
     pub selected: Option<usize>,
+    /// a craft to open in its own pane
+    pub pin: Option<usize>,
     pub reveal: bool,
     pub log: Vec<(Instant, String)>,
     pub status: String,
+    pub toasts: Toasts,
+    /// Estimates showing a quick plan while their full plan is solved.
+    pub quick: HashSet<Key>,
+    /// Estimates of this run with their final plan, of those to solve.
+    pub solved: (usize, usize),
+    solve_started: Instant,
     pub jobs: Jobs,
     pub has_cookie: bool,
     pub has_ladder: bool,
@@ -91,7 +98,7 @@ impl State {
         jobs.spawn("game data", |_| Msg::Db(ModDB::load().map(Arc::new).map_err(|error| error.to_string())));
         let has_ladder = std::fs::read_dir(ponder_net::ladder::DATA_DIR).is_ok_and(|mut entries| entries.next().is_some());
         Self {
-            cx: Arc::new(context(&saved.run)),
+            cx: Arc::new(context(&saved.scan)),
             saved,
             db: None,
             data: None,
@@ -100,9 +107,14 @@ impl State {
             catalog: ItemCatalog::default(),
             rows: Vec::new(),
             selected: None,
+            pin: None,
             reveal: false,
             log: Vec::new(),
             status: "loading game data".into(),
+            toasts: Toasts::default().with_anchor(egui_notify::Anchor::BottomRight).with_margin(egui::vec2(12.0, 36.0)),
+            quick: HashSet::new(),
+            solved: (0, 0),
+            solve_started: Instant::now(),
             jobs,
             has_cookie: ponder_net::trade::cookie().is_some(),
             has_ladder,
@@ -115,6 +127,18 @@ impl State {
         self.status.clone_from(&message);
         self.log.push((Instant::now(), message));
     }
+
+    /// A note worth a toast.
+    pub fn announce(&mut self, message: impl Into<String>, failed: bool) {
+        let message = message.into();
+        let toast = if failed { self.toasts.error(message.clone()) } else { self.toasts.success(message.clone()) };
+        toast.duration(Duration::from_secs(if failed { 8 } else { 4 }));
+        self.note(message);
+    }
+
+    pub fn solving(&self) -> bool {
+        self.solved.0 < self.solved.1
+    }
     pub fn divine(&self) -> f64 {
         self.data.as_ref().map_or(0.0, |data| data.report.divine)
     }
@@ -126,6 +150,15 @@ impl State {
     }
     pub fn select(&mut self, index: usize) {
         self.selected = Some(index);
+    }
+
+    /// An id for a craft that outlasts scans: its title, then its key.
+    pub fn id(estimate: &Estimate) -> String {
+        format!("{}\u{1f}{:?}", estimate.title, estimate.key)
+    }
+
+    pub fn find(&self, id: &str) -> Option<usize> {
+        self.estimates().iter().position(|estimate| State::id(estimate) == id)
     }
 
     pub fn refilter(&mut self) {
@@ -155,11 +188,11 @@ impl State {
                 self.catalog = ItemCatalog::new(&db);
                 self.db = Some(db);
                 self.note("game data loaded");
-                if self.saved.auto_run && self.has_ladder && self.data.is_none() {
-                    self.run_ladder();
+                if self.has_ladder && self.data.is_none() {
+                    self.scan();
                 }
             }
-            Msg::Db(Err(error)) => self.note(format!("game data: {error}")),
+            Msg::Db(Err(error)) => self.announce(format!("game data: {error}"), true),
             Msg::Ladder(Ok(loaded)) => {
                 let message = format!(
                     "{} estimates from {} characters in {:.1}s",
@@ -169,22 +202,30 @@ impl State {
                 );
                 self.ranks = view::ranks(&loaded.report.estimates);
                 self.catalog.update_counts(&loaded.report.estimates);
+                self.quick.clear();
+                self.solved = (0, loaded.report.estimates.iter().filter(|e| e.candidate.is_some()).count());
                 self.data = Some(*loaded);
                 self.refilter();
-                self.note(message);
+                self.announce(message, false);
                 self.solve_all();
             }
-            Msg::Ladder(Err(error)) => self.note(format!("ladder run failed: {error}")),
+            Msg::Ladder(Err(error)) => self.announce(format!("ladder run failed: {error}"), true),
             Msg::LadderFetched { characters, note } => {
                 self.has_ladder |= characters > 0;
                 self.note(note);
-                if self.saved.auto_run && self.has_ladder && self.data.is_none() {
-                    self.run_ladder();
+                if self.has_ladder && self.data.is_none() {
+                    self.scan();
                 }
             }
             Msg::Solved { run, estimate, refined } => {
                 if run != self.run {
                     return;
+                }
+                if refined {
+                    self.quick.remove(&estimate.key);
+                    self.solved.0 += 1;
+                } else {
+                    self.quick.insert(estimate.key.clone());
                 }
                 if let Some(data) = self.data.as_mut()
                     && let Some(slot) = data.report.estimates.iter_mut().find(|e| e.key == estimate.key)
@@ -194,6 +235,10 @@ impl State {
                     self.ranks = view::ranks(&data.report.estimates);
                     self.refilter();
                     self.status = format!("{} {title}", if refined { "solved" } else { "quick plan for" });
+                }
+                if refined && !self.solving() {
+                    let took = self.solve_started.elapsed().as_secs_f64();
+                    self.announce(format!("all {} crafts solved in {took:.0}s", self.solved.1), false);
                 }
             }
             Msg::Estimate { run, index, estimate, note } => {
@@ -207,26 +252,28 @@ impl State {
                     self.ranks = view::ranks(&data.report.estimates);
                     self.refilter();
                 }
-                self.note(note);
+                self.announce(note, false);
             }
         }
     }
 
-    pub fn run_ladder(&mut self) {
+    pub fn scan(&mut self) {
         let Some(db) = self.db.clone() else { return };
         if self.jobs.is_running("ladder") {
             return;
         }
         self.run += 1;
-        let mut cx = context(&self.saved.run);
+        self.cx.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.solved = (0, 0);
+        let mut cx = context(&self.saved.scan);
         let (reply, run) = (self.jobs.reply(), self.run);
         cx.on_solved = Some(Arc::new(move |estimate: &Estimate, refined| {
             reply.send(Msg::Solved { run, estimate: Box::new(estimate.clone()), refined })
         }));
         self.cx = Arc::new(cx);
         let cx = self.cx.clone();
-        let opts = self.saved.run.opts();
-        self.note("running the ladder pipeline");
+        let opts = self.saved.scan.opts();
+        self.note("scanning the ladder");
         self.jobs.spawn("ladder", move |reply| {
             let clock = Instant::now();
             let say = |message: &str| reply.status(message);
@@ -247,10 +294,36 @@ impl State {
         let Some(data) = &self.data else { return };
         let mut estimates = data.report.estimates.clone();
         let (cx, table) = (self.cx.clone(), data.table.clone());
-        self.jobs.spawn("solve", move |reply| {
-            let clock = Instant::now();
-            pipeline::solve_estimates(&cx, &mut estimates, &table, None, Some(&|message: &str| reply.status(message)));
-            Msg::Status(format!("solved {} estimates in {:.1}s", estimates.len(), clock.elapsed().as_secs_f64()))
+        self.solve_started = Instant::now();
+        self.jobs.spawn(&format!("solve run {}", self.run), move |_| {
+            pipeline::solve_estimates(&cx, &mut estimates, &table, None, None);
+            Msg::Status("solving finished".into())
+        });
+    }
+
+    /// Solve the selected estimate with every mechanic, once: the plan is saved, and later
+    /// ladder runs take it.
+    pub fn deep_solve(&mut self) {
+        let (Some(index), Some(data)) = (self.selected, self.data.as_ref()) else {
+            return;
+        };
+        let mut estimate = data.report.estimates[index].clone();
+        let (cx, run, table, divine) = (self.cx.clone(), self.run, data.table.clone(), data.report.divine);
+        self.note(format!("trying every mechanic on {}", estimate.title));
+        self.jobs.spawn("deep solve", move |_| {
+            let before = estimate.craft_cost();
+            pipeline::solve_one(&cx, &mut estimate, &table, Depth::Deep);
+            let note = match (before, estimate.craft_cost()) {
+                (Some(before), Some(after)) if after < before - 0.5 => format!(
+                    "{}: every mechanic brings it from {} to {}",
+                    estimate.title,
+                    view::money(Some(before), divine),
+                    view::money(Some(after), divine)
+                ),
+                (_, Some(_)) => format!("{}: no mechanic beats the ladder plan", estimate.title),
+                (_, None) => format!("{}: {}", estimate.title, estimate.failure().unwrap_or("no plan")),
+            };
+            Msg::Estimate { run, index, estimate: Box::new(estimate), note }
         });
     }
 
@@ -289,7 +362,7 @@ impl State {
         let (cx, run, table, league) = (self.cx.clone(), self.run, data.table.clone(), data.report.league.clone());
         self.jobs.spawn(&format!("trade prices #{index}"), move |_| {
             pipeline::lookup_market(&cx, &mut estimate, &table, &league);
-            pipeline::solve_one(&cx, &mut estimate, &table);
+            pipeline::solve_one(&cx, &mut estimate, &table, Depth::Ladder);
             Msg::Estimate { run, index, estimate: Box::new(estimate), note: "trade prices updated".into() }
         });
     }
@@ -299,14 +372,14 @@ impl State {
         let result = serde_json::to_vec_pretty(&data.report)
             .map_err(|error| error.to_string())
             .and_then(|bytes| std::fs::write("ponder-report.json", bytes).map_err(|error| error.to_string()));
-        self.note(match result {
-            Ok(()) => "saved ponder-report.json".into(),
-            Err(error) => format!("export failed: {error}"),
-        });
+        match result {
+            Ok(()) => self.announce("saved ponder-report.json", false),
+            Err(error) => self.announce(format!("export failed: {error}"), true),
+        }
     }
 }
 
-fn context(run: &RunSettings) -> Context {
+fn context(run: &ScanSettings) -> Context {
     let mut context = Context::real();
     if run.chaos_per_hour.is_finite() && run.chaos_per_hour >= 0.0 {
         context.settings.chaos_per_hour = run.chaos_per_hour;

@@ -25,14 +25,11 @@ pub type Prices = HashMap<String, f64>;
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
     pub chaos_per_hour: f64,
-    /// Also try recombining an item with the prefixes and one with the suffixes. It never won on
-    /// the ladder sample and triples solving time, so it is off unless asked for.
-    pub recombine: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { chaos_per_hour: 1500.0, recombine: false }
+        Self { chaos_per_hour: 1500.0 }
     }
 }
 
@@ -93,10 +90,9 @@ pub fn build(game: &ponder_rules::game::Game, db: &ModDB, matched: &ItemMatch, o
     );
     ensure!(!matched.item.flags.contains("synthesised"), "synthesised bases are not represented by the crafting planner");
     ensure!(matched.unmatched.is_empty(), "item has unrecognized modifiers");
-    let mut level = opts.item_level.or(matched.item.item_level).unwrap_or(DEFAULT_ITEM_LEVEL);
-    if opts.item_level.is_none() {
-        level = matched.mods.iter().filter_map(|m| db.mods.get(&m.mod_id)).map(|m| m.required_level).fold(level, i64::max);
-    }
+    let floor = matched.item.item_level.unwrap_or(DEFAULT_ITEM_LEVEL).min(DEFAULT_ITEM_LEVEL);
+    let needed = || matched.mods.iter().filter_map(|m| db.mods.get(&m.mod_id)).map(|m| m.required_level).fold(floor, i64::max);
+    let level = opts.item_level.unwrap_or_else(needed);
     let influences = matched
         .item
         .influences

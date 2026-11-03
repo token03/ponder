@@ -679,6 +679,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-notify"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f022e19ac3be5e1798892426d9aa2ab55fe5acf346c476589601a0df46bf89dc"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -747,6 +756,18 @@ dependencies = [
  "log",
  "profiling",
  "winit",
+]
+
+[[package]]
+name = "egui_plot"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c34f8fe086d7e69ce558dcc85f7c7be593092525d01cb30caa560044bc2bbaa"
+dependencies = [
+ "ahash",
+ "egui",
+ "emath",
+ "nohash-hasher",
 ]
 
 [[package]]
@@ -1626,6 +1647,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,6 +1719,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -2404,8 +2443,11 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui",
+ "egui-notify",
  "egui_extras",
+ "egui_plot",
  "egui_tiles",
+ "mimalloc",
  "ponder",
  "ponder-game",
  "ponder-net",
@@ -2419,6 +2461,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "mimalloc",
  "ponder",
  "ponder-game",
  "ponder-net",
@@ -2463,6 +2506,7 @@ dependencies = [
  "ponder-rules",
  "ponder-solve",
  "rayon",
+ "serde",
  "serde_json",
  "toml",
 ]

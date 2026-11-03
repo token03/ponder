@@ -48,7 +48,9 @@ impl Operation for Beast {
             Step::Imprint => item.rarity() == Rarity::Magic && item.fractured() == 0,
             Step::Restore => item.imprinted(),
             Step::Foresee => item.rarity() == Rarity::Magic && !item.foreseen(),
-            Step::CraftAny(locks) => item.rarity() != Rarity::Normal && locks.iter().any(|&m| item.fits(m)),
+            Step::CraftAny(locks) => {
+                item.rarity() != Rarity::Normal && !item.item_class().contains("Jewel") && locks.iter().any(|&m| item.fits(m))
+            }
             _ => unreachable!(),
         }
     }

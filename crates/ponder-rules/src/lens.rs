@@ -740,6 +740,60 @@ impl<'g> Lens<'g> {
             .count()
     }
 
+    /// A bit per need of target `t` the item holds: enough mods serving it, fractured where
+    /// the need asks for that.
+    pub fn held(&self, t: usize, state: &State) -> u128 {
+        let n = self.classes.len();
+        let predicate = &self.targets[t];
+        let mut held = 0;
+        for (i, (need, classes)) in predicate.target.needs.iter().zip(&predicate.classes).enumerate() {
+            let have: usize =
+                classes.iter().map(|&c| state.counts[c + n] as usize + if need.fractured { 0 } else { state.counts[c] as usize }).sum();
+            if have >= need.count as usize {
+                held |= 1 << i;
+            }
+        }
+        held
+    }
+
+    /// How many mods each side holds (prefixes, suffixes), and the crafted mods by key with
+    /// their sides.
+    pub fn layout(&self, state: &State) -> ([u8; 2], Vec<(String, Side)>) {
+        let n = self.classes.len();
+        let mut filled = [0u8; 2];
+        let mut crafted = Vec::new();
+        for (c, class) in self.classes.iter().enumerate() {
+            let held = state.counts[c] + state.counts[c + n];
+            filled[class.side as usize] += held;
+            if class.crafted && held > 0 {
+                let mods = self.class_of.iter().filter(|(_, of)| **of == c);
+                crafted.extend(mods.map(|(m, _)| (self.game.def(*m).key.clone(), class.side)));
+            }
+        }
+        crafted.sort();
+        (filled, crafted)
+    }
+
+    /// Does the item hold a veiled mod?
+    pub fn veiled(&self, state: &State) -> bool {
+        let n = self.classes.len();
+        (0..n).any(|c| self.classes[c].veil && state.counts[c] + state.counts[c + n] > 0)
+    }
+
+    /// A bit per need of target `t` the item's fractured mods alone hold.
+    pub fn held_fractured(&self, t: usize, state: &State) -> u128 {
+        let n = self.classes.len();
+        let predicate = &self.targets[t];
+        let mut held = 0;
+        for (i, (need, classes)) in predicate.target.needs.iter().zip(&predicate.classes).enumerate() {
+            let have: usize = classes.iter().map(|&c| state.counts[c + n] as usize).sum();
+            if have >= need.count as usize {
+                held |= 1 << i;
+            }
+        }
+        held
+    }
+
     /// Unmet needs that cannot be finished with an ordinary bench craft.
     pub fn missing_rolled_needs(&self, t: usize, state: &State) -> usize {
         let n = self.classes.len();
@@ -1874,7 +1928,7 @@ impl View for StateView<'_> {
         self.state.eldritch
     }
     fn veiled(&self) -> bool {
-        (0..self.lens.classes.len()).any(|c| self.lens.classes[c].veil && self.present(c))
+        self.lens.veiled(self.state)
     }
 }
 
