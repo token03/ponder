@@ -855,9 +855,7 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
             let hopes = list(hopes.iter().map(|&need| wanted(&needs[need])).collect());
             let mut from = node.clone();
             from.crafted.retain(|m| main.is_none_or(|line| !line.dropped.contains(m)));
-            let matron = main.is_some_and(|line| line.op == "beast:wild-bristle-matron" && line.exits().count() > 1);
             let heading = match main.and_then(|line| line.op.strip_prefix("buy:")) {
-                _ if matron => vec![words("Add a meta-modifier")],
                 Some(part) if part != "base" => vec![words(format!("Start with the {part} item"))],
                 _ => target.map_or_else(
                     || vec![words("Carry on")],
@@ -926,8 +924,20 @@ fn chapter(stage: &Stage, finish: bool, bench: &dyn Fn(&str) -> Option<String>) 
         })
         .collect();
     let cost_of = |op: &str| stage.spend.iter().find(|(name, _)| name == op).map_or(0.0, |(_, chaos)| *chaos);
-    let mut ingredients: Vec<(String, f64, f64)> =
-        stage.uses.iter().filter(|(_, uses)| *uses >= RARE_USE).map(|(op, uses)| (op.clone(), *uses, cost_of(op))).collect();
+    let mut ingredients: Vec<(String, f64, f64)> = Vec::new();
+    for (op, uses) in stage.uses.iter().filter(|(_, uses)| *uses >= RARE_USE) {
+        let (named, each) = match matron_tries(op) {
+            Some(tries) => ("beast:wild-bristle-matron".to_string(), tries as f64),
+            None => (op.clone(), 1.0),
+        };
+        match ingredients.iter_mut().find(|(known, _, _)| *known == named) {
+            Some((_, amount, chaos)) => {
+                *amount += uses * each;
+                *chaos += cost_of(op);
+            }
+            None => ingredients.push((named, uses * each, cost_of(op))),
+        }
+    }
     ingredients.sort_by(|a, b| b.2.total_cmp(&a.2).then(b.1.total_cmp(&a.1)));
     let bought = stage.flow.nodes.iter().filter(|node| node.kind == FlowKind::Buy);
     let bought = bought.flat_map(|node| node.actions.iter().map(|(op, uses)| (op.clone(), *uses, 0.0)));
@@ -1043,6 +1053,7 @@ pub fn noun(op: &str, cx: &Context) -> String {
         },
         "harvest" => format!("Harvest {}", rest.replace('-', " ")),
         "beast" if rest == "lock" => "Hinekora's Lock".into(),
+        "beast" if rest.starts_with("wild-bristle-matron") => "Wild Bristle Matron".into(),
         "beast" => title_case(rest),
         "awakener" => format!("Awakener's Orb with the {rest} item"),
         "recombinator" => format!("Recombinator with the {rest} item"),
@@ -1107,6 +1118,12 @@ fn doing(line: &Line, cx: &Context) -> Vec<Piece> {
     }
 }
 
+/// How many Wild Bristle Matrons a lock takes on average, for the ops that use them until the
+/// lock comes: `beast:wild-bristle-matron:suffixes:3` takes 3.
+fn matron_tries(op: &str) -> Option<usize> {
+    op.strip_prefix("beast:wild-bristle-matron:")?.split_once(':')?.1.parse().ok()
+}
+
 /// Currencies that add or take a random mod once: you slam them.
 const SLAMS: [&str; 6] = ["exalted", "eldritch-exalted", "veiled-exalted", "regal", "annulment", "eldritch-annulment"];
 
@@ -1127,6 +1144,16 @@ fn instruction(line: &Line, cx: &Context) -> Vec<Piece> {
             vec![words("Bench-craft "), Piece::Mod { short: text.clone(), full: text, role: "bench" }, words(" over the crafted mod")]
         }
         ("beast", "wild-bristle-matron") => [op("Use a "), vec![words(", which adds a random eligible crafted meta-modifier")]].concat(),
+        ("beast", _) if matron_tries(&line.op) == Some(1) => {
+            [op("Use a "), vec![words(": the only meta-modifier with room is this lock, so it is sure to add it")]].concat()
+        }
+        ("beast", _) if let Some(tries) = matron_tries(&line.op) => [
+            op("Use "),
+            vec![words(format!(
+                "s until one adds the lock, removing anything else at the bench: 1 in {tries} each time, so about {tries} Matrons"
+            ))],
+        ]
+        .concat(),
         _ if line.augments > 0.0 && line.spam() => [
             op("Spam "),
             vec![words(format!(" (about {}), with an ", count(line.each)))],

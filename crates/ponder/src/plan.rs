@@ -211,7 +211,14 @@ fn methods(game: &Game, kind: Kind, target: &Target, market: &Market, mechanics:
             .map(String::from),
         );
     }
-    names.push("beast:wild-bristle-matron".into());
+    for side in ["prefixes", "suffixes"] {
+        for tries in 1..=game.metamods.len() {
+            let name = format!("beast:wild-bristle-matron:{side}:{tries}");
+            if ops::parse(game, class, &name, &avoid).is_some() {
+                names.push(name);
+            }
+        }
+    }
     if target.influences.0 != 0 {
         names.push("harvest:reforge-influence".into());
     }

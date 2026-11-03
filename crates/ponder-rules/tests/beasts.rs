@@ -140,6 +140,24 @@ fn the_matron_adds_an_eligible_meta_modifier() {
 }
 
 #[test]
+fn matrons_until_the_lock_cost_one_per_meta_modifier_that_fits() {
+    let suffixes = warlord(Side::Suffix);
+    let assumptions = Assumptions::default();
+    let ctx = Ctx { game: game(), assumptions: &assumptions };
+    let full = item(Rarity::Rare, &suffixes[..3]);
+    let open = item(Rarity::Rare, &suffixes[..1]);
+    let sure = op("beast:wild-bristle-matron:suffixes:1");
+    assert!(sure.applies(&ctx, &(game(), &full)));
+    assert!(!sure.applies(&ctx, &(game(), &open)));
+    let five = op("beast:wild-bristle-matron:prefixes:5");
+    assert!(five.applies(&ctx, &(game(), &open)));
+    assert!(!op("beast:wild-bristle-matron:prefixes:4").applies(&ctx, &(game(), &open)));
+    assert_eq!(five.cost().items, vec![("wild-bristle-matron".to_string(), 5.0), ("scour".to_string(), 4.0)]);
+    let p = chance(&[five.as_ref()], five.steps(), &open, target(&[game().metamods[0]]));
+    assert!(p > 0.999, "{p}");
+}
+
+#[test]
 fn an_imprint_restores_the_item_once() {
     let imprint = op("imprint");
     let restore = op("restore");
